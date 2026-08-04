@@ -46,6 +46,8 @@ DEVICE_TYPE_SENSOR: Final = "sensor"
 DEVICE_TYPE_NVR: Final = "nvr"
 DEVICE_TYPE_VIEWER: Final = "viewer"
 DEVICE_TYPE_CHIME: Final = "chime"
+DEVICE_TYPE_DOORLOCK: Final = "doorlock"
+DEVICE_TYPE_VIEWPORT: Final = "viewport"
 
 # Camera attributes
 ATTR_CAMERA_ID: Final = "camera_id"
