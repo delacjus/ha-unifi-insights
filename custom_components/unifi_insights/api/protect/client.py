@@ -237,6 +237,11 @@ class UniFiProtectClient(BaseUniFiClient):
 
         Makes a simple API call to verify authentication and connectivity.
 
+        Note:
+            Unlike the Network API, Protect has no site-scoping and does not
+            expose a "/sites" resource - the Protect Integration API only
+            documents "/meta/info" as a lightweight validation endpoint.
+
         Returns:
             True if the connection is valid.
 
@@ -245,26 +250,8 @@ class UniFiProtectClient(BaseUniFiClient):
             UniFiConnectionError: If connection fails.
 
         """
-        response = await self._get(self.build_api_path("/sites"))
+        response = await self._get(self.build_api_path("/meta/info"))
         return response is not None
-
-    async def get_sites(self) -> list[dict[str, Any]]:
-        """
-        Get list of available sites.
-
-        Returns:
-            List of site information dictionaries.
-
-        """
-        response = await self._get(self.build_api_path("/sites"))
-        if response is None:
-            return []
-        data = (
-            response.get("data", response) if isinstance(response, dict) else response
-        )
-        if isinstance(data, list):
-            return data
-        return []
 
     async def get_host_id(self) -> str:
         """
@@ -283,7 +270,7 @@ class UniFiProtectClient(BaseUniFiClient):
             ```python
             # Get host_id for WebSocket subscriptions
             host_id = await client.get_host_id()
-            site_id = "your-site-id"  # Or get from client.get_sites()
+            site_id = "your-site-id"  # From the Network API for REMOTE connections
 
             async with client.websocket.subscribe_events(host_id, site_id) as events:
                 async for event in events:

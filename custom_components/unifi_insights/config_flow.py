@@ -31,6 +31,7 @@ from .api import (
     UniFiTimeoutError,
 )
 from .api.network import UniFiNetworkClient
+from .api.protect import UniFiProtectClient
 from .const import (
     CONF_CLIENT_CONTROL,
     CONF_CONNECTION_TYPE,
@@ -45,6 +46,7 @@ from .const import (
     DEFAULT_TRACK_CLIENTS,
     DOMAIN,
 )
+from .probe import async_probe_protect
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -228,6 +230,34 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                                 CONF_VERIFY_SSL: user_input.get(CONF_VERIFY_SSL, False),
                             },
                         )
+
+                    # No Network sites - this console may not run the
+                    # Network application at all (e.g. a standalone Protect
+                    # NVR). Probe Protect before giving up, so Protect-only
+                    # consoles can still be set up with just an API key.
+                    async with UniFiProtectClient(
+                        auth=auth,
+                        base_url=user_input[CONF_HOST],
+                        connection_type=ConnectionType.LOCAL,
+                        timeout=30,
+                    ) as protect_client:
+                        if await async_probe_protect(
+                            protect_client, propagate_connection_errors=True
+                        ):
+                            await self.async_set_unique_id(user_input[CONF_API_KEY])
+                            self._abort_if_unique_id_configured()
+
+                            return self.async_create_entry(
+                                title="UniFi Insights (Protect)",
+                                data={
+                                    CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL,
+                                    CONF_HOST: user_input[CONF_HOST],
+                                    CONF_API_KEY: user_input[CONF_API_KEY],
+                                    CONF_VERIFY_SSL: user_input.get(
+                                        CONF_VERIFY_SSL, False
+                                    ),
+                                },
+                            )
 
                     errors[CONF_API_KEY] = "invalid_auth"
 

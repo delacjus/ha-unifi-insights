@@ -154,19 +154,69 @@ async def test_setup_entry_no_sites_found(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_network_client,
+    mock_protect_client,
     mock_local_auth,
     enable_custom_integrations,
 ) -> None:
-    """Test setup fails when no sites are found."""
+    """Test setup fails when neither Network sites nor Protect are found."""
     # Return empty list - no sites found
     mock_network_client.sites.get_all.return_value = []
+    # Protect probe also fails (empty cameras + no NVR) so there is no
+    # fallback path that would let this console validate as Protect-only.
+    mock_protect_client.cameras.get_all.return_value = []
+    mock_protect_client.nvr.get.return_value = None
 
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Should fail with auth failed (no sites means bad API key)
+    # Should fail with auth failed (no sites and no Protect means bad API key)
     assert mock_config_entry.state == ConfigEntryState.SETUP_ERROR
+
+
+async def test_setup_entry_protect_only_via_cameras(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client,
+    mock_protect_client,
+    mock_local_auth,
+    enable_custom_integrations,
+) -> None:
+    """Test setup succeeds Protect-only when Network has no sites but cameras exist."""
+    mock_network_client.sites.get_all.return_value = []
+    # cameras.get_all() populated - the non-ambiguous success branch.
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state == ConfigEntryState.LOADED
+    # A Protect-only entry must produce real entities, not just a loaded
+    # shell - confirm the camera from mock_protect_client materialized.
+    assert hass.states.async_entity_ids()
+
+
+async def test_setup_entry_protect_only_via_nvr_fallback(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client,
+    mock_protect_client,
+    mock_local_auth,
+    enable_custom_integrations,
+) -> None:
+    """Test setup succeeds Protect-only via the empty-cameras + NVR fallback."""
+    mock_network_client.sites.get_all.return_value = []
+    # Empty camera list is ambiguous - disambiguate via a truthy NVR fetch.
+    mock_protect_client.cameras.get_all.return_value = []
+    mock_protect_client.nvr.get.return_value = MagicMock(
+        id="nvr1", name="NVR", type="UNVR"
+    )
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state == ConfigEntryState.LOADED
 
 
 async def test_setup_entry_remote_connection(

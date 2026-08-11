@@ -39,6 +39,7 @@ from .coordinators import (
     UnifiFacadeCoordinator,
     UnifiProtectCoordinator,
 )
+from .probe import async_probe_protect
 from .services import async_setup_services
 
 if TYPE_CHECKING:
@@ -159,17 +160,25 @@ async def async_setup_entry(
                 session=websession,
             )
 
-        # Verify we can authenticate with Network API by fetching sites
+        # Verify we can authenticate with Network API by fetching sites. A
+        # console with no Network application (e.g. a standalone Protect-only
+        # NVR) legitimately returns no sites here without raising - whether
+        # that's acceptable depends on the Protect probe below, so the final
+        # accept/reject decision is deferred until after that runs.
         _LOGGER.debug("Validating Network API connection")
+        network_sites_empty = True
         try:
             sites = await network_client.sites.get_all()
-            if not sites:
-                msg = "No sites found - API key may be invalid"
-                _LOGGER.error(msg)
-                raise ConfigEntryAuthFailed(msg)
-            _LOGGER.info(
-                "Network API validated successfully, found %d sites", len(sites)
-            )
+            network_sites_empty = not sites
+            if network_sites_empty:
+                _LOGGER.debug(
+                    "Network API returned no sites - console may not run the "
+                    "Network application; deferring to Protect validation"
+                )
+            else:
+                _LOGGER.info(
+                    "Network API validated successfully, found %d sites", len(sites)
+                )
         except UniFiAuthenticationError as err:
             msg = "Invalid API key or unable to connect to Network API"
             _LOGGER.warning(msg)
@@ -196,55 +205,35 @@ async def async_setup_entry(
                 session=websession,
             )
 
-        # Verify UniFi Protect API connection by fetching cameras
+        # Verify UniFi Protect API connection. This also doubles as the sole
+        # authentication signal for Protect-only consoles (see the deferred
+        # gate below), so it always runs when a Protect client exists -
+        # never skip it just because Network already validated.
         if protect_client:
             _LOGGER.debug("Validating Protect API connection")
-            try:
-                cameras = await protect_client.cameras.get_all()
-                if cameras is None or not isinstance(cameras, list):
-                    _LOGGER.warning(
-                        "Protect API returned invalid data, disabling Protect support"
-                    )
-                    protect_client = None
-                elif len(cameras) == 0:
-                    # Empty list could be valid (no cameras) or a
-                    # normalised API failure. Probe NVR to disambiguate.
-                    try:
-                        nvr = await protect_client.nvr.get()
-                    except (
-                        UniFiAuthenticationError,
-                        UniFiConnectionError,
-                        UniFiTimeoutError,
-                    ) as err:
-                        _LOGGER.warning(
-                            "Protect API validation failed, "
-                            "disabling Protect support: %s",
-                            err,
-                        )
-                        protect_client = None
-                    else:
-                        if not nvr:
-                            _LOGGER.warning(
-                                "Protect API returned empty data, "
-                                "disabling Protect support"
-                            )
-                            protect_client = None
-                        else:
-                            _LOGGER.info(
-                                "Protect API validated successfully, no cameras found"
-                            )
-                else:
-                    _LOGGER.info(
-                        "UniFi Protect API validated successfully, found %d cameras",
-                        len(cameras),
-                    )
-            except Exception as err:
+            if await async_probe_protect(protect_client):
+                _LOGGER.info("Protect API validated successfully")
+            else:
                 _LOGGER.warning(
-                    "Error validating UniFi Protect API connection, "
-                    "continuing without Protect support: %s",
-                    err,
+                    "Protect API validation failed, disabling Protect support"
                 )
                 protect_client = None
+
+        # Deferred gate: a console must prove itself via Network sites OR a
+        # working Protect API. Neither means the key/console is genuinely
+        # unusable - this is the only place local-mode setup can still fail
+        # auth, since an invalid key on this hardware doesn't necessarily
+        # raise from sites.get_all() (some consoles return an empty list
+        # instead of an error for an unrecognised key).
+        if network_sites_empty and protect_client is None:
+            msg = "No sites found and Protect API unavailable - API key may be invalid"
+            _LOGGER.error(msg)
+            raise ConfigEntryAuthFailed(msg)
+        if network_sites_empty:
+            _LOGGER.warning(
+                "Network Integration API returned no sites; running in "
+                "Protect-only mode for this console"
+            )
 
     # Note: UniFiAuthenticationError is already handled in the inner try block
     # at lines 176-179, which converts it to ConfigEntryAuthFailed

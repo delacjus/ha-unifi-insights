@@ -212,9 +212,29 @@ def mock_protect_client() -> Generator[MagicMock]:
     """Return a mocked UniFi Protect client."""
     client = _create_mock_protect_client()
 
-    with patch(
-        "custom_components.unifi_insights.UniFiProtectClient",
-        MagicMock(return_value=client),
+    # Create a mock class that works as both regular init and async context manager
+    mock_class = MagicMock()
+
+    # Support async context manager for config_flow.py
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_class.return_value = async_cm
+
+    # Also make the mock itself work like the client for direct usage
+    for attr in dir(client):
+        if not attr.startswith("_"):
+            setattr(mock_class.return_value, attr, getattr(client, attr))
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            mock_class,
+        ),
+        patch(
+            "custom_components.unifi_insights.UniFiProtectClient",
+            MagicMock(return_value=client),
+        ),
     ):
         yield client
 
