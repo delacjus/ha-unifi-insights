@@ -18,13 +18,13 @@ This project overlaps with and complements Home Assistant's official integration
 - [UniFi Network (official)](https://www.home-assistant.io/integrations/unifi/)
 - [UniFi Protect (official)](https://www.home-assistant.io/integrations/unifiprotect/)
 
-| Area | UniFi Insights (this project) | Official integrations |
-|---|---|---|
-| Packaging | Single integration covering both Network and Protect in one setup flow | Two separate core integrations (`unifi` and `unifiprotect`) |
-| Authentication | API key — local and cloud (remote console) connection modes | UniFi Network: local credentials. UniFi Protect: local credentials + API key |
-| Remote management | Supports UniFi cloud console discovery and selection | Primarily local controller connectivity |
-| Service surface | Adds integration-specific services for Network and Protect actions (vouchers, PTZ, chime, light) | Uses Home Assistant core entities and actions per integration |
-| Project lifecycle | Community custom component released via GitHub and HACS | Included in Home Assistant Core release cycle |
+| Area              | UniFi Insights (this project)                                                                    | Official integrations                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Packaging         | Single integration covering both Network and Protect in one setup flow                           | Two separate core integrations (`unifi` and `unifiprotect`)                  |
+| Authentication    | API key — local and cloud (remote console) connection modes                                      | UniFi Network: local credentials. UniFi Protect: local credentials + API key |
+| Remote management | Supports UniFi cloud console discovery and selection                                             | Primarily local controller connectivity                                      |
+| Service surface   | Adds integration-specific services for Network and Protect actions (vouchers, PTZ, chime, light) | Uses Home Assistant core entities and actions per integration                |
+| Project lifecycle | Community custom component released via GitHub and HACS                                          | Included in Home Assistant Core release cycle                                |
 
 **Which to choose:**
 
@@ -106,78 +106,78 @@ This project overlaps with and complements Home Assistant's official integration
 
 After setup, open the integration's options flow (**Settings** → **Devices & Services** → **UniFi Insights** → **Configure**) to adjust these settings:
 
-| Option | Default | Description |
-|---|---|---|
-| Track WiFi Clients | Off | Creates device tracker entities for connected wireless clients. May add a large number of entities on busy networks. |
-| Track Wired Clients | Off | Creates device tracker entities for connected wired clients. |
-| Enable Client Control | On | Creates allow/block switch and reconnect button entities for each connected client. Disable this if you only need read-only monitoring — it prevents orphaned unavailable entities from accumulating when clients leave the network. |
+| Option                | Default | Description                                                                                                                                                                                                                          |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Track WiFi Clients    | Off     | Creates device tracker entities for connected wireless clients. May add a large number of entities on busy networks.                                                                                                                 |
+| Track Wired Clients   | Off     | Creates device tracker entities for connected wired clients.                                                                                                                                                                         |
+| Enable Client Control | On      | Creates allow/block switch and reconnect button entities for each connected client. Disable this if you only need read-only monitoring — it prevents orphaned unavailable entities from accumulating when clients leave the network. |
 
 ## Entities
 
 ### Sensors
 
-| Entity | Description |
-|---|---|
-| CPU Usage | Device CPU utilization (%) |
-| Memory Usage | Device memory utilization (%) |
-| Uptime | Device uptime |
-| TX Rate | Uplink transmit rate (Mbit/s) |
-| RX Rate | Uplink receive rate (Mbit/s) |
-| Firmware Version | Installed firmware version |
-| Wired Clients | Count of wired clients (switches) |
-| Wireless Clients | Count of wireless clients (access points) |
-| Total Clients | Total client count (site-level) |
-| Port PoE Power | PoE power consumption per switch port (W) |
-| Port Speed | Link speed per port (Mbps) |
-| Port TX / RX | Traffic counters per port (bytes) |
-| Temperature | Protect sensor temperature (°C) |
-| Humidity | Protect sensor humidity (%) |
-| Light Level | Protect sensor ambient light (lux) |
-| Battery | Protect sensor battery level (%) |
-| Storage Used / Total / Available | NVR storage metrics (GB, when available) |
+| Entity                           | Description                               |
+| -------------------------------- | ----------------------------------------- |
+| CPU Usage                        | Device CPU utilization (%)                |
+| Memory Usage                     | Device memory utilization (%)             |
+| Uptime                           | Device uptime                             |
+| TX Rate                          | Uplink transmit rate (Mbit/s)             |
+| RX Rate                          | Uplink receive rate (Mbit/s)              |
+| Firmware Version                 | Installed firmware version                |
+| Wired Clients                    | Count of wired clients (switches)         |
+| Wireless Clients                 | Count of wireless clients (access points) |
+| Total Clients                    | Total client count (site-level)           |
+| Port PoE Power                   | PoE power consumption per switch port (W) |
+| Port Speed                       | Link speed per port (Mbps)                |
+| Port TX / RX                     | Traffic counters per port (bytes)         |
+| Temperature                      | Protect sensor temperature (°C)           |
+| Humidity                         | Protect sensor humidity (%)               |
+| Light Level                      | Protect sensor ambient light (lux)        |
+| Battery                          | Protect sensor battery level (%)          |
+| Storage Used / Total / Available | NVR storage metrics (GB, when available)  |
 
 ### Binary sensors
 
-| Entity | Description |
-|---|---|
-| Device Status | Network device online/offline state |
-| WAN Status | Gateway WAN connectivity |
-| Motion Detection | Camera or sensor motion activity |
-| Person Detection | AI person detection |
-| Vehicle Detection | AI vehicle detection |
-| Animal Detection | AI animal detection |
-| Package Detection | AI package detection |
-| Doorbell Ring | Doorbell ring activity |
-| Door / Window | Protect sensor open/close state |
-| Tamper | Protect sensor tamper detection |
-| Leak | Protect sensor water leak detection |
-| Recording | Camera actively recording |
+| Entity            | Description                         |
+| ----------------- | ----------------------------------- |
+| Device Status     | Network device online/offline state |
+| WAN Status        | Gateway WAN connectivity            |
+| Motion Detection  | Camera or sensor motion activity    |
+| Person Detection  | AI person detection                 |
+| Vehicle Detection | AI vehicle detection                |
+| Animal Detection  | AI animal detection                 |
+| Package Detection | AI package detection                |
+| Doorbell Ring     | Doorbell ring activity              |
+| Door / Window     | Protect sensor open/close state     |
+| Tamper            | Protect sensor tamper detection     |
+| Leak              | Protect sensor water leak detection |
+| Recording         | Camera actively recording           |
 
 ### Switches
 
-| Entity | Description |
-|---|---|
-| WiFi Network | Enable or disable a WiFi broadcast |
-| Firewall Rule | Enable or disable a user-defined firewall policy |
-| Client Allow | Block or allow a connected network client |
-| Camera Microphone | Enable or disable the camera microphone |
-| Camera Privacy Mode | Enable or disable privacy mode |
-| Camera Status Light | Enable or disable the status LED |
-| Camera High FPS | Enable or disable high frame rate mode |
+| Entity              | Description                                      |
+| ------------------- | ------------------------------------------------ |
+| WiFi Network        | Enable or disable a WiFi broadcast               |
+| Firewall Rule       | Enable or disable a user-defined firewall policy |
+| Client Allow        | Block or allow a connected network client        |
+| Camera Microphone   | Enable or disable the camera microphone          |
+| Camera Privacy Mode | Enable or disable privacy mode                   |
+| Camera Status Light | Enable or disable the status LED                 |
+| Camera High FPS     | Enable or disable high frame rate mode           |
 
 ### Other entities
 
-| Platform | Description |
-|---|---|
-| Button | Restart device, reconnect client, play chime, PTZ patrol start/stop |
-| Camera | Live view, snapshots, RTSPS streaming |
-| Device Tracker | Client presence detection |
-| Event | Motion, doorbell ring, and smart detection events |
-| Image | WiFi QR codes for each broadcast network |
-| Light | Protect floodlight brightness control |
-| Number | Microphone volume, chime volume, light brightness level |
-| Select | Recording mode, HDR mode, video mode, ringtone, PTZ preset, live view |
-| Update | Firmware update management |
+| Platform       | Description                                                           |
+| -------------- | --------------------------------------------------------------------- |
+| Button         | Restart device, reconnect client, play chime, PTZ patrol start/stop   |
+| Camera         | Live view, snapshots, RTSPS streaming                                 |
+| Device Tracker | Client presence detection                                             |
+| Event          | Motion, doorbell ring, and smart detection events                     |
+| Image          | WiFi QR codes for each broadcast network                              |
+| Light          | Protect floodlight brightness control                                 |
+| Number         | Microphone volume, chime volume, light brightness level               |
+| Select         | Recording mode, HDR mode, video mode, ringtone, PTZ preset, live view |
+| Update         | Firmware update management                                            |
 
 ## Services
 
@@ -288,14 +288,14 @@ logger:
 
 ### Common problems
 
-| Problem | Solution |
-|---|---|
-| Cannot connect | Verify the host URL is reachable from Home Assistant. For self-signed certificates, disable SSL verification in the integration options. |
-| Authentication failed | Confirm the API key is valid and was not revoked in the UniFi Site Manager. |
-| No Protect entities | UniFi Protect must be running on the same console. Verify your API key has access to it. |
-| Entities missing | Confirm the devices are adopted and online in the UniFi controller. |
-| Storage sensors unavailable | The public Protect API does not expose NVR storage data on all firmware versions. |
-| Many orphaned client entities | Disable the **Enable Client Control** option in the integration's settings. |
+| Problem                       | Solution                                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Cannot connect                | Verify the host URL is reachable from Home Assistant. For self-signed certificates, disable SSL verification in the integration options. |
+| Authentication failed         | Confirm the API key is valid and was not revoked in the UniFi Site Manager.                                                              |
+| No Protect entities           | UniFi Protect must be running on the same console. Verify your API key has access to it.                                                 |
+| Entities missing              | Confirm the devices are adopted and online in the UniFi controller.                                                                      |
+| Storage sensors unavailable   | The public Protect API does not expose NVR storage data on all firmware versions.                                                        |
+| Many orphaned client entities | Disable the **Enable Client Control** option in the integration's settings.                                                              |
 
 ### Diagnostics
 
