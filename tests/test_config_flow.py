@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
     UniFiConnectionError,
+    UniFiNotFoundError,
     UniFiTimeoutError,
 )
 from custom_components.unifi_insights.config_flow import (
@@ -321,6 +322,48 @@ async def test_local_flow_unknown_error(hass: HomeAssistant) -> None:
 
         assert result["type"] == FlowResultType.FORM
         assert result["errors"] == {"base": "unknown"}
+
+
+async def test_local_flow_network_not_found_error(hass: HomeAssistant) -> None:
+    """Test local flow surfaces api_unsupported when Network API 404s.
+
+    A 404 from the Network Integration API (rather than an empty sites list)
+    means the controller doesn't expose that API at all - distinct from a
+    Protect-only console, which returns an empty list, not a 404.
+    """
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiNotFoundError("Network Integration API not found", 404)
+    )
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "api_unsupported"}
 
 
 async def test_remote_flow_success(hass: HomeAssistant) -> None:
