@@ -1011,7 +1011,7 @@ async def test_reauth_flow_no_sites_found(
     hass: HomeAssistant,
     mock_config_entry,
 ) -> None:
-    """Test reauth flow when no sites are found."""
+    """Test reauth flow fails when neither Network sites nor Protect validate."""
     mock_config_entry.add_to_hass(hass)
 
     mock_client = MagicMock()
@@ -1023,10 +1023,18 @@ async def test_reauth_flow_no_sites_found(
     async_cm.__aenter__ = AsyncMock(return_value=mock_client)
     async_cm.__aexit__ = AsyncMock(return_value=None)
 
+    # Protect probe also fails - empty cameras and no NVR - so this console
+    # genuinely has no working Network or Protect application.
+    protect_cm = _make_protect_client_context(cameras=[], nvr=None)
+
     with (
         patch(
             "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
             return_value=async_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
         ),
         patch("custom_components.unifi_insights.config_flow.LocalAuth"),
     ):
@@ -1039,6 +1047,95 @@ async def test_reauth_flow_no_sites_found(
 
         assert result["type"] == FlowResultType.FORM
         assert result["errors"] == {CONF_API_KEY: "invalid_auth"}
+
+
+async def test_reauth_flow_protect_only_success(
+    hass: HomeAssistant,
+    mock_config_entry,
+) -> None:
+    """Test reauth flow succeeds via the Protect-only fallback."""
+    mock_config_entry.add_to_hass(hass)
+
+    mock_client = MagicMock()
+    mock_client.sites = MagicMock()
+    mock_client.sites.get_all = AsyncMock(return_value=[])  # No Network sites
+    mock_client.close = AsyncMock()
+
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = _make_protect_client_context(cameras=[MagicMock(id="camera1")])
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+        patch(
+            "custom_components.unifi_insights.async_setup_entry",
+            return_value=True,
+        ),
+    ):
+        result = await mock_config_entry.start_reauth_flow(hass)
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "new_api_key"},
+        )
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "reauth_successful"
+
+
+async def test_reauth_flow_protect_probe_connection_error(
+    hass: HomeAssistant,
+    mock_config_entry,
+) -> None:
+    """Test a connection error during the reauth Protect fallback surfaces as
+    cannot_connect, not invalid_auth - guards that the Protect probe runs
+    inside the same try block as the Network validation.
+    """
+    mock_config_entry.add_to_hass(hass)
+
+    mock_client = MagicMock()
+    mock_client.sites = MagicMock()
+    mock_client.sites.get_all = AsyncMock(return_value=[])  # No Network sites
+    mock_client.close = AsyncMock()
+
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = _make_protect_client_context(
+        cameras_side_effect=UniFiConnectionError("Cannot connect")
+    )
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await mock_config_entry.start_reauth_flow(hass)
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "new_api_key"},
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_reauth_flow_remote_no_sites_found(
@@ -1307,7 +1404,9 @@ async def test_reconfigure_no_sites_found(
     hass: HomeAssistant,
     mock_config_entry,
 ) -> None:
-    """Test reconfigure flow when no sites are found."""
+    """Test reconfigure flow fails when neither Network sites nor Protect
+    validate.
+    """
     mock_config_entry.add_to_hass(hass)
 
     mock_client = MagicMock()
@@ -1319,10 +1418,18 @@ async def test_reconfigure_no_sites_found(
     async_cm.__aenter__ = AsyncMock(return_value=mock_client)
     async_cm.__aexit__ = AsyncMock(return_value=None)
 
+    # Protect probe also fails - empty cameras and no NVR - so this console
+    # genuinely has no working Network or Protect application.
+    protect_cm = _make_protect_client_context(cameras=[], nvr=None)
+
     with (
         patch(
             "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
             return_value=async_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
         ),
         patch("custom_components.unifi_insights.config_flow.LocalAuth"),
     ):
@@ -1339,6 +1446,54 @@ async def test_reconfigure_no_sites_found(
 
         assert result["type"] == FlowResultType.FORM
         assert result["errors"] == {CONF_API_KEY: "invalid_auth"}
+
+
+async def test_reconfigure_protect_only_success(
+    hass: HomeAssistant,
+    mock_config_entry,
+) -> None:
+    """Test reconfigure flow succeeds via the Protect-only fallback."""
+    mock_config_entry.add_to_hass(hass)
+
+    mock_client = MagicMock()
+    mock_client.sites = MagicMock()
+    mock_client.sites.get_all = AsyncMock(return_value=[])  # No Network sites
+    mock_client.close = AsyncMock()
+
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = _make_protect_client_context(cameras=[MagicMock(id="camera1")])
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+        patch(
+            "custom_components.unifi_insights.async_setup_entry",
+            return_value=True,
+        ),
+    ):
+        result = await mock_config_entry.start_reconfigure_flow(hass)
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.2",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: True,
+            },
+        )
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "reconfigure_successful"
 
 
 async def test_reconfigure_remote_no_sites_found(

@@ -443,6 +443,28 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                                     CONF_API_KEY: user_input[CONF_API_KEY],
                                 },
                             )
+
+                        # No Network sites - this console may be a
+                        # standalone Protect NVR. Probe Protect before
+                        # failing reauth, so Protect-only consoles can
+                        # still rotate their API key.
+                        async with UniFiProtectClient(
+                            auth=auth,
+                            base_url=reauth_entry.data.get(CONF_HOST, DEFAULT_API_HOST),
+                            connection_type=ConnectionType.LOCAL,
+                            timeout=30,
+                        ) as protect_client:
+                            if await async_probe_protect(
+                                protect_client, propagate_connection_errors=True
+                            ):
+                                return self.async_update_reload_and_abort(
+                                    reauth_entry,
+                                    data={
+                                        **reauth_entry.data,
+                                        CONF_API_KEY: user_input[CONF_API_KEY],
+                                    },
+                                )
+
                         errors[CONF_API_KEY] = "invalid_auth"
                 else:
                     api_key = user_input[CONF_API_KEY].strip()
@@ -535,6 +557,37 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                                     ),
                                 },
                             )
+
+                        # No Network sites - this console may be a
+                        # standalone Protect NVR. Probe Protect before
+                        # failing reconfiguration, so Protect-only
+                        # consoles can still update their host/key.
+                        async with UniFiProtectClient(
+                            auth=auth,
+                            base_url=user_input[CONF_HOST],
+                            connection_type=ConnectionType.LOCAL,
+                            timeout=30,
+                        ) as protect_client:
+                            if await async_probe_protect(
+                                protect_client, propagate_connection_errors=True
+                            ):
+                                await self.async_set_unique_id(user_input[CONF_API_KEY])
+                                self._abort_if_unique_id_mismatch(
+                                    reason="account_mismatch"
+                                )
+
+                                return self.async_update_reload_and_abort(
+                                    entry,
+                                    data={
+                                        CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL,
+                                        CONF_HOST: user_input[CONF_HOST],
+                                        CONF_API_KEY: user_input[CONF_API_KEY],
+                                        CONF_VERIFY_SSL: user_input.get(
+                                            CONF_VERIFY_SSL, False
+                                        ),
+                                    },
+                                )
+
                         errors[CONF_API_KEY] = "invalid_auth"
                 else:
                     api_key = user_input[CONF_API_KEY].strip()
