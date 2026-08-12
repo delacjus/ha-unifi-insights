@@ -1259,6 +1259,23 @@ class TestUnifiProtectCoordinator:
 
         assert coordinator.data["sensors"]["sensor4"]["isOpened"] is False
 
+    def test_on_websocket_message_item_wrapper(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the WS message adapter with fields nested under 'item'.
+
+        Confirmed live against hardware 2026-08-12: local-console update
+        frames use {"type": "update", "item": {...}}, not top-level fields.
+        """
+        coordinator._on_websocket_message(
+            {
+                "type": "update",
+                "item": {"modelKey": "sensor", "id": "sensor9", "isOpened": True},
+            }
+        )
+
+        assert coordinator.data["sensors"]["sensor9"]["isOpened"] is True
+
     def test_on_websocket_message_snake_case_model_key(
         self, coordinator: UnifiProtectCoordinator
     ):
