@@ -166,9 +166,13 @@ def _create_mock_protect_client() -> MagicMock:
     client.trigger_alarm = AsyncMock(return_value=True)
     client.create_liveview = AsyncMock(return_value={"id": "liveview1"})
     client.update_viewer = AsyncMock(return_value=True)
-    client.register_device_update_callback = MagicMock()
-    client.register_event_update_callback = MagicMock()
-    client.start_websocket = AsyncMock()
+
+    # WebSocket support (real-time device updates, additive to polling)
+    client.get_host_id = AsyncMock(return_value="nvr1")
+    client.websocket = MagicMock()
+    client.websocket.subscribe_with_callback = AsyncMock()
+    client.websocket.stop = MagicMock()
+
     client.close = AsyncMock()
 
     return client

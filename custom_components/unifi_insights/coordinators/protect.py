@@ -29,6 +29,8 @@ from custom_components.unifi_insights.const import (
 from .base import UnifiBaseCoordinator
 
 if TYPE_CHECKING:
+    import asyncio
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
@@ -59,6 +61,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         network_client: UniFiNetworkClient,
         protect_client: UniFiProtectClient | None,
         entry: ConfigEntry,
+        site_id: str = "default",
     ) -> None:
         """Initialize the Protect coordinator."""
         super().__init__(
@@ -91,33 +94,93 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "last_update": None,
         }
 
-        # Register WebSocket callbacks if Protect API is available
-        if self.protect_client:
-            self._setup_websocket_callbacks()
+        # Site ID used for WebSocket subscriptions (ignored for LOCAL REST
+        # calls, kept here for REMOTE/cloud routing - see
+        # ProtectWebSocket._subscribe_path).
+        self._site_id = site_id
 
-    def _setup_websocket_callbacks(self) -> None:
-        """Set up WebSocket callbacks for real-time updates."""
-        if not self.protect_client:
+        # Populated by async_start_websocket(); the background task handle is
+        # read by __init__.py's async_unload_entry to cancel the WebSocket
+        # loop on unload/reload.
+        self.websocket_task: asyncio.Task[None] | None = None
+        self._protect_websocket: Any = (
+            self.protect_client.websocket if self.protect_client else None
+        )
+
+    async def async_start_websocket(self) -> None:
+        """
+        Start the real-time Protect WebSocket subscription.
+
+        This is additive to the 30 second poll (SCAN_INTERVAL_PROTECT), which
+        remains the fallback if the WebSocket is unavailable or drops - it is
+        never removed by this method. Any failure here is logged and
+        swallowed so a WebSocket problem never blocks integration setup or
+        leaves the coordinator without its polling fallback.
+        """
+        if not self.protect_client or not self._protect_websocket:
+            return
+        if self.websocket_task is not None and not self.websocket_task.done():
+            _LOGGER.debug("Protect coordinator: WebSocket already running")
             return
 
         try:
-            registered = False
-            if hasattr(self.protect_client, "register_device_update_callback"):
-                self.protect_client.register_device_update_callback(
-                    self._handle_device_update
-                )
-                registered = True
-            if hasattr(self.protect_client, "register_event_update_callback"):
-                self.protect_client.register_event_update_callback(
-                    self._handle_event_update
-                )
-                registered = True
-            if registered:
-                _LOGGER.debug("Protect coordinator: WebSocket callbacks registered")
+            host_id = await self.protect_client.get_host_id()
         except Exception as err:
-            _LOGGER.debug(
-                "Protect coordinator: WebSocket callbacks not supported: %s", err
+            _LOGGER.warning(
+                "Protect coordinator: Unable to resolve host_id for WebSocket "
+                "subscription, falling back to %s polling only: %s",
+                SCAN_INTERVAL_PROTECT,
+                err,
             )
+            return
+
+        self.websocket_task = self.hass.async_create_background_task(
+            self._protect_websocket.subscribe_with_callback(
+                host_id,
+                self._site_id,
+                "devices",
+                self._on_websocket_message,
+                reconnect=True,
+            ),
+            name=f"{DOMAIN}_protect_websocket",
+        )
+        _LOGGER.debug(
+            "Protect coordinator: WebSocket subscription started (host_id=%s, "
+            "site_id=%s)",
+            host_id,
+            self._site_id,
+        )
+
+    @callback
+    def _on_websocket_message(self, message: dict[str, Any]) -> None:
+        """
+        Adapt a raw WebSocket "devices" message to `_handle_device_update`.
+
+        The message may carry the device fields at the top level or nested
+        under a "payload" key, and the model key may be `modelKey` (API
+        camelCase) or `model_key`. Anything that doesn't parse is logged at
+        warning level rather than dropped silently, since a swallowed frame
+        here is a missed device state change (e.g. a door sensor opening).
+        """
+        if not isinstance(message, dict):
+            _LOGGER.warning(
+                "Protect coordinator: WebSocket message was not a JSON object: %r",
+                message,
+            )
+            return
+
+        payload = message.get("payload")
+        device_data = payload if isinstance(payload, dict) else message
+
+        model_key = device_data.get("modelKey") or device_data.get("model_key")
+        if not model_key:
+            _LOGGER.warning(
+                "Protect coordinator: WebSocket device message missing modelKey: %s",
+                message,
+            )
+            return
+
+        self._handle_device_update(model_key, device_data)
 
     @callback
     def _handle_device_update(
@@ -167,7 +230,12 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 **device_data,
             }
 
-        self.async_update_listeners()
+        # async_set_updated_data (rather than async_update_listeners) also
+        # marks the last update as successful and resets the poll timer, so
+        # entities relying on last_update_success don't stay unavailable
+        # while WebSocket data is flowing, and the 30s poll fallback re-arms
+        # from the last WebSocket message rather than firing needlessly.
+        self.async_set_updated_data(self.data)
 
     def _normalize_camera_data(self, camera: dict[str, Any]) -> dict[str, Any]:
         """Normalize camera fields across alias and legacy payload shapes."""

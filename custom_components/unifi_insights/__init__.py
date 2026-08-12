@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
@@ -267,6 +268,14 @@ async def async_setup_entry(
     )
 
     # 3. Protect coordinator - fast updates (30 seconds) + WebSocket for events
+    # WebSocket site_id: LOCAL consoles ignore site_id for the Protect REST/WS
+    # paths, so "default" is fine. REMOTE (cloud connector) routing uses the
+    # console_id embedded in the path, but if the Network API returned sites
+    # for this console, prefer the first real site id over the placeholder.
+    protect_site_id = "default"
+    if not is_local and not network_sites_empty and sites:
+        protect_site_id = sites[0].id
+
     protect_coordinator: UnifiProtectCoordinator | None = None
     if protect_client:
         protect_coordinator = UnifiProtectCoordinator(
@@ -274,6 +283,7 @@ async def async_setup_entry(
             network_client=network_client,
             protect_client=protect_client,
             entry=entry,
+            site_id=protect_site_id,
         )
 
     # Fetch initial data - config first, then device/protect in parallel
@@ -285,6 +295,12 @@ async def async_setup_entry(
     if protect_coordinator:
         refresh_tasks.append(protect_coordinator.async_config_entry_first_refresh())
     await asyncio.gather(*refresh_tasks)
+
+    # Start the real-time Protect WebSocket subscription (additive to the
+    # 30s poll above, which stays as the fallback - see
+    # UnifiProtectCoordinator.async_start_websocket).
+    if protect_coordinator:
+        await protect_coordinator.async_start_websocket()
 
     # Create facade coordinator for backward compatibility with entity classes
     # (it aggregates the initial data from the sub-coordinators on creation)
@@ -335,13 +351,27 @@ async def async_unload_entry(
         data = entry.runtime_data
         _LOGGER.debug("Closing API clients")
         if data.protect_client:
-            # Stop WebSocket if active (on protect coordinator)
+            # Stop WebSocket if active (on protect coordinator). Signal the
+            # ProtectWebSocket loop to stop reconnecting *before* cancelling
+            # the task, then await the cancellation - cancel() alone leaves
+            # the reconnect loop free to spin back up, and the loop being
+            # parked in `async for msg in ws` means stop() alone won't
+            # unblock it either; both are needed to avoid an orphaned
+            # WebSocket loop surviving a config entry reload.
             if data.protect_coordinator:
+                protect_websocket = getattr(
+                    data.protect_coordinator, "_protect_websocket", None
+                )
+                if protect_websocket:
+                    protect_websocket.stop()
                 websocket_task = getattr(
                     data.protect_coordinator, "websocket_task", None
                 )
                 if websocket_task:
                     websocket_task.cancel()
+                    if isinstance(websocket_task, asyncio.Task):
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await websocket_task
             # Close Protect client (await the async close)
             try:
                 await data.protect_client.close()

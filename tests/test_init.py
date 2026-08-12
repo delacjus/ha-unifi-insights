@@ -121,6 +121,54 @@ async def test_unload_entry(
     assert init_integration.state == ConfigEntryState.NOT_LOADED
 
 
+async def test_setup_entry_starts_protect_websocket(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations,
+) -> None:
+    """Test setup resolves host_id and starts the real-time WebSocket.
+
+    Regression test for the dead `hasattr(..., "register_device_update_callback")`
+    stub: the coordinator must actually invoke `get_host_id()` and hand a real
+    background task to `ProtectWebSocket.subscribe_with_callback`, not just
+    construct without error.
+    """
+    runtime_data = init_integration.runtime_data
+    protect_coordinator = runtime_data.protect_coordinator
+    assert protect_coordinator is not None
+
+    runtime_data.protect_client.get_host_id.assert_awaited_once()
+    assert protect_coordinator.websocket_task is not None
+    await protect_coordinator.websocket_task
+    protect_coordinator._protect_websocket.subscribe_with_callback.assert_awaited_once()
+
+
+async def test_unload_entry_cancels_real_websocket_task(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations,
+) -> None:
+    """Test unload stops the ProtectWebSocket and cancels/awaits the real task.
+
+    Regression test: `websocket_task.cancel()` alone does not stop
+    `subscribe_with_callback`'s reconnect loop (it swallowed
+    `CancelledError` and slept/reconnected instead), which would leave an
+    orphaned WebSocket loop running after a config entry reload.
+    """
+    runtime_data = init_integration.runtime_data
+    protect_coordinator = runtime_data.protect_coordinator
+    assert protect_coordinator is not None
+    websocket_task = protect_coordinator.websocket_task
+    assert websocket_task is not None
+
+    assert await hass.config_entries.async_unload(init_integration.entry_id)
+    await hass.async_block_till_done()
+
+    assert init_integration.state == ConfigEntryState.NOT_LOADED
+    protect_coordinator._protect_websocket.stop.assert_called_once()
+    assert websocket_task.done()
+
+
 async def test_reload_entry(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,
