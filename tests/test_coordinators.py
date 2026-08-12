@@ -1286,6 +1286,89 @@ class TestUnifiProtectCoordinator:
 
         assert "not a JSON object" in caplog.text
 
+    def test_on_websocket_message_action_payload_split(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the adapter merges a header/payload-split message.
+
+        Some UniFi WebSocket surfaces split the model identity into an
+        "action" header and the changed fields into "payload" (rather than
+        a single flat object). The adapter must resolve modelKey/id and the
+        field dict independently instead of picking one container and
+        giving up, or a message shaped this way would silently drop every
+        real frame.
+        """
+        coordinator._on_websocket_message(
+            {
+                "action": {"action": "update", "modelKey": "sensor", "id": "sensor6"},
+                "payload": {"isOpened": True},
+            }
+        )
+
+        assert coordinator.data["sensors"]["sensor6"]["id"] == "sensor6"
+        assert coordinator.data["sensors"]["sensor6"]["isOpened"] is True
+
+    def test_on_websocket_message_model_key_without_id(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a resolvable modelKey with no id logs at debug, not silently."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_message({"modelKey": "sensor", "isOpened": True})
+
+        assert "missing device id" in caplog.text
+        assert coordinator.data["sensors"] == {}
+
+    def test_on_websocket_message_warning_capped_after_first(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test repeated unparseable messages only WARNING once, then DEBUG."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_message({"id": "sensor7"})
+            caplog.clear()
+            coordinator._on_websocket_message({"id": "sensor8"})
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert warning_records == []
+        assert any("sensor8" in r.getMessage() for r in debug_records)
+
+    @pytest.mark.asyncio
+    async def test_async_stop_websocket_noop_when_never_started(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_stop_websocket is safe when no task was ever started.
+
+        It still calls ProtectWebSocket.stop() unconditionally (harmless -
+        it just sets a flag), but must not touch websocket_task since it's
+        None.
+        """
+        await coordinator.async_stop_websocket()
+
+        assert coordinator.websocket_task is None
+
+    @pytest.mark.asyncio
+    async def test_async_stop_websocket_stops_and_awaits_real_task(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_stop_websocket stops the socket and awaits a real task."""
+        coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
+
+        async def _run_forever(*_args, **_kwargs):
+            await asyncio.sleep(3600)
+
+        coordinator._protect_websocket.subscribe_with_callback = AsyncMock(
+            side_effect=_run_forever
+        )
+        await coordinator.async_start_websocket()
+        task = coordinator.websocket_task
+        assert task is not None
+        assert not task.done()
+
+        await coordinator.async_stop_websocket()
+
+        coordinator._protect_websocket.stop.assert_called_once()
+        assert task.done()
+
     @pytest.mark.asyncio
     async def test_async_update_data_success(
         self, coordinator: UnifiProtectCoordinator
