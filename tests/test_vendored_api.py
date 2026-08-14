@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
+from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network import UniFiNetworkClient
 
 
@@ -456,3 +458,71 @@ async def test_clients_get_all_explicit_limit_no_pagination() -> None:
 
     assert len(result) == 5
     assert client._get.await_count == 1
+
+
+def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
+    """Build a fake aiohttp.ClientResponse for _handle_response tests."""
+    response = MagicMock()
+    response.status = status
+    response.text = AsyncMock(return_value=text)
+    response.headers = {}
+    if json_side_effect is not None:
+        response.json = AsyncMock(side_effect=json_side_effect)
+    else:
+        response.json = AsyncMock(return_value={})
+    return response
+
+
+async def test_handle_response_2xx_non_json_raises() -> None:
+    """A 2xx status with a non-JSON body must raise, not be treated as success.
+
+    Regression test: a UniFi console/proxy that considers the request
+    unauthenticated can return a 2xx status with an HTML login page body.
+    Silently returning None here (the old behavior) meant no exception ever
+    reached the coordinator, so entities kept serving stale data for 47h in
+    production instead of surfacing as unavailable.
+    """
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    response = _make_response(
+        status=200,
+        text="<!doctype html><html><body>login</body></html>",
+        json_side_effect=aiohttp.ContentTypeError(MagicMock(), MagicMock()),
+    )
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client._handle_response(response)
+
+    assert exc_info.value.status_code == 200
+
+
+async def test_handle_response_empty_body_returns_none() -> None:
+    """An empty 2xx body (e.g. a 204-style response) is still a valid no-op."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    response = _make_response(status=200, text="")
+
+    result = await client._handle_response(response)
+
+    assert result is None
+
+
+async def test_handle_response_valid_json_returns_data() -> None:
+    """A normal JSON response still parses and returns as before."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    response = _make_response(status=200, text='{"ok": true}')
+    response.json = AsyncMock(return_value={"ok": True})
+
+    result = await client._handle_response(response)
+
+    assert result == {"ok": True}
