@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from custom_components.unifi_insights.api import (
@@ -198,7 +199,26 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
         try:
             # Get all sites
             _LOGGER.debug("Config coordinator: Fetching sites")
-            sites_models = await self.network_client.sites.get_all()
+            try:
+                sites_models = await self.network_client.sites.get_all()
+            except UniFiResponseError as err:
+                # A console with no Network application (e.g. a standalone
+                # Protect-only NVR) serves a 2xx response with a non-JSON body
+                # here - api/base.py raises for that instead of silently
+                # returning None, which is correct in general, but this
+                # specific console/endpoint combination is a permanent,
+                # expected condition (see the matching tolerance in
+                # __init__.py's setup validation), not a transient failure.
+                # Without this, first refresh treats it as UpdateFailed ->
+                # ConfigEntryNotReady and setup can never complete for this
+                # console. A genuine >=400 error must still fail normally.
+                if err.status_code >= HTTPStatus.BAD_REQUEST:
+                    raise
+                _LOGGER.debug(
+                    "Config coordinator: Network API returned a non-JSON "
+                    "response - console likely has no Network application"
+                )
+                sites_models = []
             sites = [self._model_to_dict(s) for s in sites_models]
             self.data["sites"] = {
                 site.get("id"): site for site in sites if site.get("id")

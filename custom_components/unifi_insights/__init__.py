@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import TYPE_CHECKING, TypeAlias
 
 import homeassistant.helpers.config_validation as cv
@@ -19,6 +20,7 @@ from .api import (
     LocalAuth,
     UniFiAuthenticationError,
     UniFiConnectionError,
+    UniFiResponseError,
     UniFiTimeoutError,
 )
 from .api.network import UniFiNetworkClient
@@ -183,6 +185,22 @@ async def async_setup_entry(
             msg = "Invalid API key or unable to connect to Network API"
             _LOGGER.warning(msg)
             raise ConfigEntryAuthFailed(msg) from err
+        except UniFiResponseError as err:
+            # A console with no Network application (e.g. a standalone
+            # Protect-only NVR) serves a 2xx response with an HTML page
+            # instead of JSON here - api/base.py now raises for that instead
+            # of silently returning None, which is correct everywhere else
+            # (it's how the 47h stale-entity incident was caught) but this
+            # one call site's non-JSON response is an expected signal, not a
+            # failure. Treat it the same as the "no sites" branch above. A
+            # genuine >=400 error must still fail setup as before.
+            if err.status_code >= HTTPStatus.BAD_REQUEST:
+                raise
+            network_sites_empty = True
+            _LOGGER.debug(
+                "Network API returned a non-JSON response - console likely "
+                "has no Network application; deferring to Protect validation"
+            )
 
         # Initialize UniFi Protect API client
         protect_client: UniFiProtectClient | None = None

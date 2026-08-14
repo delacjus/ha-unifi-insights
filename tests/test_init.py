@@ -14,6 +14,7 @@ from custom_components.unifi_insights import UnifiInsightsData
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
     UniFiConnectionError,
+    UniFiResponseError,
     UniFiTimeoutError,
 )
 
@@ -261,6 +262,38 @@ async def test_setup_entry_protect_only_via_nvr_fallback(
     """Test setup succeeds Protect-only via the empty-cameras + NVR fallback."""
     mock_network_client.sites.get_all.return_value = []
     # Empty camera list is ambiguous - disambiguate via a truthy NVR fetch.
+    mock_protect_client.cameras.get_all.return_value = []
+    mock_protect_client.nvr.get.return_value = MagicMock(
+        id="nvr1", name="NVR", type="UNVR"
+    )
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state == ConfigEntryState.LOADED
+
+
+async def test_setup_entry_protect_only_via_network_non_json_sites(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client,
+    mock_protect_client,
+    mock_local_auth,
+    enable_custom_integrations,
+) -> None:
+    """Test setup tolerates a non-JSON (e.g. HTML login page) sites response.
+
+    Regression test: a Protect-only console (no Network application) can
+    serve an HTML page instead of JSON for the sites endpoint. api/base.py
+    now raises UniFiResponseError for any non-JSON body instead of silently
+    returning None (see test_vendored_api.py for that lower-level fix) - this
+    confirms that specific, expected exception is still caught here and
+    treated the same as an empty sites list, not surfaced as a setup crash.
+    """
+    mock_network_client.sites.get_all.side_effect = UniFiResponseError(
+        "non-JSON response", status_code=200, response_body="<html>...</html>"
+    )
     mock_protect_client.cameras.get_all.return_value = []
     mock_protect_client.nvr.get.return_value = MagicMock(
         id="nvr1", name="NVR", type="UNVR"
