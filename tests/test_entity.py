@@ -257,6 +257,29 @@ class TestUnifiInsightsEntity:
 
         assert entity.available is False
 
+    async def test_entity_handle_coordinator_update_unavailable_then_recovers(
+        self, hass: HomeAssistant, mock_coordinator
+    ):
+        """Entity un-freezes on _handle_coordinator_update once coordinator recovers."""
+        description = EntityDescription(key="test", name="Test")
+        entity = UnifiInsightsEntity(
+            coordinator=mock_coordinator,
+            description=description,
+            site_id="site1",
+            device_id="device1",  # cached state is ONLINE
+        )
+        entity.async_write_ha_state = MagicMock()
+
+        mock_coordinator.available = False
+        entity._handle_coordinator_update()
+        assert entity._attr_available is False
+        assert entity.available is False
+
+        mock_coordinator.available = True
+        entity._handle_coordinator_update()
+        assert entity._attr_available is True
+        assert entity.available is True
+
     async def test_entity_device_data(self, hass: HomeAssistant, mock_coordinator):
         """Test entity device_data property."""
         description = EntityDescription(key="test", name="Test")
@@ -451,6 +474,28 @@ class TestUnifiProtectEntity:
         )
 
         assert entity.available is False
+
+    async def test_protect_entity_handle_coordinator_update_unavailable_then_recovers(
+        self, hass: HomeAssistant, mock_coordinator
+    ):
+        """Protect entity un-freezes on coordinator update once coordinator recovers."""
+        entity = UnifiProtectEntity(
+            coordinator=mock_coordinator,
+            device_type=DEVICE_TYPE_CAMERA,
+            device_id="camera1",  # cached state is CONNECTED
+        )
+        entity.async_write_ha_state = MagicMock()
+        entity._update_from_data = MagicMock()
+
+        mock_coordinator.available = False
+        entity._handle_coordinator_update()
+        assert entity._attr_available is False
+        assert entity.available is False
+
+        mock_coordinator.available = True
+        entity._handle_coordinator_update()
+        assert entity._attr_available is True
+        assert entity.available is True
 
     async def test_protect_entity_coordinator_update_refreshes_state(
         self, hass: HomeAssistant, mock_coordinator
