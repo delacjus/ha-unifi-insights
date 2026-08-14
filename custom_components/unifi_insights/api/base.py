@@ -303,7 +303,13 @@ class BaseUniFiClient(ABC):
             redacted_response = (
                 _redact(response_text)[:200] if response_text else "empty"
             )
-            _LOGGER.warning("Response is not JSON: %s", redacted_response)
+            _LOGGER.warning(
+                "Response is not JSON (status %s, %s %s): %s",
+                status,
+                response.method,
+                response.url.path,
+                redacted_response,
+            )
             msg = f"API returned non-JSON response (status {status})"
             raise UniFiResponseError(
                 msg,

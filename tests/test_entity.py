@@ -241,6 +241,22 @@ class TestUnifiInsightsEntity:
 
         assert entity.available is False
 
+    async def test_entity_available_coordinator_unavailable(
+        self, hass: HomeAssistant, mock_coordinator
+    ):
+        """Entity unavailable when coordinator stale, even w/ cached ONLINE data."""
+        mock_coordinator.available = False
+        description = EntityDescription(key="test", name="Test")
+
+        entity = UnifiInsightsEntity(
+            coordinator=mock_coordinator,
+            description=description,
+            site_id="site1",
+            device_id="device1",  # cached state is ONLINE
+        )
+
+        assert entity.available is False
+
     async def test_entity_device_data(self, hass: HomeAssistant, mock_coordinator):
         """Test entity device_data property."""
         description = EntityDescription(key="test", name="Test")
@@ -418,6 +434,20 @@ class TestUnifiProtectEntity:
             coordinator=mock_coordinator,
             device_type=DEVICE_TYPE_CAMERA,
             device_id="camera2",
+        )
+
+        assert entity.available is False
+
+    async def test_protect_entity_available_coordinator_unavailable(
+        self, hass: HomeAssistant, mock_coordinator
+    ):
+        """Protect entity unavailable when coordinator stale (mirrors 47h incident)."""
+        mock_coordinator.available = False
+
+        entity = UnifiProtectEntity(
+            coordinator=mock_coordinator,
+            device_type=DEVICE_TYPE_CAMERA,
+            device_id="camera1",  # cached state is CONNECTED
         )
 
         assert entity.available is False

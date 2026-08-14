@@ -460,12 +460,22 @@ async def test_clients_get_all_explicit_limit_no_pagination() -> None:
     assert client._get.await_count == 1
 
 
-def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
+def _make_response(
+    *,
+    status: int = 200,
+    text: str = "",
+    json_side_effect=None,
+    method: str = "GET",
+    url_path: str = "/proxy/network/integrations/v1/sites",
+):
     """Build a fake aiohttp.ClientResponse for _handle_response tests."""
     response = MagicMock()
     response.status = status
     response.text = AsyncMock(return_value=text)
     response.headers = {}
+    response.method = method
+    response.url = MagicMock()
+    response.url.path = url_path
     if json_side_effect is not None:
         response.json = AsyncMock(side_effect=json_side_effect)
     else:
@@ -473,7 +483,7 @@ def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
     return response
 
 
-async def test_handle_response_2xx_non_json_raises() -> None:
+async def test_handle_response_2xx_non_json_raises(caplog) -> None:
     """A 2xx status with a non-JSON body must raise, not be treated as success.
 
     Regression test: a UniFi console/proxy that considers the request
@@ -491,12 +501,18 @@ async def test_handle_response_2xx_non_json_raises() -> None:
         status=200,
         text="<!doctype html><html><body>login</body></html>",
         json_side_effect=aiohttp.ContentTypeError(MagicMock(), MagicMock()),
+        method="GET",
+        url_path="/proxy/protect/integration/v1/cameras",
     )
 
     with pytest.raises(UniFiResponseError) as exc_info:
         await client._handle_response(response)
 
     assert exc_info.value.status_code == 200
+    # The path must be in the warning so a live failure can be pinned to the
+    # specific endpoint (sites-validation vs. periodic Protect polling).
+    assert "/proxy/protect/integration/v1/cameras" in caplog.text
+    assert "GET" in caplog.text
 
 
 async def test_handle_response_empty_body_returns_none() -> None:
