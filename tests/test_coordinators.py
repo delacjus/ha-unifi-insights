@@ -16,6 +16,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
     UniFiConnectionError,
+    UniFiNotFoundError,
     UniFiResponseError,
     UniFiTimeoutError,
 )
@@ -508,13 +509,29 @@ class TestUnifiConfigCoordinator:
     async def test_async_update_data_auth_error(
         self, coordinator: UnifiConfigCoordinator
     ):
-        """Test data fetch with auth error."""
+        """Test data fetch with auth error on network-only setup."""
+        coordinator.protect_client = None
         coordinator.network_client.sites.get_all = AsyncMock(
             side_effect=UniFiAuthenticationError("Invalid API key")
         )
 
         with pytest.raises(ConfigEntryAuthFailed):
             await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_protect_only_console(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test fetch succeeds on Protect-only console with empty sites (Issue 93)."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("Not found", status_code=404)
+        )
+
+        result = await coordinator._async_update_data()
+        assert result["sites"] == {}
+        assert result["wifi"] == {}
+        assert result["firewall_rules"] == {}
+        assert coordinator._available is True
 
     @pytest.mark.asyncio
     async def test_async_update_data_connection_error(
@@ -770,6 +787,7 @@ class TestUnifiDeviceCoordinator:
 
         # Should return existing data without changes
         assert result == coordinator.data
+        assert coordinator._available is True
 
     @pytest.mark.asyncio
     async def test_process_device_stats_error(

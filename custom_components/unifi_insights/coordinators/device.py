@@ -497,9 +497,11 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
             site_ids = self.config_coordinator.get_site_ids()
 
             if not site_ids:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Device coordinator: No sites available from config coordinator"
                 )
+                self._available = True
+                self.data["last_update"] = datetime.now(tz=UTC)
                 return self.data
 
             _LOGGER.debug(
