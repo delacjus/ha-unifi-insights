@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.0] - 2026-08-04
+
+### Added
+
+- Expanded the vendored UniFi Network and Protect API packages with typed models
+  and endpoints for link aggregation groups (LAG), multi-chassis LAG domains, and
+  switch stacks (Network) and for alarm hubs, arm profiles, relays, sirens,
+  speakers, bridges, key fobs, and link stations (Protect) to support Network
+  10.4.57 and Protect 7.1.87
+- Added tolerant models for the `doorlock` and `viewport` Protect WebSocket
+  device types, and routed their real-time updates through the Protect
+  coordinator and facade aggregation
+
 ## [2026.6.4] - 2026-06-13
 
 ### Fixed
