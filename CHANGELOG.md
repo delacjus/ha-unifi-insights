@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added support for standalone Protect-only consoles (e.g., UNVR, UNVR-Instant, UNVR-Pro) in both Local and Remote connection modes — onboarding and integration setup gracefully probe both Network and Protect APIs, enabling Protect monitoring and control even when UniFi Network is not installed or enabled (closes #93)
+- Added dual-application connection validation in the config flow (`_async_validate_local_connection` and `_async_validate_remote_console`) to automatically detect available Network and Protect services
+
+### Fixed
+
+- Fixed setup failure on UniFi Dream Router / Dream 7 consoles returning site payloads without an explicit `id` field — `Site` model now gracefully falls back to `internal_reference` or `name` (defaulting to `"default"`), and `SitesEndpoint.get_all()` skips malformed records with friendly `site_parse_error` translation (closes #80)
+- Fixed `script/test` failing with `unbound variable` under `set -u` on macOS Bash 3.2
+
 ## [2026.8.0] - 2026-08-04
+
 
 ### Added
 
