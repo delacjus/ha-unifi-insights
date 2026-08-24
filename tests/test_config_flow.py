@@ -7,6 +7,7 @@ import pytest
 from homeassistant import config_entries
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResultType
+from pydantic import ValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import (
@@ -14,6 +15,7 @@ from custom_components.unifi_insights.api import (
     UniFiConnectionError,
     UniFiTimeoutError,
 )
+from custom_components.unifi_insights.api.network.models.site import Site
 from custom_components.unifi_insights.config_flow import (
     UnifiInsightsConfigFlow,
     UnifiInsightsOptionsFlow,
@@ -292,6 +294,85 @@ async def test_local_flow_unknown_error(hass: HomeAssistant) -> None:
 
         assert result["type"] == FlowResultType.FORM
         assert result["errors"] == {"base": "unknown"}
+
+
+async def test_local_flow_validation_error(hass: HomeAssistant) -> None:
+    """Test local flow with site validation/parse error."""
+    validation_err = ValidationError.from_exception_data("Site", line_errors=[])
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(side_effect=validation_err)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "site_parse_error"}
+
+
+async def test_local_flow_success_with_missing_site_id(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow succeeds with Dream 7 site payload missing id (Issue 80)."""
+    site = Site.model_validate({"internalReference": "default", "name": "Default"})
+    mock_client = MagicMock()
+    mock_client.sites = MagicMock()
+    mock_client.sites.get_all = AsyncMock(return_value=[site])
+    mock_client.close = AsyncMock()
+
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+        patch(
+            "custom_components.unifi_insights.async_setup_entry",
+            return_value=True,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["title"] == "UniFi Insights (Local)"
 
 
 async def test_remote_flow_success(hass: HomeAssistant) -> None:

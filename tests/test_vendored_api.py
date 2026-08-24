@@ -166,6 +166,61 @@ async def test_get_legacy_all_sites_returns_raw_site_dicts() -> None:
     client._get.assert_awaited_once_with("/proxy/network/api/self/sites")
 
 
+async def test_sites_get_all_handles_missing_id_payload() -> None:
+    """Sites get_all should handle Dream 7 payloads missing id (Issue 80)."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={"data": [{"internalReference": "default", "name": "Default"}]}
+    )
+
+    result = await client.sites.get_all()
+
+    assert len(result) == 1
+    assert result[0].id == "default"
+    assert result[0].internal_reference == "default"
+    assert result[0].name == "Default"
+    client._get.assert_awaited_once_with(client.build_api_path("/sites"), params=None)
+
+
+async def test_sites_get_all_skips_malformed_items() -> None:
+    """Sites get_all should skip malformed items that fail ValidationError."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"internalReference": "default", "name": "Default"},
+                {"deviceCount": "not-an-int-and-invalid"},
+            ]
+        }
+    )
+
+    result = await client.sites.get_all()
+
+    assert len(result) == 1
+    assert result[0].id == "default"
+
+
+async def test_sites_get_returns_site() -> None:
+    """Sites get should return a parsed Site model."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"data": {"id": "site-1", "name": "Default"}})
+
+    result = await client.sites.get("site-1")
+
+    assert result.id == "site-1"
+    assert result.name == "Default"
+    client._get.assert_awaited_once_with(client.build_api_path("/sites/site-1"))
+
+
+async def test_sites_get_missing_raises_value_error() -> None:
+    """Sites get should raise ValueError if site is not found."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+
+    with pytest.raises(ValueError, match="not found"):
+        await client.sites.get("missing-site")
+
+
 async def test_get_legacy_site_devices_returns_device_list() -> None:
     """Test raw legacy site device list parsing."""
     client = UniFiNetworkClient(

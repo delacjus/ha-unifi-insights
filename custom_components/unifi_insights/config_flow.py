@@ -20,6 +20,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from pydantic import ValidationError
 
 from .api import (
     ApiKeyAuth,
@@ -245,6 +246,9 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     "Network application installs without UniFi OS)."
                 )
                 errors["base"] = "api_unsupported"
+            except ValidationError:
+                _LOGGER.exception("Failed to parse site data from UniFi controller")
+                errors["base"] = "site_parse_error"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -352,6 +356,9 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     "Integration API."
                 )
                 errors["base"] = "api_unsupported"
+            except ValidationError:
+                _LOGGER.exception("Failed to parse site data from remote UniFi console")
+                errors["base"] = "site_parse_error"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during console selection")
                 errors["base"] = "unknown"
@@ -459,6 +466,9 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     "controller may not expose the Network Integration API."
                 )
                 errors["base"] = "api_unsupported"
+            except ValidationError:
+                _LOGGER.exception("Failed to parse site data during reauth")
+                errors["base"] = "site_parse_error"
             except Exception:
                 errors["base"] = "unknown"
 
@@ -558,6 +568,9 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     "API."
                 )
                 errors["base"] = "api_unsupported"
+            except ValidationError:
+                _LOGGER.exception("Failed to parse site data during reconfiguration")
+                errors["base"] = "site_parse_error"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during reconfiguration")
                 errors["base"] = "unknown"

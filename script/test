@@ -112,11 +112,14 @@ trap cleanup EXIT
 # Run pytest with project configuration
 if [[ ${#COVERAGE_ARGS[@]} -gt 0 ]]; then
     log_header "Running tests with coverage"
+    echo ""
+    pytest "${COVERAGE_ARGS[@]}" ${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}
 else
     log_header "Running tests"
+    echo ""
+    pytest ${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}
 fi
-echo ""
-pytest "${COVERAGE_ARGS[@]}" "${PYTEST_ARGS[@]}"
+
 
 if [[ ${#COVERAGE_ARGS[@]} -gt 0 ]] && [[ " ${COVERAGE_ARGS[*]} " =~ " --cov-report=html " ]]; then
     echo ""

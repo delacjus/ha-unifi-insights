@@ -6,6 +6,7 @@ from custom_components.unifi_insights.api.network.models.device import (
     DeviceState,
 )
 from custom_components.unifi_insights.api.network.models.lag import LAG, LagType
+from custom_components.unifi_insights.api.network.models.site import Site, SiteHealth
 from custom_components.unifi_insights.api.protect.models.arm_profile import ArmProfile
 from custom_components.unifi_insights.api.protect.models.doorlock import DoorLock
 from custom_components.unifi_insights.api.protect.models.link_station import (
@@ -123,3 +124,38 @@ def test_doorlock_and_viewport_parse_ws_payloads() -> None:
 
     assert lock.lock_state == "LOCKED"
     assert viewport.liveview == "lv-1"
+
+
+def test_site_model_parses_payload_without_id() -> None:
+    """Site model should fall back to internalReference when id is missing."""
+    site = Site.model_validate({"internalReference": "default", "name": "Default"})
+
+    assert site.id == "default"
+    assert site.name == "Default"
+    assert site.internal_reference == "default"
+    assert site.display_name == "Default"
+
+
+def test_site_model_parses_payload_with_id_and_internal_reference() -> None:
+    """Site model should preserve explicit id when provided."""
+    site = Site.model_validate(
+        {
+            "id": "site-uuid-123",
+            "name": "Branch Office",
+            "internalReference": "branch",
+            "health": "healthy",
+        }
+    )
+
+    assert site.id == "site-uuid-123"
+    assert site.name == "Branch Office"
+    assert site.internal_reference == "branch"
+    assert site.health == SiteHealth.HEALTHY
+
+
+def test_site_model_fallback_to_name_when_internal_reference_missing() -> None:
+    """Site model should fall back to name when reference is missing."""
+    site = Site.model_validate({"name": "Warehouse"})
+
+    assert site.id == "Warehouse"
+    assert site.name == "Warehouse"
