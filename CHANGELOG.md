@@ -14,11 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed device coordinator failing on UniFi OS 5.1.31 / Network 10.5.67 consoles returning `features` and `interfaces` as lists (e.g. `["switching"]`, `["accessPoint"]`, `["ports"]`, `["radios"]`) or string `uplink` IDs, which previously broke `Device` model validation and rendered all network entities unavailable; also added isolated per-item validation to `DevicesEndpoint` and `ClientsEndpoint` (closes #94)
 - Fixed setup failure on UniFi Dream Router / Dream 7 consoles returning site payloads without an explicit `id` field — `Site` model now gracefully falls back to `internal_reference` or `name` (defaulting to `"default"`), and `SitesEndpoint.get_all()` skips malformed records with friendly `site_parse_error` translation (closes #80)
 - Fixed `script/test` failing with `unbound variable` under `set -u` on macOS Bash 3.2
 
 ## [2026.8.0] - 2026-08-04
-
 
 ### Added
 
@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed missing `@callback` decorator on the WiFi QR code image entity's `_handle_coordinator_update` override (same bug class as the 2026.6.2 coordinator fixes)
 - Fixed all coordinators relying on Home Assistant's `current_entry` ContextVar fallback instead of passing `config_entry` explicitly to `DataUpdateCoordinator` — HA flags this pattern for removal (core breaks in 2026.8) and the explicit entry also auto-registers coordinator shutdown on entry unload
 - Fixed the facade coordinator's `data` being `None` until an external (private) `_aggregate_data()` call from `__init__.py`; the facade now aggregates sub-coordinator data during its own initialization
-- Fixed config entry unloading closing the API clients *before* unloading the platforms — a failed platform unload previously left loaded entities behind with closed clients; clients are now only closed after all platforms unloaded successfully
+- Fixed config entry unloading closing the API clients _before_ unloading the platforms — a failed platform unload previously left loaded entities behind with closed clients; clients are now only closed after all platforms unloaded successfully
 - Fixed `script/test` being broken: it pinned `homeassistant==2026.4.1` against `pytest-homeassistant-custom-component==0.13.317` (which requires HA 2026.3.1, an unsolvable conflict) and did not install the `segno` manifest requirement; it now installs HA 2026.6.2 with plugin 0.13.338 and `segno`
 
 ### Changed

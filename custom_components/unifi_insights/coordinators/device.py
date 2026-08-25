@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import logging
 import time
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import device_registry as dr
@@ -329,7 +329,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                                     or site_obj.get("internal_reference")
                                     or site_name
                                 )
-                    except Exception:  # noqa: S110
+                    except Exception:
                         pass
 
                 if device_mac and site_name:

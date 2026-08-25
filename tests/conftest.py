@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.const import (

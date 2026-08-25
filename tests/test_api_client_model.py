@@ -5,8 +5,14 @@ from custom_components.unifi_insights.api.network.models.device import (
     Device,
     DeviceState,
 )
+from custom_components.unifi_insights.api.network.models.dns import DNSPolicy
 from custom_components.unifi_insights.api.network.models.lag import LAG, LagType
+from custom_components.unifi_insights.api.network.models.resources import (
+    VPNTunnel,
+    WANInterface,
+)
 from custom_components.unifi_insights.api.network.models.site import Site, SiteHealth
+from custom_components.unifi_insights.api.network.models.wifi import WifiNetwork
 from custom_components.unifi_insights.api.protect.models.arm_profile import ArmProfile
 from custom_components.unifi_insights.api.protect.models.doorlock import DoorLock
 from custom_components.unifi_insights.api.protect.models.link_station import (
@@ -159,3 +165,81 @@ def test_site_model_fallback_to_name_when_internal_reference_missing() -> None:
 
     assert site.id == "Warehouse"
     assert site.name == "Warehouse"
+
+
+def test_device_parses_list_features_and_interfaces_issue_94() -> None:
+    """Device model should parse list-format features and interfaces (Issue #94)."""
+    device = Device.model_validate(
+        {
+            "id": "udr-1",
+            "name": "UniFi Dream Router",
+            "model": "UDR",
+            "features": ["accessPoint"],
+            "interfaces": ["ports", "radios"],
+            "uplink": "gw-1",
+        }
+    )
+
+    assert device.id == "udr-1"
+    assert device.name == "UniFi Dream Router"
+    assert device.features == ["accessPoint"]
+    assert device.interfaces == ["ports", "radios"]
+    assert device.uplink == "gw-1"
+
+
+def test_device_parses_mixed_types_and_tolerates_unknowns() -> None:
+    """Device model should tolerate flexible port, metric, and feature structures."""
+    device = Device.model_validate(
+        {
+            "id": "dev-custom",
+            "name": "Custom Device",
+            "features": ["switching", "accessPoint"],
+            "interfaces": ["ports"],
+            "ports": [{"portIdx": 1, "name": "Port 1"}, {"customField": "value"}],
+            "cpuUtilization": "12.5",
+            "memoryUtilization": 45,
+            "uptime": 12345.67,
+            "lastSeen": "2026-08-25T07:00:00Z",
+        }
+    )
+
+    assert device.id == "dev-custom"
+    assert device.features == ["switching", "accessPoint"]
+    assert device.interfaces == ["ports"]
+    assert len(device.ports) == 2
+
+
+def test_client_model_accepts_unknown_client_type() -> None:
+    """Client model should keep unknown client type strings."""
+    client = Client.model_validate({"id": "c-1", "type": "CUSTOM_VPN"})
+
+    assert client.type == "CUSTOM_VPN"
+
+
+def test_wifi_model_accepts_unknown_security() -> None:
+    """WiFi model should accept new/unknown security types."""
+    wifi = WifiNetwork.model_validate(
+        {"id": "w-1", "name": "Guest", "security": "WPA3_ENTERPRISE_192"}
+    )
+
+    assert wifi.security == "WPA3_ENTERPRISE_192"
+
+
+def test_dns_model_accepts_unknown_type() -> None:
+    """DNS model should accept new/unknown DNS record types."""
+    dns = DNSPolicy.model_validate({"id": "d-1", "type": "HTTPS_RECORD"})
+
+    assert dns.type == "HTTPS_RECORD"
+
+
+def test_resources_model_accepts_unknown_statuses() -> None:
+    """WAN and VPN tunnel models should accept unknown status strings."""
+    wan = WANInterface.model_validate(
+        {"id": "wan-1", "name": "WAN", "status": "DEGRADED"}
+    )
+    vpn = VPNTunnel.model_validate(
+        {"id": "vpn-1", "name": "Site-to-Site", "status": "PAUSED"}
+    )
+
+    assert wan.status == "DEGRADED"
+    assert vpn.status == "PAUSED"

@@ -23,6 +23,7 @@ from homeassistant.helpers.redact import async_redact_data
 
 TO_REDACT = {"api_key", "password", "token", "secret"}
 
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: UnifiInsightsConfigEntry,

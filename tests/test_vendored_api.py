@@ -828,3 +828,42 @@ async def test_link_stations_get_returns_model() -> None:
 
     assert result.id == "ls-1"
     client._get.assert_awaited_once_with(client.build_api_path("/link-stations/ls-1"))
+
+
+async def test_devices_get_all_skips_malformed_items() -> None:
+    """Devices get_all should skip invalid/malformed items without failing."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"id": "dev-1", "name": "Valid AP", "features": ["accessPoint"]},
+                "not-a-dict",
+                {"name": "Missing ID"},
+            ]
+        }
+    )
+
+    result = await client.devices.get_all("site-1")
+
+    assert len(result) == 1
+    assert result[0].id == "dev-1"
+    assert result[0].features == ["accessPoint"]
+
+
+async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
+    """Devices get_pending_adoption should skip invalid items."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"id": "pend-1", "name": "Pending Device"},
+                123,
+                {"name": "No ID"},
+            ]
+        }
+    )
+
+    result = await client.devices.get_pending_adoption()
+
+    assert len(result) == 1
+    assert result[0].id == "pend-1"
