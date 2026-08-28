@@ -53,3 +53,16 @@ async def test_diagnostics_includes_websocket_health(
     assert "websocket" in diagnostics
     assert diagnostics["websocket"]["connected"] is False
     assert diagnostics["websocket"]["last_message_at"] is None
+
+    # Review finding 1: a single shared connected/last_message_at pair
+    # cannot tell "both subscriptions healthy" apart from "devices healthy,
+    # events silently hung" - per-subscription detail must reach this
+    # diagnostics payload too, not just the coordinator's own property.
+    assert diagnostics["websocket"]["devices"] == {
+        "connected": False,
+        "last_message_at": None,
+    }
+    assert diagnostics["websocket"]["events"] == {
+        "connected": False,
+        "last_message_at": None,
+    }

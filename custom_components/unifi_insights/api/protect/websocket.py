@@ -85,7 +85,15 @@ class ProtectWebSocket:
         url = str(self._client._build_url(path)).replace("https://", "wss://")
         headers = self._client._get_headers()
 
-        ws = await session.ws_connect(url, headers=headers)
+        # heartbeat=30: without this, a half-open connection - the NVR
+        # stops responding but never sends a close/error frame - leaves
+        # `async for msg in ws` in subscribe_with_callback blocked forever,
+        # so the reconnect loop never gets a chance to run (review finding
+        # 1). aiohttp sends a ping every 30s and force-closes the
+        # connection (surfacing as WSMsgType.CLOSED/ERROR, which
+        # subscribe_with_callback already handles) if no pong comes back,
+        # turning a silent hang into a bounded-time reconnect instead.
+        ws = await session.ws_connect(url, headers=headers, heartbeat=30)
         return ws
 
     @asynccontextmanager
