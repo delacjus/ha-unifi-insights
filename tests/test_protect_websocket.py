@@ -208,3 +208,87 @@ def test_stop_sets_running_false() -> None:
     ws_socket.stop()
 
     assert ws_socket._running is False
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_reports_connect_then_disconnect() -> None:
+    """`on_connection_state_change` fires True after connect, False on exit.
+
+    The coordinator's WS health signal and its "reconcile on WS reconnect"
+    safety net (see coordinators/protect.py) both depend on knowing exactly
+    when a subscription connects/disconnects - this method is the only place
+    that actually knows.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    fake_ws = _make_ws([close_msg])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    states: list[bool] = []
+
+    await ws_socket.subscribe_with_callback(
+        "nvr1",
+        "default",
+        "devices",
+        lambda _msg: None,
+        reconnect=False,
+        on_connection_state_change=states.append,
+    )
+
+    assert states == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_reports_disconnect_before_reconnect() -> None:
+    """A connection error reports False (never connected) before the retry,
+    then True/False again around the successful reconnection.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    good_ws = _make_ws([close_msg])
+
+    connect_calls = 0
+
+    async def _connect(_path: str):
+        nonlocal connect_calls
+        connect_calls += 1
+        if connect_calls == 1:
+            msg = "handshake failed"
+            raise aiohttp.ClientConnectionError(msg)
+        ws_socket.stop()
+        return good_ws
+
+    ws_socket._connect = _connect
+    states: list[bool] = []
+
+    await ws_socket.subscribe_with_callback(
+        "nvr1",
+        "default",
+        "devices",
+        lambda _msg: None,
+        reconnect=True,
+        reconnect_delay=0,
+        on_connection_state_change=states.append,
+    )
+
+    assert states == [False, True, False]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_without_state_callback_still_works() -> None:
+    """`on_connection_state_change` is optional and defaults to a no-op."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    fake_ws = _make_ws([close_msg])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    # Must not raise even though no callback was supplied.
+    await ws_socket.subscribe_with_callback(
+        "nvr1", "default", "devices", lambda _msg: None, reconnect=False
+    )

@@ -34,6 +34,7 @@ from custom_components.unifi_insights.coordinators.config import UnifiConfigCoor
 from custom_components.unifi_insights.coordinators.device import UnifiDeviceCoordinator
 from custom_components.unifi_insights.coordinators.facade import UnifiFacadeCoordinator
 from custom_components.unifi_insights.coordinators.protect import (
+    STALE_EVENT_TIMEOUT,
     UnifiProtectCoordinator,
 )
 
@@ -1190,6 +1191,7 @@ class TestUnifiProtectCoordinator:
     def test_websocket_state_initialized(self, coordinator: UnifiProtectCoordinator):
         """Test WebSocket state is initialized but not started at construction."""
         assert coordinator.websocket_task is None
+        assert coordinator.events_websocket_task is None
         assert coordinator._protect_websocket is coordinator.protect_client.websocket
 
     def test_websocket_state_without_client(
@@ -1199,6 +1201,7 @@ class TestUnifiProtectCoordinator:
         assert coordinator_no_protect.protect_client is None
         assert coordinator_no_protect._protect_websocket is None
         assert coordinator_no_protect.websocket_task is None
+        assert coordinator_no_protect.events_websocket_task is None
 
     @pytest.mark.asyncio
     async def test_async_start_websocket_without_client(
@@ -1212,23 +1215,38 @@ class TestUnifiProtectCoordinator:
     async def test_async_start_websocket_success(
         self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
     ):
-        """Test async_start_websocket resolves host_id and starts a task."""
+        """Test async_start_websocket resolves host_id and starts both the
+        devices and events subscriptions (see task 1: the missing events
+        subscription is the root cause of motion detection never firing).
+        """
         coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
         coordinator._protect_websocket.subscribe_with_callback = AsyncMock()
 
         await coordinator.async_start_websocket()
 
         assert coordinator.websocket_task is not None
+        assert coordinator.events_websocket_task is not None
         coordinator.protect_client.get_host_id.assert_awaited_once()
         await coordinator.websocket_task
+        await coordinator.events_websocket_task
 
-        coordinator._protect_websocket.subscribe_with_callback.assert_awaited_once_with(
+        coordinator._protect_websocket.subscribe_with_callback.assert_any_await(
             "nvr1",
             coordinator._site_id,
             "devices",
             coordinator._on_websocket_message,
             reconnect=True,
+            on_connection_state_change=coordinator._on_websocket_connection_state_change,
         )
+        coordinator._protect_websocket.subscribe_with_callback.assert_any_await(
+            "nvr1",
+            coordinator._site_id,
+            "events",
+            coordinator._on_websocket_event_message,
+            reconnect=True,
+            on_connection_state_change=coordinator._on_websocket_connection_state_change,
+        )
+        assert coordinator._protect_websocket.subscribe_with_callback.await_count == 2
 
     @pytest.mark.asyncio
     async def test_async_start_websocket_already_running(
@@ -1258,6 +1276,7 @@ class TestUnifiProtectCoordinator:
         await coordinator.async_start_websocket()
 
         assert coordinator.websocket_task is None
+        assert coordinator.events_websocket_task is None
 
     def test_on_websocket_message_top_level(self, coordinator: UnifiProtectCoordinator):
         """Test the WS message adapter with fields at the top level."""
@@ -1367,6 +1386,58 @@ class TestUnifiProtectCoordinator:
         assert warning_records == []
         assert any("sensor8" in r.getMessage() for r in debug_records)
 
+    def test_on_websocket_message_does_not_clobber_type_with_envelope_verb(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """The envelope's top-level "type" (the action verb) must not
+        overwrite a real device "type" field on a partial update frame.
+
+        Regression test: `containers = [payload, action, item, message]`
+        included the raw envelope unconditionally, so its "type": "update"
+        leaked into the merged device dict whenever `item` was a partial
+        delta that didn't re-send the unchanged "type" field - clobbering
+        the previously-correct hardware model string. Measured in
+        production flipping back and forth 49 times in 10 minutes for
+        UFP-SENSE/USL-Entry-US/USL-Environmental-US sensors.
+        """
+        coordinator.data["sensors"]["sensor10"] = {
+            "id": "sensor10",
+            "modelKey": "sensor",
+            "type": "UFP-SENSE",
+            "isOpened": False,
+        }
+
+        # A partial WS update: the envelope says "update", and the item
+        # only carries the field that actually changed (isOpened) - real
+        # Protect delta frames are not guaranteed to re-send "type".
+        coordinator._on_websocket_message(
+            {
+                "type": "update",
+                "item": {"modelKey": "sensor", "id": "sensor10", "isOpened": True},
+            }
+        )
+
+        assert coordinator.data["sensors"]["sensor10"]["type"] == "UFP-SENSE"
+        assert coordinator.data["sensors"]["sensor10"]["isOpened"] is True
+
+    def test_on_websocket_message_replaces_device_dict_not_mutates_in_place(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A WS update must produce a new per-device dict, not mutate the
+        old one in place - in-place mutation can make HA listeners that
+        hold a stale reference miss the transition (see task 4).
+        """
+        original = {"id": "sensor11", "modelKey": "sensor", "isOpened": False}
+        coordinator.data["sensors"]["sensor11"] = original
+
+        coordinator._on_websocket_message(
+            {"modelKey": "sensor", "id": "sensor11", "isOpened": True}
+        )
+
+        assert coordinator.data["sensors"]["sensor11"] is not original
+        assert original["isOpened"] is False
+        assert coordinator.data["sensors"]["sensor11"]["isOpened"] is True
+
     @pytest.mark.asyncio
     async def test_async_stop_websocket_noop_when_never_started(
         self, coordinator: UnifiProtectCoordinator
@@ -1385,7 +1456,10 @@ class TestUnifiProtectCoordinator:
     async def test_async_stop_websocket_stops_and_awaits_real_task(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test async_stop_websocket stops the socket and awaits a real task."""
+        """Test async_stop_websocket stops the socket and awaits BOTH real
+        tasks (devices and events - task 1 requires both to be stopped and
+        awaited, mirroring the existing devices-only teardown ordering).
+        """
         coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
 
         async def _run_forever(*_args, **_kwargs):
@@ -1395,14 +1469,18 @@ class TestUnifiProtectCoordinator:
             side_effect=_run_forever
         )
         await coordinator.async_start_websocket()
-        task = coordinator.websocket_task
-        assert task is not None
-        assert not task.done()
+        devices_task = coordinator.websocket_task
+        events_task = coordinator.events_websocket_task
+        assert devices_task is not None
+        assert events_task is not None
+        assert not devices_task.done()
+        assert not events_task.done()
 
         await coordinator.async_stop_websocket()
 
         coordinator._protect_websocket.stop.assert_called_once()
-        assert task.done()
+        assert devices_task.done()
+        assert events_task.done()
 
     @pytest.mark.asyncio
     async def test_async_update_data_success(
@@ -1811,6 +1889,411 @@ class TestUnifiProtectCoordinator:
         # Events should still be stored
         assert "motion" in coordinator.data["events"]
         assert "event_no_device" in coordinator.data["events"]["motion"]
+
+    def test_handle_event_update_resolves_camera_id_field(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test device id resolution tolerates "cameraId" (models/event.py's
+        actual field name), not just the invented "device" key.
+
+        UNVALIDATED (task 3): the real `Event` model
+        (api/protect/models/event.py) has no generic "device" field - only
+        `camera`/`cameraId` or `sensor`/`sensorId`. Before this fix,
+        `_process_event_for_device` was unreachable dead code in practice
+        because it only ever looked for "device".
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event20", "cameraId": "camera1", "start": 111, "end": None},
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionStart"] == 111
+
+    def test_handle_event_update_smart_detect_type_alias(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the "smartDetect" event type (models/event.py's
+        EventType.SMART_DETECT) is accepted alongside the original
+        "smartDetectZone" comparison - UNVALIDATED (task 3) which of the
+        two (or both) a real frame actually uses.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+
+        coordinator._handle_event_update(
+            "smartDetect",
+            {
+                "id": "event21",
+                "device": "camera1",
+                "smartDetectTypes": ["person"],
+                "start": 111,
+                "end": None,
+            },
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastSmartDetectTypes"] == [
+            "person"
+        ]
+
+    # -- Task 1 / 3: the "events" WebSocket subscription adapter ------------
+
+    def test_on_websocket_event_message_item_wrapper(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the events adapter with fields nested under "item", mirroring
+        the confirmed "devices" envelope shape (see _on_websocket_message).
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+
+        coordinator._on_websocket_event_message(
+            {
+                "type": "add",
+                "item": {
+                    "type": "motion",
+                    "id": "event30",
+                    "camera": "camera1",
+                    "start": 555,
+                    "end": None,
+                },
+            }
+        )
+
+        assert "event30" in coordinator.data["events"]["motion"]
+        assert coordinator.data["cameras"]["camera1"]["lastMotionStart"] == 555
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] is None
+
+    def test_on_websocket_event_message_flat_frame(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the events adapter with no item/payload/action wrapper - a
+        flat frame's own top-level "type" is the real event type (there is
+        no separate envelope to strip it from in this shape).
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+
+        coordinator._on_websocket_event_message(
+            {"type": "motion", "id": "event31", "camera": "camera1", "start": 777}
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionStart"] == 777
+
+    def test_on_websocket_event_message_not_a_dict(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test the events adapter warns and drops non-dict payloads instead
+        of raising (task 3: never raise into the WS callback).
+        """
+        with caplog.at_level(logging.WARNING):
+            coordinator._on_websocket_event_message("not-a-dict")  # type: ignore[arg-type]
+
+        assert "not a JSON object" in caplog.text
+
+    def test_on_websocket_event_message_missing_type_warns_once_then_debug(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test an unparseable (missing event type) frame logs WARNING once,
+        then DEBUG on repeat - mirrors the devices adapter's existing cap.
+        """
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message({"id": "event32"})
+            caplog.clear()
+            coordinator._on_websocket_event_message({"id": "event33"})
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert warning_records == []
+        assert any("event33" in r.getMessage() for r in debug_records)
+
+    def test_on_websocket_event_message_missing_id_is_dropped(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a resolvable type with no id logs at debug and is dropped."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message({"type": "motion"})
+
+        assert "missing event id" in caplog.text
+        assert coordinator.data["events"] == {}
+
+    def test_on_websocket_event_message_never_raises_on_handler_error(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test an exception from `_handle_event_update` is logged and
+        swallowed, not propagated into the WS callback (task 3: the events
+        path has never run in production, so its schema assumptions must
+        degrade safely rather than kill the reconnect loop).
+        """
+        with (
+            patch.object(
+                coordinator,
+                "_handle_event_update",
+                side_effect=RuntimeError("boom"),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            coordinator._on_websocket_event_message(
+                {"type": "motion", "id": "event34", "device": "camera1"}
+            )
+
+        assert "unexpected error processing" in caplog.text.lower()
+
+    # -- Task 2: bounded auto-off for the motion/smart-detect/ring latch ----
+
+    def test_motion_latch_survives_within_timeout(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """Test reconciliation does not clear a latch that is still young."""
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event40", "device": "camera1", "start": 1, "end": None},
+        )
+
+        freezer.tick(STALE_EVENT_TIMEOUT - timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] is None
+
+    def test_motion_latch_auto_clears_after_stale_timeout(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """CRITICAL regression test: a dropped "end" frame must not latch
+        `camera_motion` ON forever - it must self-clear after
+        STALE_EVENT_TIMEOUT rather than trusting event pairing alone. A
+        permanently-ON motion sensor in a home security system is worse
+        than one that never fires (see coordinator module docstring).
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event41", "device": "camera1", "start": 1, "end": None},
+        )
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] is None
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] is not None
+
+    def test_smart_detect_latch_auto_clears_and_resets_types(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """Test a stale smart-detect latch clears lastMotionEnd AND resets
+        lastSmartDetectTypes, so person/vehicle/animal detection sensors
+        also turn back off rather than staying latched on a stale type.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "smartDetectZone",
+            {
+                "id": "event42",
+                "device": "camera1",
+                "smartDetectTypes": ["person"],
+                "start": 1,
+                "end": None,
+            },
+        )
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] is not None
+        assert coordinator.data["cameras"]["camera1"]["lastSmartDetectTypes"] == []
+
+    def test_smart_detect_event_tolerates_non_list_smart_detect_types(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a non-list smartDetectTypes value (unconfirmed real shape -
+        see class docstring) degrades to an empty list instead of storing
+        garbage or raising.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+
+        coordinator._handle_event_update(
+            "smartDetectZone",
+            {
+                "id": "event46",
+                "device": "camera1",
+                "smartDetectTypes": "person",  # not a list
+                "start": 1,
+                "end": 2,
+            },
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastSmartDetectTypes"] == []
+
+    def test_light_motion_latch_auto_clears_after_stale_timeout(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """Test the same bounded auto-off applies to light motion latches."""
+        coordinator.data["lights"]["light1"] = {"id": "light1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event43", "device": "light1", "start": 1, "end": None},
+        )
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert coordinator.data["lights"]["light1"]["lastMotionEnd"] is not None
+
+    def test_ring_latch_auto_clears_after_stale_timeout(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """Test the doorbell ring latch is bounded the same way as motion -
+        it is exposed to the identical dropped-end-frame risk once the
+        events stream is live.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "ring",
+            {"id": "event44", "device": "camera1", "start": 1, "end": None},
+        )
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert coordinator.data["cameras"]["camera1"]["lastRingEnd"] is not None
+
+    def test_ring_latch_normal_end_event_clears_tracker(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a normal paired ring "end" event pops the ring tracker
+        immediately, mirroring the motion latch's normal-clear path.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "ring",
+            {"id": "event47", "device": "camera1", "start": 1, "end": None},
+        )
+        assert "camera1" in coordinator._camera_ring_started
+
+        coordinator._handle_event_update(
+            "ring",
+            {"id": "event47", "device": "camera1", "start": 1, "end": 2},
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastRingEnd"] == 2
+        assert "camera1" not in coordinator._camera_ring_started
+
+    def test_reconcile_stale_events_skips_tracker_for_removed_device(
+        self, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """Test reconciliation for a stale tracker entry whose device has
+        since disappeared (e.g. removed by a REST poll rebuild) just drops
+        the tracker entry instead of raising or recreating the device.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event48", "device": "camera1", "start": 1, "end": None},
+        )
+        assert "camera1" in coordinator._camera_motion_started
+
+        # Simulate the camera vanishing (e.g. a REST poll rebuild that no
+        # longer includes it) before the timeout elapses.
+        del coordinator.data["cameras"]["camera1"]
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        coordinator._reconcile_stale_events()
+
+        assert "camera1" not in coordinator._camera_motion_started
+        assert "camera1" not in coordinator.data["cameras"]
+
+    def test_motion_latch_normal_end_event_clears_without_reconciliation(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a normal paired "end" event clears the latch immediately -
+        reconciliation is a safety net, not the primary clearing path.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event45", "device": "camera1", "start": 1, "end": None},
+        )
+        assert "camera1" in coordinator._camera_motion_started
+
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event45", "device": "camera1", "start": 1, "end": 2},
+        )
+
+        assert coordinator.data["cameras"]["camera1"]["lastMotionEnd"] == 2
+        assert "camera1" not in coordinator._camera_motion_started
+
+    @pytest.mark.asyncio
+    async def test_reconcile_stale_events_runs_on_periodic_poll(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the periodic REST poll also reconciles stale latches,
+        rather than relying solely on event pairing.
+        """
+        with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
+            await coordinator._async_update_data()
+
+        mock_reconcile.assert_called_once()
+
+    def test_reconcile_stale_events_runs_on_websocket_reconnect(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a WS (re)connect triggers reconciliation - a missed "end"
+        frame during the outage would otherwise wait for the next poll.
+        """
+        with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
+            coordinator._on_websocket_connection_state_change(connected=True)
+
+        mock_reconcile.assert_called_once()
+
+        with patch.object(
+            coordinator, "_reconcile_stale_events"
+        ) as mock_reconcile_disconnect:
+            coordinator._on_websocket_connection_state_change(connected=False)
+
+        mock_reconcile_disconnect.assert_not_called()
+
+    # -- Task 5: WebSocket health signal -------------------------------------
+
+    def test_websocket_health_initial_state(self, coordinator: UnifiProtectCoordinator):
+        """Test the WS health signal starts unconnected/unknown."""
+        assert coordinator._ws_connected is False
+        assert coordinator._last_ws_message is None
+        assert coordinator.websocket_health == {
+            "connected": False,
+            "last_message_at": None,
+        }
+
+    def test_websocket_health_updates_on_devices_frame(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test any inbound devices frame marks the socket connected and
+        records when it was last heard from - even an unparseable one,
+        since receiving anything is evidence the wire is alive.
+        """
+        coordinator._on_websocket_message({"id": "sensor50"})
+
+        assert coordinator._ws_connected is True
+        assert coordinator._last_ws_message is not None
+        assert coordinator.websocket_health["connected"] is True
+        assert coordinator.websocket_health["last_message_at"] is not None
+
+    def test_websocket_health_updates_on_events_frame(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test any inbound events frame also marks the socket connected."""
+        coordinator._on_websocket_event_message({"id": "event51"})
+
+        assert coordinator._ws_connected is True
+        assert coordinator._last_ws_message is not None
+
+    def test_websocket_health_reflects_connection_state_changes(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the connection-state callback directly drives `_ws_connected`."""
+        coordinator._on_websocket_connection_state_change(connected=True)
+        assert coordinator._ws_connected is True
+
+        coordinator._on_websocket_connection_state_change(connected=False)
+        assert coordinator._ws_connected is False
 
     def test_cleanup_stale_devices_no_match(
         self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
