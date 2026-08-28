@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING, TypeAlias
@@ -341,9 +340,13 @@ async def async_setup_entry(
 
     # Start the real-time Protect WebSocket subscription (additive to the
     # 30s poll above, which stays as the fallback - see
-    # UnifiProtectCoordinator.async_start_websocket).
+    # UnifiProtectCoordinator.async_start_websocket). Registered for
+    # on-unload cleanup immediately so a setup failure later in this
+    # function (e.g. platform forwarding below) can't leak the background
+    # task - HA still runs async_on_unload callbacks when setup fails.
     if protect_coordinator:
         await protect_coordinator.async_start_websocket()
+        entry.async_on_unload(protect_coordinator.async_stop_websocket)
 
     # Create facade coordinator for backward compatibility with entity classes
     # (it aggregates the initial data from the sub-coordinators on creation)
@@ -394,27 +397,17 @@ async def async_unload_entry(
         data = entry.runtime_data
         _LOGGER.debug("Closing API clients")
         if data.protect_client:
-            # Stop WebSocket if active (on protect coordinator). Signal the
-            # ProtectWebSocket loop to stop reconnecting *before* cancelling
-            # the task, then await the cancellation - cancel() alone leaves
-            # the reconnect loop free to spin back up, and the loop being
-            # parked in `async for msg in ws` means stop() alone won't
-            # unblock it either; both are needed to avoid an orphaned
-            # WebSocket loop surviving a config entry reload.
+            # Stop the WebSocket (and await its background task) *before*
+            # closing the client below - stopping it after would leave the
+            # loop trying to use an already-closed session for whatever
+            # brief window passes before entry.async_on_unload's registered
+            # copy of this same call runs (see async_setup_entry - that
+            # registration is the safety net for a setup failure that
+            # happens after the WebSocket starts but before this function
+            # ever runs; async_stop_websocket() is idempotent so running it
+            # twice on a normal unload is harmless).
             if data.protect_coordinator:
-                protect_websocket = getattr(
-                    data.protect_coordinator, "_protect_websocket", None
-                )
-                if protect_websocket:
-                    protect_websocket.stop()
-                websocket_task = getattr(
-                    data.protect_coordinator, "websocket_task", None
-                )
-                if websocket_task:
-                    websocket_task.cancel()
-                    if isinstance(websocket_task, asyncio.Task):
-                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                            await websocket_task
+                await data.protect_coordinator.async_stop_websocket()
             # Close Protect client (await the async close)
             try:
                 await data.protect_client.close()

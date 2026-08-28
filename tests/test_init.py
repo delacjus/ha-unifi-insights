@@ -195,7 +195,13 @@ async def test_unload_entry_cancels_real_websocket_task(
     await hass.async_block_till_done()
 
     assert init_integration.state == ConfigEntryState.NOT_LOADED
-    protect_coordinator._protect_websocket.stop.assert_called_once()
+    # Called twice by design: once from async_unload_entry's explicit call
+    # (correct ordering - stop before closing the Protect client) and once
+    # more via the entry.async_on_unload safety net registered in
+    # async_setup_entry (covers a setup failure that happens after the
+    # WebSocket starts but before async_unload_entry ever runs).
+    # async_stop_websocket() is idempotent, so this is expected, not a bug.
+    assert protect_coordinator._protect_websocket.stop.call_count == 2
     assert websocket_task.done()
 
 

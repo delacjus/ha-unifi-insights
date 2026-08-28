@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -31,8 +33,6 @@ from custom_components.unifi_insights.const import (
 from .base import UnifiBaseCoordinator
 
 if TYPE_CHECKING:
-    import asyncio
-
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
@@ -110,6 +110,10 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         self._protect_websocket: Any = (
             self.protect_client.websocket if self.protect_client else None
         )
+        # Caps the "can't parse WebSocket message" warning to once, so a
+        # persistently wrong frame shape can't log-storm a production
+        # instance; every subsequent occurrence still logs at debug.
+        self._ws_parse_warned = False
 
     async def async_start_websocket(self) -> None:
         """
@@ -155,36 +159,94 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._site_id,
         )
 
+    async def async_stop_websocket(self) -> None:
+        """
+        Stop the WebSocket subscription and await its background task.
+
+        Safe to call when the WebSocket was never started. Signals the
+        `ProtectWebSocket` loop to stop reconnecting *before* cancelling the
+        task, then awaits the cancellation - `cancel()` alone leaves the
+        reconnect loop free to spin back up, and the loop being parked in
+        `async for msg in ws` means `stop()` alone won't unblock it either;
+        both are needed to avoid an orphaned WebSocket loop.
+
+        Registered with `entry.async_on_unload()` (covers a setup failure
+        that happens after the WebSocket started but before setup
+        completes) and also called directly from `async_unload_entry`'s
+        normal unload path.
+        """
+        if self._protect_websocket:
+            self._protect_websocket.stop()
+        task = self.websocket_task
+        if task:
+            task.cancel()
+            if isinstance(task, asyncio.Task):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
     @callback
     def _on_websocket_message(self, message: dict[str, Any]) -> None:
         """
         Adapt a raw WebSocket "devices" message to `_handle_device_update`.
 
-        The message may carry the device fields at the top level or nested
-        under a "payload" key, and the model key may be `modelKey` (API
-        camelCase) or `model_key`. Anything that doesn't parse is logged at
-        warning level rather than dropped silently, since a swallowed frame
-        here is a missed device state change (e.g. a door sensor opening).
+        The exact wire shape for this API is not verified against hardware
+        (see AGENTS.md / commit message), so `modelKey` and `id` are each
+        resolved independently across every plausible container - top level,
+        a "payload" key (REST-response-shaped push), and an "action" key
+        (the header/payload split used by UniFi's private app WebSocket) -
+        rather than picking one container and giving up. Picking a single
+        container wrong would silently drop every real frame, which for a
+        door sensor means a missed open/close event.
         """
         if not isinstance(message, dict):
-            _LOGGER.warning(
+            self._log_unparseable_ws_message(
                 "Protect coordinator: WebSocket message was not a JSON object: %r",
                 message,
             )
             return
 
+        action = message.get("action")
         payload = message.get("payload")
-        device_data = payload if isinstance(payload, dict) else message
+        containers = [c for c in (payload, action, message) if isinstance(c, dict)]
 
-        model_key = device_data.get("modelKey") or device_data.get("model_key")
+        def _pick(key_camel: str, key_snake: str) -> Any:
+            for container in containers:
+                value = container.get(key_camel) or container.get(key_snake)
+                if value:
+                    return value
+            return None
+
+        model_key = _pick("modelKey", "model_key")
         if not model_key:
-            _LOGGER.warning(
+            self._log_unparseable_ws_message(
                 "Protect coordinator: WebSocket device message missing modelKey: %s",
                 message,
             )
             return
 
+        device_id = _pick("id", "id")
+        if not device_id:
+            _LOGGER.debug(
+                "Protect coordinator: WebSocket %s update missing device id: %s",
+                model_key,
+                message,
+            )
+            return
+
+        # Merge every dict container so fields split across payload/action
+        # (e.g. id in the header, state fields in the payload) are all kept.
+        device_data: dict[str, Any] = {}
+        for container in reversed(containers):
+            device_data.update(container)
+        device_data["id"] = device_id
+
         self._handle_device_update(model_key, device_data)
+
+    def _log_unparseable_ws_message(self, msg: str, *args: Any) -> None:
+        """Log an unparseable WS message once at WARNING, then at DEBUG."""
+        level = logging.WARNING if not self._ws_parse_warned else logging.DEBUG
+        _LOGGER.log(level, msg, *args)
+        self._ws_parse_warned = True
 
     @callback
     def _handle_device_update(
