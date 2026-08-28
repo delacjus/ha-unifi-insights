@@ -162,7 +162,9 @@ async def test_setup_entry_starts_protect_websocket(
     Regression test for the dead `hasattr(..., "register_device_update_callback")`
     stub: the coordinator must actually invoke `get_host_id()` and hand a real
     background task to `ProtectWebSocket.subscribe_with_callback`, not just
-    construct without error.
+    construct without error. Also confirms the second, independent "events"
+    subscription (task 1 - without it, motion detection is permanently
+    non-functional) starts alongside "devices".
     """
     runtime_data = init_integration.runtime_data
     protect_coordinator = runtime_data.protect_coordinator
@@ -170,8 +172,12 @@ async def test_setup_entry_starts_protect_websocket(
 
     runtime_data.protect_client.get_host_id.assert_awaited_once()
     assert protect_coordinator.websocket_task is not None
+    assert protect_coordinator.events_websocket_task is not None
     await protect_coordinator.websocket_task
-    protect_coordinator._protect_websocket.subscribe_with_callback.assert_awaited_once()
+    await protect_coordinator.events_websocket_task
+    assert (
+        protect_coordinator._protect_websocket.subscribe_with_callback.await_count == 2
+    )
 
 
 async def test_unload_entry_cancels_real_websocket_task(
@@ -190,7 +196,9 @@ async def test_unload_entry_cancels_real_websocket_task(
     protect_coordinator = runtime_data.protect_coordinator
     assert protect_coordinator is not None
     websocket_task = protect_coordinator.websocket_task
+    events_websocket_task = protect_coordinator.events_websocket_task
     assert websocket_task is not None
+    assert events_websocket_task is not None
 
     assert await hass.config_entries.async_unload(init_integration.entry_id)
     await hass.async_block_till_done()
@@ -204,6 +212,7 @@ async def test_unload_entry_cancels_real_websocket_task(
     # async_stop_websocket() is idempotent, so this is expected, not a bug.
     assert protect_coordinator._protect_websocket.stop.call_count == 2
     assert websocket_task.done()
+    assert events_websocket_task.done()
 
 
 async def test_reload_entry(

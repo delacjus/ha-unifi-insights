@@ -195,6 +195,7 @@ class ProtectWebSocket:
         *,
         reconnect: bool = True,
         reconnect_delay: float = 5.0,
+        on_connection_state_change: Callable[[bool], None] | None = None,
     ) -> None:
         """
         Subscribe with a callback function.
@@ -206,6 +207,17 @@ class ProtectWebSocket:
             callback: Function to call for each message.
             reconnect: Whether to automatically reconnect on disconnect.
             reconnect_delay: Delay in seconds before reconnecting.
+            on_connection_state_change: Optional callback invoked with `True`
+                immediately after a connection is established and `False`
+                whenever it ends (clean close, error, or before a retry).
+                This is the only place that knows about connect/reconnect
+                transitions, so callers that need to reconcile state around
+                a reconnect (or surface WS health) must observe it here
+                rather than trying to infer it from `callback` traffic
+                alone. Exceptions raised by this callback are logged and
+                swallowed - a bug in it must never take down the reconnect
+                loop, the exact "silent background task death" failure mode
+                this parameter otherwise helps observe.
 
         """
         if subscription_type not in ("devices", "events"):
@@ -213,6 +225,18 @@ class ProtectWebSocket:
 
         path = self._subscribe_path(subscription_type)
         self._running = True
+
+        def _report_state(*, connected: bool) -> None:
+            if on_connection_state_change is None:
+                return
+            try:
+                on_connection_state_change(connected)
+            except Exception:
+                _LOGGER.exception(
+                    "ProtectWebSocket: on_connection_state_change callback raised "
+                    "for %s subscription",
+                    subscription_type,
+                )
 
         while self._running:
             ws: aiohttp.ClientWebSocketResponse | None = None
@@ -225,6 +249,7 @@ class ProtectWebSocket:
                     host_id,
                     site_id,
                 )
+                _report_state(connected=True)
 
                 async for msg in ws:
                     if not self._running:
@@ -234,9 +259,7 @@ class ProtectWebSocket:
                             data = json.loads(msg.data)
                             callback(data)
                         except json.JSONDecodeError:
-                            _LOGGER.debug(
-                                "ProtectWebSocket: dropped non-JSON message"
-                            )
+                            _LOGGER.debug("ProtectWebSocket: dropped non-JSON message")
                             continue
                     elif msg.type in (
                         aiohttp.WSMsgType.ERROR,
@@ -258,6 +281,7 @@ class ProtectWebSocket:
                     err,
                 )
             finally:
+                _report_state(connected=False)
                 if ws is not None and not ws.closed:
                     await ws.close()
 
