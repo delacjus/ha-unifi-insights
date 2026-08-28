@@ -935,19 +935,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch Protect data from API."""
-        # TEMPORARY diagnostic heartbeat (remove once root-caused): logged at
-        # WARNING, not DEBUG, because HA's system_log only surfaces
-        # WARNING+ over the WS API used to remotely watch this - DEBUG never
-        # reaches it. Identical repeated messages are deduped by system_log
-        # into one entry with a growing count and an advancing `timestamp`,
-        # so this does not log-storm. Purpose: prove whether this method is
-        # still being invoked on schedule during a staleness window, or
-        # whether the update loop itself has silently stopped - two
-        # confirmed staleness captures (2026-08-14 13:00 and 17:05) showed
-        # ZERO log activity of any kind from this coordinator's fetch calls,
-        # which is consistent with the poll loop stalling rather than
-        # repeatedly failing-and-being-caught.
-        _LOGGER.warning("Protect coordinator: poll attempt heartbeat")
 
         if not self.protect_client:
             _LOGGER.debug("Protect coordinator: No Protect client available")
