@@ -2134,33 +2134,92 @@ class TestUnifiFacadeCoordinator:
     async def test_async_request_refresh(
         self, facade_coordinator: UnifiFacadeCoordinator
     ):
-        """Test async request refresh."""
-        facade_coordinator._config_coordinator.async_request_refresh = AsyncMock()
-        facade_coordinator._device_coordinator.async_request_refresh = AsyncMock()
-        facade_coordinator._protect_coordinator.async_request_refresh = AsyncMock()
+        """
+        Test async_request_refresh forces a genuine refresh on each
+        sub-coordinator (async_refresh), not the debounced
+        async_request_refresh which can return before any fetch happens.
+        """
+        facade_coordinator._config_coordinator.async_refresh = AsyncMock()
+        facade_coordinator._device_coordinator.async_refresh = AsyncMock()
+        facade_coordinator._protect_coordinator.async_refresh = AsyncMock()
 
         await facade_coordinator.async_request_refresh()
 
-        facade_coordinator._config_coordinator.async_request_refresh.assert_called_once()
-        facade_coordinator._device_coordinator.async_request_refresh.assert_called_once()
-        facade_coordinator._protect_coordinator.async_request_refresh.assert_called_once()
+        facade_coordinator._config_coordinator.async_refresh.assert_called_once()
+        facade_coordinator._device_coordinator.async_refresh.assert_called_once()
+        facade_coordinator._protect_coordinator.async_refresh.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_request_refresh_no_protect(
         self, facade_coordinator_no_protect: UnifiFacadeCoordinator
     ):
         """Test async request refresh without protect."""
-        facade_coordinator_no_protect._config_coordinator.async_request_refresh = (
-            AsyncMock()
-        )
-        facade_coordinator_no_protect._device_coordinator.async_request_refresh = (
-            AsyncMock()
-        )
+        facade_coordinator_no_protect._config_coordinator.async_refresh = AsyncMock()
+        facade_coordinator_no_protect._device_coordinator.async_refresh = AsyncMock()
 
         await facade_coordinator_no_protect.async_request_refresh()
 
-        facade_coordinator_no_protect._config_coordinator.async_request_refresh.assert_called_once()
-        facade_coordinator_no_protect._device_coordinator.async_request_refresh.assert_called_once()
+        facade_coordinator_no_protect._config_coordinator.async_refresh.assert_called_once()
+        facade_coordinator_no_protect._device_coordinator.async_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_request_refresh_waits_for_fresh_data_and_notifies(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """
+        Regression test for the async_request_refresh contract violation.
+
+        Callers (e.g. switch.py action handlers) await
+        ``coordinator.async_request_refresh()`` expecting two things: (1)
+        the aggregated data reflects a fetch that actually happened during
+        the call, and (2) their own listener gets notified. The previous
+        implementation awaited each sub-coordinator's *debounced*
+        ``async_request_refresh()``, which can return before any fetch
+        starts (see ``Debouncer`` cooldown), and never called
+        ``async_update_listeners()`` itself - so both guarantees could be
+        silently violated.
+
+        This test drives a real (mocked) async_refresh that mutates the
+        sub-coordinator's data, then asserts the facade's aggregated data
+        reflects it and that a registered listener was actually called.
+        """
+        listener_calls = 0
+
+        def listener() -> None:
+            nonlocal listener_calls
+            listener_calls += 1
+
+        facade_coordinator.async_add_listener(listener)
+
+        async def _fake_refresh() -> None:
+            facade_coordinator._config_coordinator.data["sites"] = {
+                "new-site": {"id": "new-site"}
+            }
+
+        facade_coordinator._config_coordinator.async_refresh = AsyncMock(
+            side_effect=_fake_refresh
+        )
+        facade_coordinator._device_coordinator.async_refresh = AsyncMock()
+        facade_coordinator._protect_coordinator.async_refresh = AsyncMock()
+        # The debounced path must not be used for this explicit,
+        # user-triggered refresh - assert it's never touched.
+        facade_coordinator._config_coordinator.async_request_refresh = AsyncMock()
+        facade_coordinator._device_coordinator.async_request_refresh = AsyncMock()
+        facade_coordinator._protect_coordinator.async_request_refresh = AsyncMock()
+
+        await facade_coordinator.async_request_refresh()
+
+        facade_coordinator._config_coordinator.async_request_refresh.assert_not_called()
+        facade_coordinator._device_coordinator.async_request_refresh.assert_not_called()
+        facade_coordinator._protect_coordinator.async_request_refresh.assert_not_called()
+
+        # The aggregated data must reflect what the (mocked) genuine
+        # refresh produced, proving the call actually waited for it.
+        assert facade_coordinator.data["sites"] == {"new-site": {"id": "new-site"}}
+
+        # Listeners (entities) must be notified so they can reflect the
+        # refreshed state without waiting for the next natural poll.
+        assert listener_calls >= 1
 
     def test_handle_coordinator_update(
         self, facade_coordinator: UnifiFacadeCoordinator
@@ -2607,6 +2666,39 @@ class TestUnifiFacadeCoordinator:
             await coord.async_play_chime("chime1")
         with pytest.raises(HomeAssistantError, match="Protect is not available"):
             await coord.async_trigger_alarm("alarm1")
+
+    @pytest.mark.asyncio
+    async def test_async_shutdown_releases_sub_coordinator_listeners(
+        self,
+        facade_coordinator: UnifiFacadeCoordinator,
+        config_coordinator: UnifiConfigCoordinator,
+        device_coordinator: UnifiDeviceCoordinator,
+        protect_coordinator: UnifiProtectCoordinator,
+    ):
+        """
+        Regression test for the sub-coordinator listener leak.
+
+        ``_setup_listeners`` registers the facade as a listener on each
+        sub-coordinator via ``async_add_listener``, which returns a
+        remove-callback. Discarding that callback (the previous behavior)
+        means nothing ever undoes the registration: on config-entry
+        reload, a fresh facade is built and a fresh listener piles onto
+        the sub-coordinators, while the outgoing facade instance and its
+        listener registration are never released. Shutting the facade
+        down must release exactly what it registered, returning each
+        sub-coordinator's listener count to its pre-facade baseline.
+        """
+        # Baseline: __init__ -> _setup_listeners already registered
+        # exactly one listener (this facade) on each sub-coordinator.
+        assert len(config_coordinator._listeners) == 1
+        assert len(device_coordinator._listeners) == 1
+        assert len(protect_coordinator._listeners) == 1
+
+        await facade_coordinator.async_shutdown()
+
+        assert len(config_coordinator._listeners) == 0
+        assert len(device_coordinator._listeners) == 0
+        assert len(protect_coordinator._listeners) == 0
 
 
 # ============================================================================
