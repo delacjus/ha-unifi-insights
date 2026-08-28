@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from datetime import UTC, datetime
+import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
@@ -20,10 +20,12 @@ from custom_components.unifi_insights.api import (
 from custom_components.unifi_insights.const import (
     DEVICE_TYPE_CAMERA,
     DEVICE_TYPE_CHIME,
+    DEVICE_TYPE_DOORLOCK,
     DEVICE_TYPE_LIGHT,
     DEVICE_TYPE_NVR,
     DEVICE_TYPE_SENSOR,
     DEVICE_TYPE_VIEWER,
+    DEVICE_TYPE_VIEWPORT,
     DOMAIN,
     SCAN_INTERVAL_PROTECT,
 )
@@ -88,6 +90,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": {},
             "viewers": {},
             "chimes": {},
+            "doorlocks": {},
+            "viewports": {},
             "liveviews": {},
             "protect_info": {},
             "events": {},
@@ -291,6 +295,16 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         elif model_key == DEVICE_TYPE_CHIME:
             self.data["chimes"][device_id] = {
                 **self.data["chimes"].get(device_id, {}),
+                **device_data,
+            }
+        elif model_key == DEVICE_TYPE_DOORLOCK:
+            self.data["doorlocks"][device_id] = {
+                **self.data["doorlocks"].get(device_id, {}),
+                **device_data,
+            }
+        elif model_key == DEVICE_TYPE_VIEWPORT:
+            self.data["viewports"][device_id] = {
+                **self.data["viewports"].get(device_id, {}),
                 **device_data,
             }
 

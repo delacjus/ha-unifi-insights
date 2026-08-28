@@ -10,6 +10,25 @@ import pytest
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network import UniFiNetworkClient
+from custom_components.unifi_insights.api.protect import UniFiProtectClient
+
+
+def _network_client() -> UniFiNetworkClient:
+    """Build a local Network client for tests."""
+    return UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+
+def _protect_client() -> UniFiProtectClient:
+    """Build a local Protect client for tests."""
+    return UniFiProtectClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
 
 
 def test_build_legacy_api_path_local() -> None:
@@ -147,6 +166,61 @@ async def test_get_legacy_all_sites_returns_raw_site_dicts() -> None:
 
     assert result == [{"name": "default", "desc": "Default"}]
     client._get.assert_awaited_once_with("/proxy/network/api/self/sites")
+
+
+async def test_sites_get_all_handles_missing_id_payload() -> None:
+    """Sites get_all should handle Dream 7 payloads missing id (Issue 80)."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={"data": [{"internalReference": "default", "name": "Default"}]}
+    )
+
+    result = await client.sites.get_all()
+
+    assert len(result) == 1
+    assert result[0].id == "default"
+    assert result[0].internal_reference == "default"
+    assert result[0].name == "Default"
+    client._get.assert_awaited_once_with(client.build_api_path("/sites"), params=None)
+
+
+async def test_sites_get_all_skips_malformed_items() -> None:
+    """Sites get_all should skip malformed items that fail ValidationError."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"internalReference": "default", "name": "Default"},
+                {"deviceCount": "not-an-int-and-invalid"},
+            ]
+        }
+    )
+
+    result = await client.sites.get_all()
+
+    assert len(result) == 1
+    assert result[0].id == "default"
+
+
+async def test_sites_get_returns_site() -> None:
+    """Sites get should return a parsed Site model."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"data": {"id": "site-1", "name": "Default"}})
+
+    result = await client.sites.get("site-1")
+
+    assert result.id == "site-1"
+    assert result.name == "Default"
+    client._get.assert_awaited_once_with(client.build_api_path("/sites/site-1"))
+
+
+async def test_sites_get_missing_raises_value_error() -> None:
+    """Sites get should raise ValueError if site is not found."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+
+    with pytest.raises(ValueError, match="not found"):
+        await client.sites.get("missing-site")
 
 
 async def test_get_legacy_site_devices_returns_device_list() -> None:
@@ -542,3 +616,340 @@ async def test_handle_response_valid_json_returns_data() -> None:
     result = await client._handle_response(response)
 
     assert result == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Network v10.4.57 - LAGs, MC-LAG domains, switch stacks
+# ---------------------------------------------------------------------------
+
+
+async def test_lags_get_all_paginates_automatically() -> None:
+    """LAG get_all should fetch all pages when total exceeds one page."""
+    client = _network_client()
+    page1 = {
+        "offset": 0,
+        "limit": 100,
+        "count": 1,
+        "totalCount": 2,
+        "data": [
+            {
+                "id": "lag-1",
+                "type": "LOCAL",
+                "members": [{"deviceId": "dev-1", "portIdxs": [1, 2]}],
+            }
+        ],
+    }
+    page2 = {
+        "offset": 1,
+        "limit": 100,
+        "count": 1,
+        "totalCount": 2,
+        "data": [
+            {
+                "id": "lag-2",
+                "type": "SWITCH_STACK",
+                "members": [{"deviceId": "dev-2", "portIdxs": [5]}],
+                "switchStackId": "stack-9",
+            }
+        ],
+    }
+    client._get = AsyncMock(side_effect=[page1, page2])
+
+    result = await client.lags.get_all("site-1")
+
+    assert len(result) == 2
+    assert result[0].id == "lag-1"
+    assert result[0].type == "LOCAL"
+    assert result[0].members[0].device_id == "dev-1"
+    assert result[0].members[0].port_idxs == [1, 2]
+    assert result[1].switch_stack_id == "stack-9"
+    assert client._get.await_count == 2
+    client._get.assert_any_await(
+        client.build_api_path("/sites/site-1/switching/lags"),
+        params={"offset": 0, "limit": 100},
+    )
+
+
+async def test_lags_get_all_explicit_limit_single_page() -> None:
+    """Explicit offset/limit should fetch a single page."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "offset": 0,
+            "limit": 5,
+            "count": 1,
+            "totalCount": 20,
+            "data": [{"id": "lag-1", "type": "LOCAL"}],
+        }
+    )
+
+    result = await client.lags.get_all("site-1", offset=0, limit=5)
+
+    assert len(result) == 1
+    assert client._get.await_count == 1
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/switching/lags"),
+        params={"offset": 0, "limit": 5},
+    )
+
+
+async def test_lags_get_returns_model_from_wrapped_response() -> None:
+    """LAG get should unwrap a ``data`` envelope."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={"data": {"id": "lag-1", "type": "MULTI_CHASSIS"}}
+    )
+
+    result = await client.lags.get("site-1", "lag-1")
+
+    assert result.id == "lag-1"
+    assert result.type == "MULTI_CHASSIS"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/switching/lags/lag-1")
+    )
+
+
+async def test_lags_get_returns_model_from_unwrapped_response() -> None:
+    """LAG get should accept a bare object response."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"id": "lag-2", "type": "LOCAL"})
+
+    result = await client.lags.get("site-1", "lag-2")
+
+    assert result.id == "lag-2"
+
+
+async def test_lags_get_missing_raises_value_error() -> None:
+    """LAG get should raise ValueError when nothing is returned."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+
+    with pytest.raises(ValueError, match="not found"):
+        await client.lags.get("site-1", "missing")
+
+
+async def test_mc_lag_domains_get_all() -> None:
+    """MC-LAG domain get_all should parse peers and local LAGs."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "offset": 0,
+            "limit": 100,
+            "count": 1,
+            "totalCount": 1,
+            "data": [
+                {
+                    "id": "mclag-1",
+                    "name": "Core",
+                    "peers": [
+                        {"deviceId": "dev-1", "linkPortIdxs": [23], "role": "TOP"},
+                        {"deviceId": "dev-2", "linkPortIdxs": [24], "role": "BOTTOM"},
+                    ],
+                    "lags": [{"id": "lag-1", "members": []}],
+                }
+            ],
+        }
+    )
+
+    result = await client.lags.get_mc_lag_domains("site-1")
+
+    assert len(result) == 1
+    assert result[0].name == "Core"
+    assert result[0].peers[0].role == "TOP"
+    assert result[0].peers[1].device_id == "dev-2"
+    client._get.assert_awaited_with(
+        client.build_api_path("/sites/site-1/switching/mc-lag-domains"),
+        params={"offset": 0, "limit": 100},
+    )
+
+
+async def test_stacks_get_all_and_get() -> None:
+    """Switch stack get_all and get should parse members and LAGs."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "offset": 0,
+            "limit": 100,
+            "count": 1,
+            "totalCount": 1,
+            "data": [
+                {
+                    "id": "stack-1",
+                    "name": "Rack A",
+                    "members": [{"deviceId": "dev-1"}, {"deviceId": "dev-2"}],
+                    "lags": [{"id": "lag-1", "members": []}],
+                }
+            ],
+        }
+    )
+
+    result = await client.stacks.get_all("site-1")
+
+    assert len(result) == 1
+    assert result[0].name == "Rack A"
+    assert result[0].members[1].device_id == "dev-2"
+    client._get.assert_awaited_with(
+        client.build_api_path("/sites/site-1/switching/switch-stacks"),
+        params={"offset": 0, "limit": 100},
+    )
+
+    client._get = AsyncMock(return_value={"data": {"id": "stack-1", "name": "Rack A"}})
+    single = await client.stacks.get("site-1", "stack-1")
+    assert single.id == "stack-1"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/switching/switch-stacks/stack-1")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Protect v7.1.87 - alarm hubs, arm profiles, relays, sirens, speakers, bridges
+# ---------------------------------------------------------------------------
+
+
+async def test_alarm_hubs_get_all_wrapped_and_unwrapped() -> None:
+    """Alarm hub get_all should handle wrapped and bare list responses."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [{"id": "hub-1", "modelKey": "linkStation", "isAlarmHub": True}]
+        }
+    )
+
+    wrapped = await client.alarm_hubs.get_all()
+    assert len(wrapped) == 1
+    assert wrapped[0].id == "hub-1"
+    assert wrapped[0].is_alarm_hub is True
+    client._get.assert_awaited_once_with(client.build_api_path("/alarm-hubs"))
+
+    client._get = AsyncMock(return_value=[{"id": "hub-2", "modelKey": "linkStation"}])
+    unwrapped = await client.alarm_hubs.get_all()
+    assert len(unwrapped) == 1
+    assert unwrapped[0].id == "hub-2"
+
+
+async def test_alarm_hubs_trigger_output_posts_expected_payload() -> None:
+    """Alarm hub trigger_output should POST to the outputs trigger path."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value=None)
+
+    result = await client.alarm_hubs.trigger_output("hub-1", "out-1", durationMs=5000)
+
+    assert result is True
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/alarm-hubs/hub-1/outputs/out-1/trigger"),
+        json_data={"durationMs": 5000},
+    )
+
+
+async def test_arm_profiles_get_all_and_enable() -> None:
+    """Arm profile get_all should parse and enable should POST."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value=[{"id": "profile-1", "name": "Away", "recordEverything": True}]
+    )
+
+    profiles = await client.arm_profiles.get_all()
+    assert profiles[0].name == "Away"
+    assert profiles[0].record_everything is True
+    client._get.assert_awaited_once_with(client.build_api_path("/arm-profiles"))
+
+    client._post = AsyncMock(return_value=None)
+    assert await client.arm_profiles.enable(armProfileId="profile-1") is True
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/arm-profiles/enable"),
+        json_data={"armProfileId": "profile-1"},
+    )
+
+
+async def test_relays_activate_output_posts_expected_path() -> None:
+    """Relay activate_output should POST to the outputs activate path."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value=None)
+
+    result = await client.relays.activate_output("relay-1", "out-2")
+
+    assert result is True
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/relays/relay-1/outputs/out-2/activate"),
+        json_data=None,
+    )
+
+
+async def test_sirens_play_and_speakers_test_sound() -> None:
+    """Siren play and speaker test_sound should POST to their action paths."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value=None)
+
+    assert await client.sirens.play("siren-1") is True
+    client._post.assert_awaited_with(client.build_api_path("/sirens/siren-1/play"))
+
+    assert await client.speakers.test_sound("spk-1") is True
+    client._post.assert_awaited_with(
+        client.build_api_path("/speakers/spk-1/test-sound")
+    )
+
+
+async def test_bridges_get_all_uses_base_endpoint() -> None:
+    """Bridge get_all should parse via the shared device endpoint base."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value=[{"id": "bridge-1", "modelKey": "bridge", "maxClients": 4}]
+    )
+
+    result = await client.bridges.get_all()
+
+    assert result[0].id == "bridge-1"
+    assert result[0].max_clients == 4
+    client._get.assert_awaited_once_with(client.build_api_path("/bridges"))
+
+
+async def test_link_stations_get_returns_model() -> None:
+    """Link station get should return a parsed model from wrapped data."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value={"data": {"id": "ls-1", "modelKey": "linkStation"}}
+    )
+
+    result = await client.link_stations.get("ls-1")
+
+    assert result.id == "ls-1"
+    client._get.assert_awaited_once_with(client.build_api_path("/link-stations/ls-1"))
+
+
+async def test_devices_get_all_skips_malformed_items() -> None:
+    """Devices get_all should skip invalid/malformed items without failing."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"id": "dev-1", "name": "Valid AP", "features": ["accessPoint"]},
+                "not-a-dict",
+                {"name": "Missing ID"},
+            ]
+        }
+    )
+
+    result = await client.devices.get_all("site-1")
+
+    assert len(result) == 1
+    assert result[0].id == "dev-1"
+    assert result[0].features == ["accessPoint"]
+
+
+async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
+    """Devices get_pending_adoption should skip invalid items."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {"id": "pend-1", "name": "Pending Device"},
+                123,
+                {"name": "No ID"},
+            ]
+        }
+    )
+
+    result = await client.devices.get_pending_adoption()
+
+    assert len(result) == 1
+    assert result[0].id == "pend-1"

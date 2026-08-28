@@ -5,7 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2026.8.1] - 2026-08-25
+
+### Added
+
+- Added support for standalone Protect-only consoles (e.g., UNVR, UNVR-Instant, UNVR-Pro) in both Local and Remote connection modes — onboarding and integration setup gracefully probe both Network and Protect APIs, enabling Protect monitoring and control even when UniFi Network is not installed or enabled (closes #93)
+- Added dual-application connection validation in the config flow (`_async_validate_local_connection` and `_async_validate_remote_console`) to automatically detect available Network and Protect services
+
+### Fixed
+
+- Fixed device coordinator failing on UniFi OS 5.1.31 / Network 10.5.67 consoles returning `features` and `interfaces` as lists (e.g. `["switching"]`, `["accessPoint"]`, `["ports"]`, `["radios"]`) or string `uplink` IDs, which previously broke `Device` model validation and rendered all network entities unavailable; also added isolated per-item validation to `DevicesEndpoint` and `ClientsEndpoint` (closes #94)
+- Fixed setup failure on UniFi Dream Router / Dream 7 consoles returning site payloads without an explicit `id` field — `Site` model now gracefully falls back to `internal_reference` or `name` (defaulting to `"default"`), and `SitesEndpoint.get_all()` skips malformed records with friendly `site_parse_error` translation (closes #80)
+- Fixed `script/test` failing with `unbound variable` under `set -u` on macOS Bash 3.2
+
+## [2026.8.0] - 2026-08-04
+
+### Added
+
+- Expanded the vendored UniFi Network and Protect API packages with typed models
+  and endpoints for link aggregation groups (LAG), multi-chassis LAG domains, and
+  switch stacks (Network) and for alarm hubs, arm profiles, relays, sirens,
+  speakers, bridges, key fobs, and link stations (Protect) to support Network
+  10.4.57 and Protect 7.1.87
+- Added tolerant models for the `doorlock` and `viewport` Protect WebSocket
+  device types, and routed their real-time updates through the Protect
+  coordinator and facade aggregation
 
 ## [2026.6.4] - 2026-06-13
 

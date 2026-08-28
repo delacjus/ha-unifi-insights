@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
+import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -121,6 +121,8 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "nvrs": {},
                     "viewers": {},
                     "chimes": {},
+                    "doorlocks": {},
+                    "viewports": {},
                     "liveviews": {},
                     "protect_info": {},
                     "events": {},

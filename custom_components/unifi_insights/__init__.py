@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from http import HTTPStatus
+import logging
 from typing import TYPE_CHECKING, TypeAlias
 
-import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL, Platform
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+import homeassistant.helpers.config_validation as cv
 
 from .api import (
     ApiKeyAuth,
@@ -29,11 +29,9 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
     CONNECTION_TYPE_LOCAL,
+    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
     DEFAULT_API_HOST,
     DOMAIN,
-)
-from .const import (
-    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
 )
 from .coordinators import (
     UnifiConfigCoordinator,
@@ -227,15 +225,28 @@ async def async_setup_entry(
         # authentication signal for Protect-only consoles (see the deferred
         # gate below), so it always runs when a Protect client exists -
         # never skip it just because Network already validated.
+        # propagate_connection_errors=True lets a genuine connection/timeout
+        # failure be distinguished below from "no Protect app / bad key",
+        # so a transiently-unreachable console retries via
+        # ConfigEntryNotReady instead of being told its API key is invalid.
+        protect_conn_error: Exception | None = None
         if protect_client:
             _LOGGER.debug("Validating Protect API connection")
-            if await async_probe_protect(protect_client):
-                _LOGGER.info("Protect API validated successfully")
-            else:
-                _LOGGER.warning(
-                    "Protect API validation failed, disabling Protect support"
+            try:
+                protect_ok = await async_probe_protect(
+                    protect_client, propagate_connection_errors=True
                 )
+            except (UniFiConnectionError, UniFiTimeoutError) as err:
+                protect_conn_error = err
                 protect_client = None
+            else:
+                if protect_ok:
+                    _LOGGER.info("Protect API validated successfully")
+                else:
+                    _LOGGER.warning(
+                        "Protect API validation failed, disabling Protect support"
+                    )
+                    protect_client = None
 
         # Deferred gate: a console must prove itself via Network sites OR a
         # working Protect API. Neither means the key/console is genuinely
@@ -244,6 +255,12 @@ async def async_setup_entry(
         # raise from sites.get_all() (some consoles return an empty list
         # instead of an error for an unrecognised key).
         if network_sites_empty and protect_client is None:
+            if protect_conn_error is not None:
+                msg = (
+                    f"Error communicating with UniFi Protect API: {protect_conn_error}"
+                )
+                _LOGGER.warning(msg)
+                raise ConfigEntryNotReady(msg) from protect_conn_error
             msg = "No sites found and Protect API unavailable - API key may be invalid"
             _LOGGER.error(msg)
             raise ConfigEntryAuthFailed(msg)

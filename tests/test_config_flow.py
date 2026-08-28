@@ -3,10 +3,11 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant import config_entries
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResultType
+from pydantic import ValidationError
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import (
@@ -15,6 +16,7 @@ from custom_components.unifi_insights.api import (
     UniFiNotFoundError,
     UniFiTimeoutError,
 )
+from custom_components.unifi_insights.api.network.models.site import Site
 from custom_components.unifi_insights.config_flow import (
     UnifiInsightsConfigFlow,
     UnifiInsightsOptionsFlow,
@@ -32,6 +34,27 @@ if TYPE_CHECKING:
 
 # All tests require custom_integrations to be enabled
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
+
+
+@pytest.fixture(autouse=True)
+def mock_protect_client_flow():
+    """Auto-mock Protect client for config flow tests unless overridden."""
+    mock_protect_client = MagicMock()
+    mock_protect_client.cameras = MagicMock()
+    mock_protect_client.cameras.get_all = AsyncMock(return_value=[])
+    mock_protect_client.nvr = MagicMock()
+    mock_protect_client.nvr.get = AsyncMock(return_value=None)
+    mock_protect_client.close = AsyncMock()
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(return_value=mock_protect_client)
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+        return_value=protect_cm,
+    ):
+        yield mock_protect_client
 
 
 def _make_client_context(
@@ -366,6 +389,144 @@ async def test_local_flow_network_not_found_error(hass: HomeAssistant) -> None:
         assert result["errors"] == {"base": "api_unsupported"}
 
 
+async def test_local_flow_validation_error(hass: HomeAssistant) -> None:
+    """Test local flow with site validation/parse error."""
+    validation_err = ValidationError.from_exception_data("Site", line_errors=[])
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(side_effect=validation_err)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "site_parse_error"}
+
+
+async def test_local_flow_success_with_missing_site_id(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow succeeds with Dream 7 site payload missing id (Issue 80)."""
+    site = Site.model_validate({"internalReference": "default", "name": "Default"})
+    mock_client = MagicMock()
+    mock_client.sites = MagicMock()
+    mock_client.sites.get_all = AsyncMock(return_value=[site])
+    mock_client.close = AsyncMock()
+
+    async_cm = MagicMock()
+    async_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    async_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=async_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+        patch(
+            "custom_components.unifi_insights.async_setup_entry",
+            return_value=True,
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["title"] == "UniFi Insights (Local)"
+
+
+# NOTE: upstream's test_local_flow_success_protect_only_console and
+# test_local_flow_success_protect_only_nvr (from e229947) were intentionally
+# NOT ported here - they duplicate this file's existing
+# test_local_flow_protect_only_via_cameras and
+# test_local_flow_protect_only_via_nvr_fallback below, which correctly
+# assert title == "UniFi Insights (Protect)" (see 2dde746). Upstream's
+# versions asserted "UniFi Insights (Local)" for the same scenario, which
+# this branch's _async_validate_local_connection deliberately does not do -
+# porting them as-is would have been a regression test for the wrong
+# behavior.
+
+
+async def test_local_flow_api_unsupported_both_clients(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow returns api_unsupported when both clients return 404."""
+    net_cm = MagicMock()
+    net_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiNotFoundError("Not found", status_code=404)
+    )
+    net_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiNotFoundError("Not found", status_code=404)
+    )
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=net_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "api_unsupported"}
+
+
 async def test_remote_flow_success(hass: HomeAssistant) -> None:
     """Test successful remote connection flow."""
     discovery_cm = _make_client_context(get_hosts=[_remote_host()])
@@ -414,6 +575,340 @@ async def test_remote_flow_success(hass: HomeAssistant) -> None:
             CONF_CONSOLE_ID: "console123",
             CONF_API_KEY: "test_api_key",
         }
+
+
+async def test_remote_flow_success_protect_only_console(
+    hass: HomeAssistant,
+) -> None:
+    """Test remote flow succeeds for Protect-only console."""
+    discovery_cm = _make_client_context(get_hosts=[_remote_host()])
+    validation_net_cm = _make_client_context(sites=[])
+
+    protect_mock = MagicMock()
+    protect_mock.cameras = MagicMock()
+    protect_mock.cameras.get_all = AsyncMock(
+        return_value=[MagicMock(id="cam1", name="Driveway")]
+    )
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(return_value=protect_mock)
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            side_effect=[discovery_cm, validation_net_cm],
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.ApiKeyAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_REMOTE},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "test_api_key"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONSOLE_ID: "console123"},
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["title"] == "UniFi Insights (Cloud)"
+
+
+async def test_remote_flow_connection_error_on_protect(
+    hass: HomeAssistant,
+) -> None:
+    """Test remote console validation propagates connection error from Protect."""
+    discovery_cm = _make_client_context(get_hosts=[_remote_host()])
+    validation_net_cm = _make_client_context(
+        sites_side_effect=UniFiNotFoundError("Not found", status_code=404)
+    )
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiConnectionError("Remote Protect unreachable")
+    )
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            side_effect=[discovery_cm, validation_net_cm],
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.ApiKeyAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_REMOTE},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "test_api_key"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONSOLE_ID: "console123"},
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_local_flow_protect_auth_error(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow when Network returns empty and Protect returns auth error."""
+    mock_net_client = MagicMock()
+    mock_net_client.sites = MagicMock()
+    mock_net_client.sites.get_all = AsyncMock(return_value=[])
+
+    net_cm = MagicMock()
+    net_cm.__aenter__ = AsyncMock(return_value=mock_net_client)
+    net_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiAuthenticationError("Protect auth failed")
+    )
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=net_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {CONF_API_KEY: "invalid_auth"}
+
+
+async def test_local_flow_protect_timeout_error(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow when Network returns empty and Protect times out."""
+    mock_net_client = MagicMock()
+    mock_net_client.sites = MagicMock()
+    mock_net_client.sites.get_all = AsyncMock(return_value=[])
+
+    net_cm = MagicMock()
+    net_cm.__aenter__ = AsyncMock(return_value=mock_net_client)
+    net_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiTimeoutError("Protect timed out")
+    )
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=net_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_local_flow_protect_validation_error(
+    hass: HomeAssistant,
+) -> None:
+    """Test local flow when Protect returns invalid model data."""
+    mock_net_client = MagicMock()
+    mock_net_client.sites = MagicMock()
+    mock_net_client.sites.get_all = AsyncMock(return_value=[])
+
+    net_cm = MagicMock()
+    net_cm.__aenter__ = AsyncMock(return_value=mock_net_client)
+    net_cm.__aexit__ = AsyncMock(return_value=None)
+
+    protect_mock = MagicMock()
+    protect_mock.cameras = MagicMock()
+    protect_mock.cameras.get_all = AsyncMock(
+        side_effect=ValidationError.from_exception_data("Camera", [])
+    )
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(return_value=protect_mock)
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            return_value=net_cm,
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.LocalAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_LOCAL},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_HOST: "https://192.168.1.1",
+                CONF_API_KEY: "test_api_key",
+                CONF_VERIFY_SSL: False,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "site_parse_error"}
+
+
+async def test_remote_flow_success_protect_nvr(
+    hass: HomeAssistant,
+) -> None:
+    """Test remote flow succeeds when Protect has 0 cameras but NVR is online."""
+    discovery_cm = _make_client_context(get_hosts=[_remote_host()])
+    validation_net_cm = _make_client_context(sites=[])
+
+    protect_mock = MagicMock()
+    protect_mock.cameras = MagicMock()
+    protect_mock.cameras.get_all = AsyncMock(return_value=[])
+    protect_mock.nvr = MagicMock()
+    protect_mock.nvr.get = AsyncMock(return_value=MagicMock(id="nvr1", name="UNVR"))
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(return_value=protect_mock)
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            side_effect=[discovery_cm, validation_net_cm],
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.ApiKeyAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_REMOTE},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "test_api_key"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONSOLE_ID: "console123"},
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["title"] == "UniFi Insights (Cloud)"
+
+
+async def test_remote_flow_protect_timeout_error(
+    hass: HomeAssistant,
+) -> None:
+    """Test remote flow propagates timeout error when Protect times out."""
+    discovery_cm = _make_client_context(get_hosts=[_remote_host()])
+    validation_net_cm = _make_client_context(sites=[])
+
+    protect_cm = MagicMock()
+    protect_cm.__aenter__ = AsyncMock(
+        side_effect=UniFiTimeoutError("Remote Protect timed out")
+    )
+    protect_cm.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiNetworkClient",
+            side_effect=[discovery_cm, validation_net_cm],
+        ),
+        patch(
+            "custom_components.unifi_insights.config_flow.UniFiProtectClient",
+            return_value=protect_cm,
+        ),
+        patch("custom_components.unifi_insights.config_flow.ApiKeyAuth"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONNECTION_TYPE: CONNECTION_TYPE_REMOTE},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_API_KEY: "test_api_key"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_CONSOLE_ID: "console123"},
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_reauth_flow_success(

@@ -23,6 +23,7 @@ Both handle camelCase/snake_case field mapping via `get_field()`.
 # Correct
 class MySwitch(UnifiInsightsEntity, SwitchEntity): ...
 
+
 # Wrong - will cause MRO errors
 class MySwitch(SwitchEntity, UnifiInsightsEntity): ...
 ```
@@ -35,6 +36,7 @@ Use dataclasses for static entity metadata:
 @dataclass(frozen=True, kw_only=True)
 class UnifiInsightsSensorEntityDescription(SensorEntityDescription):
     """Describe a UniFi Insights sensor."""
+
     value_fn: Callable[[dict[str, Any]], StateType] | None = None
 ```
 
