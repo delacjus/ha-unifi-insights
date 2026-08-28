@@ -3380,6 +3380,39 @@ class TestUnifiFacadeCoordinator:
         assert len(device_coordinator._listeners) == 0
         assert len(protect_coordinator._listeners) == 0
 
+    async def test_async_shutdown_is_idempotent(
+        self,
+        facade_coordinator: UnifiFacadeCoordinator,
+    ):
+        """
+        Shutting the facade down twice must be safe.
+
+        ``DataUpdateCoordinator.__init__`` registers
+        ``entry.async_on_unload(self.async_shutdown)``, so HA invokes
+        shutdown on its own at unload -- which can coincide with an
+        explicit call from our unload path. The second pass must not
+        raise and must not re-invoke the already-spent remove-callbacks
+        (which would unregister listeners belonging to a *newer* facade
+        built by the reload that followed).
+        """
+        # Stand in for the real remove-callbacks so a second release is
+        # observable. Listener-count behavior is covered by
+        # test_async_shutdown_releases_sub_coordinator_listeners.
+        unsubs = [MagicMock() for _ in range(3)]
+        facade_coordinator._sub_coordinator_unsubs = list(unsubs)
+
+        await facade_coordinator.async_shutdown()
+        for unsub in unsubs:
+            assert unsub.call_count == 1
+
+        # Second shutdown: must not raise, and must not re-invoke the
+        # already-spent callbacks.
+        await facade_coordinator.async_shutdown()
+        for unsub in unsubs:
+            assert unsub.call_count == 1
+
+        assert facade_coordinator._sub_coordinator_unsubs == []
+
 
 # ============================================================================
 # Integration Tests for Coordinator Data Flow
