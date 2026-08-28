@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from http import HTTPStatus
-import logging
 from typing import TYPE_CHECKING, TypeAlias
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL, Platform
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
 
 from .api import (
     ApiKeyAuth,
@@ -29,9 +29,11 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
     CONNECTION_TYPE_LOCAL,
-    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
     DEFAULT_API_HOST,
     DOMAIN,
+)
+from .const import (
+    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
 )
 from .coordinators import (
     UnifiConfigCoordinator,
@@ -229,6 +231,11 @@ async def async_setup_entry(
         # failure be distinguished below from "no Protect app / bad key",
         # so a transiently-unreachable console retries via
         # ConfigEntryNotReady instead of being told its API key is invalid.
+        # A malformed API response (pydantic ValidationError) also propagates
+        # under that flag but has no dedicated handling here - it's just
+        # another way the probe can fail, so it's treated the same as any
+        # other probe failure below (disable Protect support, don't crash
+        # setup over it).
         protect_conn_error: Exception | None = None
         if protect_client:
             _LOGGER.debug("Validating Protect API connection")
@@ -238,6 +245,12 @@ async def async_setup_entry(
                 )
             except (UniFiConnectionError, UniFiTimeoutError) as err:
                 protect_conn_error = err
+                protect_client = None
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.warning(
+                    "Protect API validation failed, disabling Protect support",
+                    exc_info=True,
+                )
                 protect_client = None
             else:
                 if protect_ok:

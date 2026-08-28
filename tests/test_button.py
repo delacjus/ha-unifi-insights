@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-from homeassistant.exceptions import HomeAssistantError
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.unifi_insights.button import (
     BUTTON_TYPES,

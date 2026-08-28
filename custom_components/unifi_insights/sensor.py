@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
@@ -49,8 +49,10 @@ from .coordinators import UnifiFacadeCoordinator
 from .entity import (
     UnifiInsightsEntity,
     UnifiProtectEntity,
-    get_client_type as _get_client_type,
     get_field,
+)
+from .entity import (
+    get_client_type as _get_client_type,
 )
 
 if TYPE_CHECKING:
@@ -999,14 +1001,14 @@ async def async_setup_entry(
                                     if pw is not None and float(pw) > 0:
                                         poe_marker = True
                                         break
-                                except (ValueError, TypeError):
+                                except ValueError, TypeError:
                                     pass
 
                     if not poe_marker:
                         norm = get_field(port, "poe_power_w")
                         try:
                             poe_marker = norm is not None and float(norm) > 0
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             poe_marker = False
 
                     if poe_marker:
@@ -1157,7 +1159,7 @@ async def async_setup_entry(
                                 val = per_port_stats.get(str(port_idx_int))
                             if val is not None and float(val) <= 0:
                                 continue
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             pass
 
                     for desc in sensor_descriptions:

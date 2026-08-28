@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -20,7 +21,6 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 from pydantic import ValidationError
-import voluptuous as vol
 
 from .api import (
     ApiKeyAuth,
@@ -179,7 +179,7 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     return True, None, False
         except UniFiAuthenticationError:
             last_auth_error = True
-        except (UniFiConnectionError, UniFiTimeoutError):
+        except UniFiConnectionError, UniFiTimeoutError:
             last_conn_error = True
         except UniFiNotFoundError:
             last_not_found = True
@@ -208,7 +208,7 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                     return True, None, True
         except UniFiAuthenticationError:
             last_auth_error = True
-        except (UniFiConnectionError, UniFiTimeoutError):
+        except UniFiConnectionError, UniFiTimeoutError:
             last_conn_error = True
         except ValidationError:
             last_parse_error = True
@@ -248,7 +248,7 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                 sites = await network_client.sites.get_all()
                 if sites:
                     return True
-        except (UniFiConnectionError, UniFiTimeoutError):
+        except UniFiConnectionError, UniFiTimeoutError:
             raise
         except Exception:
             _LOGGER.debug(
@@ -267,7 +267,7 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await async_probe_protect(
                     protect_client, propagate_connection_errors=True
                 )
-        except (UniFiConnectionError, UniFiTimeoutError):
+        except UniFiConnectionError, UniFiTimeoutError:
             raise
         except Exception:
             _LOGGER.debug("Remote Protect validation failed", exc_info=True)
@@ -317,12 +317,14 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                is_valid, error_code, via_protect_only = (
-                    await self._async_validate_local_connection(
-                        host=user_input[CONF_HOST],
-                        api_key=user_input[CONF_API_KEY],
-                        verify_ssl=user_input.get(CONF_VERIFY_SSL, False),
-                    )
+                (
+                    is_valid,
+                    error_code,
+                    via_protect_only,
+                ) = await self._async_validate_local_connection(
+                    host=user_input[CONF_HOST],
+                    api_key=user_input[CONF_API_KEY],
+                    verify_ssl=user_input.get(CONF_VERIFY_SSL, False),
                 )
                 if is_valid:
                     await self.async_set_unique_id(user_input[CONF_API_KEY])
@@ -499,12 +501,14 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 if connection_type == CONNECTION_TYPE_LOCAL:
-                    is_valid, error_code, _via_protect_only = (
-                        await self._async_validate_local_connection(
-                            host=reauth_entry.data.get(CONF_HOST, DEFAULT_API_HOST),
-                            api_key=user_input[CONF_API_KEY],
-                            verify_ssl=reauth_entry.data.get(CONF_VERIFY_SSL, False),
-                        )
+                    (
+                        is_valid,
+                        error_code,
+                        _via_protect_only,
+                    ) = await self._async_validate_local_connection(
+                        host=reauth_entry.data.get(CONF_HOST, DEFAULT_API_HOST),
+                        api_key=user_input[CONF_API_KEY],
+                        verify_ssl=reauth_entry.data.get(CONF_VERIFY_SSL, False),
                     )
                     if is_valid:
                         return self.async_update_reload_and_abort(
@@ -586,12 +590,14 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 if connection_type == CONNECTION_TYPE_LOCAL:
-                    is_valid, error_code, _via_protect_only = (
-                        await self._async_validate_local_connection(
-                            host=user_input[CONF_HOST],
-                            api_key=user_input[CONF_API_KEY],
-                            verify_ssl=user_input.get(CONF_VERIFY_SSL, False),
-                        )
+                    (
+                        is_valid,
+                        error_code,
+                        _via_protect_only,
+                    ) = await self._async_validate_local_connection(
+                        host=user_input[CONF_HOST],
+                        api_key=user_input[CONF_API_KEY],
+                        verify_ssl=user_input.get(CONF_VERIFY_SSL, False),
                     )
                     if is_valid:
                         await self.async_set_unique_id(user_input[CONF_API_KEY])

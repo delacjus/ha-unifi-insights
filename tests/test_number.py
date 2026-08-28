@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from homeassistant.components.number import NumberMode
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
-import pytest
 
 from custom_components.unifi_insights.const import (
     ATTR_CAMERA_ID,

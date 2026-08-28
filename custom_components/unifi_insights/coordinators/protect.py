@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
@@ -209,7 +209,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         action = message.get("action")
         payload = message.get("payload")
         item = message.get("item")
-        containers = [c for c in (payload, action, item, message) if isinstance(c, dict)]
+        containers = [
+            c for c in (payload, action, item, message) if isinstance(c, dict)
+        ]
 
         def _pick(key_camel: str, key_snake: str) -> Any:
             for container in containers:

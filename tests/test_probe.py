@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from custom_components.unifi_insights.api import UniFiConnectionError, UniFiTimeoutError
 from custom_components.unifi_insights.probe import async_probe_protect
@@ -109,4 +110,31 @@ async def test_probe_propagates_timeout_error_from_nvr_fallback() -> None:
     client.nvr.get = AsyncMock(side_effect=UniFiTimeoutError("timed out"))
 
     with pytest.raises(UniFiTimeoutError):
+        await async_probe_protect(client, propagate_connection_errors=True)
+
+
+async def test_probe_swallows_validation_error_by_default() -> None:
+    """A malformed API response (pydantic ValidationError) is swallowed by
+    default, matching __init__.py's "disable Protect support, don't block
+    setup" behavior for any other probe failure.
+    """
+    client = MagicMock()
+    client.cameras.get_all = AsyncMock(
+        side_effect=ValidationError.from_exception_data("Camera", line_errors=[])
+    )
+
+    assert await async_probe_protect(client) is False
+
+
+async def test_probe_propagates_validation_error_when_opted_in() -> None:
+    """With propagate_connection_errors=True, a ValidationError during the
+    camera fetch also raises instead of being swallowed, so the config flow
+    can surface it as site_parse_error instead of the generic invalid_auth.
+    """
+    client = MagicMock()
+    client.cameras.get_all = AsyncMock(
+        side_effect=ValidationError.from_exception_data("Camera", line_errors=[])
+    )
+
+    with pytest.raises(ValidationError):
         await async_probe_protect(client, propagate_connection_errors=True)
