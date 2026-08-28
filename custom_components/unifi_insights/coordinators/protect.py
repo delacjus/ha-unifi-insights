@@ -189,14 +189,15 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         """
         Adapt a raw WebSocket "devices" message to `_handle_device_update`.
 
-        The exact wire shape for this API is not verified against hardware
-        (see AGENTS.md / commit message), so `modelKey` and `id` are each
-        resolved independently across every plausible container - top level,
-        a "payload" key (REST-response-shaped push), and an "action" key
-        (the header/payload split used by UniFi's private app WebSocket) -
-        rather than picking one container and giving up. Picking a single
-        container wrong would silently drop every real frame, which for a
-        door sensor means a missed open/close event.
+        Confirmed live against hardware 2026-08-12: the local-console shape is
+        `{"type": "update", "item": {"id", "modelKey", ...fields}}` - the
+        device delta lives under an "item" key, not at top level. `modelKey`
+        and `id` are still resolved independently across every plausible
+        container - "item", a "payload" key (REST-response-shaped push), and
+        an "action" key (the header/payload split used by UniFi's private
+        app WebSocket) - rather than picking one container and giving up.
+        Picking a single container wrong would silently drop every real
+        frame, which for a door sensor means a missed open/close event.
         """
         if not isinstance(message, dict):
             self._log_unparseable_ws_message(
@@ -207,7 +208,10 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
 
         action = message.get("action")
         payload = message.get("payload")
-        containers = [c for c in (payload, action, message) if isinstance(c, dict)]
+        item = message.get("item")
+        containers = [
+            c for c in (payload, action, item, message) if isinstance(c, dict)
+        ]
 
         def _pick(key_camel: str, key_snake: str) -> Any:
             for container in containers:
