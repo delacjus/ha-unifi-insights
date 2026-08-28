@@ -37,6 +37,37 @@ def _remote_client() -> UniFiProtectClient:
     )
 
 
+@pytest.mark.asyncio
+async def test_connect_passes_heartbeat_to_ws_connect() -> None:
+    """`_connect()` must pass `heartbeat=30` to `session.ws_connect()`.
+
+    Regression test (review finding 1, Major): without a heartbeat, aiohttp
+    never pings a half-open connection - if the NVR stops responding
+    without ever sending a close/error frame, `async for msg in ws` in
+    `subscribe_with_callback` blocks forever and the existing
+    reconnect/backoff logic below it never gets a chance to run (an events
+    subscription stuck like this while the devices subscription reconnects
+    cleanly is exactly the "motion silently stopped working for days"
+    scenario `websocket_health` exists to catch). `heartbeat=30` makes
+    aiohttp ping every 30s and force-close the connection (surfacing as
+    `WSMsgType.CLOSED`/`ERROR`, which `subscribe_with_callback` already
+    handles) if no pong comes back, turning a silent hang into a
+    bounded-time reconnect.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    mock_session = MagicMock()
+    mock_session.ws_connect = AsyncMock()
+    client._ensure_session = AsyncMock(return_value=mock_session)
+
+    await ws_socket._connect("/proxy/protect/integration/v1/subscribe/devices")
+
+    mock_session.ws_connect.assert_awaited_once()
+    _args, kwargs = mock_session.ws_connect.call_args
+    assert kwargs.get("heartbeat") == 30
+
+
 def test_subscribe_path_local_uses_integration_api() -> None:
     """LOCAL WS subscribe path must match the client's own REST convention.
 

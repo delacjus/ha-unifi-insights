@@ -1218,6 +1218,11 @@ class TestUnifiProtectCoordinator:
         """Test async_start_websocket resolves host_id and starts both the
         devices and events subscriptions (see task 1: the missing events
         subscription is the root cause of motion detection never firing).
+
+        Each subscription is registered with its OWN connection-state
+        callback (review finding 1: a single shared callback couldn't tell
+        the caller which subscription actually transitioned, which is what
+        made a devices-only reconnect look identical to a full recovery).
         """
         coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
         coordinator._protect_websocket.subscribe_with_callback = AsyncMock()
@@ -1236,7 +1241,7 @@ class TestUnifiProtectCoordinator:
             "devices",
             coordinator._on_websocket_message,
             reconnect=True,
-            on_connection_state_change=coordinator._on_websocket_connection_state_change,
+            on_connection_state_change=coordinator._on_devices_connection_state_change,
         )
         coordinator._protect_websocket.subscribe_with_callback.assert_any_await(
             "nvr1",
@@ -1244,7 +1249,7 @@ class TestUnifiProtectCoordinator:
             "events",
             coordinator._on_websocket_event_message,
             reconnect=True,
-            on_connection_state_change=coordinator._on_websocket_connection_state_change,
+            on_connection_state_change=coordinator._on_events_connection_state_change,
         )
         assert coordinator._protect_websocket.subscribe_with_callback.await_count == 2
 
@@ -2238,61 +2243,172 @@ class TestUnifiProtectCoordinator:
     ):
         """Test a WS (re)connect triggers reconciliation - a missed "end"
         frame during the outage would otherwise wait for the next poll.
+
+        Applies per-stream (the callback now needs a `stream` argument -
+        see review finding 1), but a reconnect of EITHER subscription
+        still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(connected=True)
+            coordinator._on_websocket_connection_state_change(
+                "devices", connected=True
+            )
 
         mock_reconcile.assert_called_once()
 
         with patch.object(
             coordinator, "_reconcile_stale_events"
         ) as mock_reconcile_disconnect:
-            coordinator._on_websocket_connection_state_change(connected=False)
+            coordinator._on_websocket_connection_state_change(
+                "devices", connected=False
+            )
 
         mock_reconcile_disconnect.assert_not_called()
 
     # -- Task 5: WebSocket health signal -------------------------------------
 
     def test_websocket_health_initial_state(self, coordinator: UnifiProtectCoordinator):
-        """Test the WS health signal starts unconnected/unknown."""
+        """Test the WS health signal starts unconnected/unknown, per stream
+        and in the top-level roll-up.
+        """
         assert coordinator._ws_connected is False
         assert coordinator._last_ws_message is None
         assert coordinator.websocket_health == {
             "connected": False,
             "last_message_at": None,
+            "devices": {"connected": False, "last_message_at": None},
+            "events": {"connected": False, "last_message_at": None},
         }
 
     def test_websocket_health_updates_on_devices_frame(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test any inbound devices frame marks the socket connected and
-        records when it was last heard from - even an unparseable one,
-        since receiving anything is evidence the wire is alive.
+        """Test an inbound devices frame marks only the devices stream
+        connected - even an unparseable one, since receiving anything is
+        evidence that stream's wire is alive. The top-level roll-up must
+        NOT report overall-healthy off of one stream alone (review finding
+        1): the events subscription is still unknown/disconnected here.
         """
         coordinator._on_websocket_message({"id": "sensor50"})
 
-        assert coordinator._ws_connected is True
+        assert coordinator.websocket_health["devices"]["connected"] is True
+        assert coordinator.websocket_health["devices"]["last_message_at"] is not None
+        assert coordinator.websocket_health["events"]["connected"] is False
+        assert coordinator.websocket_health["events"]["last_message_at"] is None
+
+        assert coordinator._ws_connected is False
+        assert coordinator.websocket_health["connected"] is False
+        # The top-level "any wire alive" timestamp still advances.
         assert coordinator._last_ws_message is not None
-        assert coordinator.websocket_health["connected"] is True
         assert coordinator.websocket_health["last_message_at"] is not None
 
     def test_websocket_health_updates_on_events_frame(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test any inbound events frame also marks the socket connected."""
+        """Test an inbound events frame marks only the events stream
+        connected, mirroring the devices case above.
+        """
         coordinator._on_websocket_event_message({"id": "event51"})
 
-        assert coordinator._ws_connected is True
+        assert coordinator.websocket_health["events"]["connected"] is True
+        assert coordinator.websocket_health["events"]["last_message_at"] is not None
+        assert coordinator.websocket_health["devices"]["connected"] is False
+
+        assert coordinator._ws_connected is False
         assert coordinator._last_ws_message is not None
 
     def test_websocket_health_reflects_connection_state_changes(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test the connection-state callback directly drives `_ws_connected`."""
-        coordinator._on_websocket_connection_state_change(connected=True)
-        assert coordinator._ws_connected is True
+        """Test the connection-state callback drives per-stream state, and
+        the top-level roll-up only reports connected once BOTH streams are.
+        """
+        coordinator._on_websocket_connection_state_change("devices", connected=True)
+        assert coordinator.websocket_health["devices"]["connected"] is True
+        assert coordinator._ws_connected is False  # events not connected yet
 
-        coordinator._on_websocket_connection_state_change(connected=False)
+        coordinator._on_websocket_connection_state_change("events", connected=True)
+        assert coordinator.websocket_health["events"]["connected"] is True
+        assert coordinator._ws_connected is True  # both streams now connected
+
+        coordinator._on_websocket_connection_state_change("devices", connected=False)
+        assert coordinator.websocket_health["devices"]["connected"] is False
+        assert coordinator.websocket_health["events"]["connected"] is True
+        assert coordinator._ws_connected is False
+
+    def test_on_devices_connection_state_change_updates_devices_stream_only(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the bound wrapper registered as the devices subscription's
+        `on_connection_state_change` callback (see `async_start_websocket`)
+        updates only the devices stream's health entry.
+        """
+        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
+
+        assert coordinator.websocket_health["devices"]["connected"] is True
+        assert coordinator.websocket_health["events"]["connected"] is False
+
+    def test_on_events_connection_state_change_updates_events_stream_only(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the bound wrapper registered as the events subscription's
+        `on_connection_state_change` callback updates only the events
+        stream's health entry.
+        """
+        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
+
+        assert coordinator.websocket_health["events"]["connected"] is True
+        assert coordinator.websocket_health["devices"]["connected"] is False
+
+    def test_websocket_health_detects_half_dead_pair(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """CRITICAL regression test (review finding 1, Major): a chatty
+        devices subscription must never mask a hung/disconnected events
+        subscription in `websocket_health`.
+
+        This health signal exists specifically to catch "motion silently
+        stopped working for days and nobody noticed" - that failure mode is
+        exactly an NVR restart where the devices stream reconnects cleanly
+        and keeps delivering frames while the events stream hangs half-open
+        (no error, no close frame, just blocked forever). Before this fix,
+        both subscriptions wrote the same shared `_ws_connected`/
+        `_last_ws_message` fields, so devices traffic alone kept
+        `websocket_health` reporting `connected: True` with a fresh
+        `last_message_at` while motion detection was silently dead.
+        """
+        # Devices subscription connects and stays chatty.
+        coordinator._on_websocket_connection_state_change("devices", connected=True)
+        coordinator._on_websocket_message({"id": "sensor52", "modelKey": "sensor"})
+        coordinator._on_websocket_message({"id": "sensor52", "modelKey": "sensor"})
+
+        # Events subscription connected once, then hung - no more frames,
+        # no disconnect callback (that's exactly what a half-open hang
+        # looks like: nothing fires, `async for msg in ws` just blocks).
+        coordinator._on_websocket_connection_state_change("events", connected=True)
+        coordinator._on_websocket_event_message({"id": "event52", "type": "motion"})
+
+        health = coordinator.websocket_health
+
+        # Per-stream detail must show the events stream as connected but
+        # its own traffic is what a human would inspect for staleness -
+        # the critical assertion is that the top-level summary does not
+        # paper over an events-side outage with devices-side traffic.
+        assert health["devices"]["connected"] is True
+        assert health["events"]["connected"] is True
+
+        # Now the events subscription actually drops (half-open hang
+        # eventually surfaces as a connection-state transition once the
+        # heartbeat/reconnect logic in websocket.py notices) while devices
+        # keeps flowing.
+        coordinator._on_websocket_connection_state_change("events", connected=False)
+        coordinator._on_websocket_message({"id": "sensor52", "modelKey": "sensor"})
+
+        health = coordinator.websocket_health
+        assert health["devices"]["connected"] is True
+        assert health["events"]["connected"] is False
+        # The overall roll-up must reflect the outage, not the chatty
+        # devices stream alone.
+        assert health["connected"] is False
         assert coordinator._ws_connected is False
 
     def test_cleanup_stale_devices_no_match(
@@ -2426,6 +2542,87 @@ class TestUnifiProtectCoordinator:
 
         assert "camera3" in coordinator.data["cameras"]
         assert coordinator.data["cameras"]["camera3"]["smartDetectTypes"] == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_rebuild_drops_motion_tracker_for_fieldless_camera(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        freezer,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Test a `_fetch_cameras()` rebuild pops the in-progress motion
+        latch tracker for a camera whose rebuilt dict carries no
+        `lastMotionStart` field, instead of leaving it to be "discovered"
+        stale 5 minutes later.
+
+        Regression test (review finding 2): the REST camera model never
+        carries `lastMotionStart`/`lastMotionEnd` (those are only ever
+        written by a paired WebSocket "start"/"end" event - see
+        `_apply_motion_event`). Before this fix, a `_fetch_cameras()`
+        rebuild silently cleared the latch's own fields without popping the
+        tracker entry, so on virtually every real motion event
+        `_reconcile_stale_events` would later "discover" the orphaned
+        tracker and log a false "missed 'end' event?" warning for motion
+        detection that was already correctly cleared ~4m30s earlier by the
+        REST poll - flooding INFO logs during exactly the window someone is
+        watching them to confirm a deploy worked.
+        """
+        # A live event-derived latch: WebSocket saw a "start" with no "end"
+        # yet, so the tracker is armed - mirrors real motion detection.
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "motion",
+            {"id": "event49", "device": "camera1", "start": 1, "end": None},
+        )
+        assert "camera1" in coordinator._camera_motion_started
+        assert coordinator.data["cameras"]["camera1"]["lastMotionStart"] == 1
+
+        # The mock protect client's default camera fixture returns
+        # "camera1" but with no lastMotionStart/lastMotionEnd fields at all
+        # (matching the real REST model - see api/protect/models/camera.py).
+        await coordinator._fetch_cameras()
+
+        assert "lastMotionStart" not in coordinator.data["cameras"]["camera1"]
+        assert "camera1" not in coordinator._camera_motion_started
+
+        # 5+ minutes later, the periodic reconciliation safety net must not
+        # find (and log about) a tracker that no longer exists.
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        with caplog.at_level(logging.INFO):
+            coordinator._reconcile_stale_events()
+
+        assert "missed 'end' event" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_rebuild_drops_ring_tracker_for_fieldless_camera(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        freezer,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Test the identical fix also applies to the doorbell ring latch.
+
+        The ring latch is stored on the same per-camera dict that
+        `_fetch_cameras()` wholesale-replaces, so it is exposed to the
+        identical dropped-tracker risk as the motion latch above.
+        """
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Test"}
+        coordinator._handle_event_update(
+            "ring",
+            {"id": "event50", "device": "camera1", "start": 1, "end": None},
+        )
+        assert "camera1" in coordinator._camera_ring_started
+
+        await coordinator._fetch_cameras()
+
+        assert "lastRingStart" not in coordinator.data["cameras"]["camera1"]
+        assert "camera1" not in coordinator._camera_ring_started
+
+        freezer.tick(STALE_EVENT_TIMEOUT + timedelta(seconds=1))
+        with caplog.at_level(logging.INFO):
+            coordinator._reconcile_stale_events()
+
+        assert "missed 'end' event" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_async_update_data_response_error(

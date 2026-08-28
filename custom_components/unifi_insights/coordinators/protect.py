@@ -177,15 +177,33 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         self._ws_parse_warned = False
         self._ws_event_parse_warned = False
 
-        # WebSocket health signal (task 5): there was previously no way to
-        # tell "connected and delivering" from "connected but silent" from
-        # "reconnect-looping" - surfaced via `websocket_health` in
-        # diagnostics.py. `_last_ws_message` updates on ANY inbound frame
-        # (devices or events, even an unparseable one - receiving anything
-        # is evidence the wire is alive); `_ws_connected` mirrors the
-        # underlying ProtectWebSocket connect/disconnect transitions
-        # (combined across both subscriptions - see
-        # `_on_websocket_connection_state_change`).
+        # WebSocket health signal (task 5, hardened by review finding 1):
+        # there was previously no way to tell "connected and delivering"
+        # from "connected but silent" from "reconnect-looping" - surfaced
+        # via `websocket_health` in diagnostics.py.
+        #
+        # Tracked PER SUBSCRIPTION, not as one shared pair of fields: the
+        # devices and events subscriptions are independent WebSocket
+        # connections (see async_start_websocket), and a shared field would
+        # let a chatty devices stream mask a hung/disconnected events
+        # stream - exactly the "motion silently stopped working for days"
+        # failure this signal exists to catch (an NVR restart where devices
+        # reconnects cleanly but events hangs half-open forever, no error,
+        # no close frame). See `_mark_ws_frame_received` and
+        # `_on_websocket_connection_state_change`.
+        self._ws_stream_health: dict[str, dict[str, Any]] = {
+            "devices": {"connected": False, "last_message_at": None},
+            "events": {"connected": False, "last_message_at": None},
+        }
+        # Top-level roll-up, recomputed by `_recompute_ws_health_rollup()`
+        # on every per-stream update. `connected` is True only when BOTH
+        # streams are connected (so a half-dead pair correctly reads as
+        # unhealthy even without inspecting the per-stream detail);
+        # `last_message_at` is the most recent frame from EITHER stream
+        # (preserves the old "any wire alive" semantics as a coarse
+        # liveness signal). Kept as real fields (not just derived in the
+        # `websocket_health` property) so backwards-compatible attribute
+        # access (`coordinator._ws_connected`) keeps working.
         self._last_ws_message: datetime | None = None
         self._ws_connected: bool = False
 
@@ -234,7 +252,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 "devices",
                 self._on_websocket_message,
                 reconnect=True,
-                on_connection_state_change=self._on_websocket_connection_state_change,
+                on_connection_state_change=self._on_devices_connection_state_change,
             ),
             name=f"{DOMAIN}_protect_websocket",
         )
@@ -253,7 +271,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 "events",
                 self._on_websocket_event_message,
                 reconnect=True,
-                on_connection_state_change=self._on_websocket_connection_state_change,
+                on_connection_state_change=self._on_events_connection_state_change,
             ),
             name=f"{DOMAIN}_protect_websocket_events",
         )
@@ -321,7 +339,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         are still merged in full, since a real device "type" field nested
         under one of those is legitimate data, not envelope noise.
         """
-        self._mark_ws_frame_received()
+        self._mark_ws_frame_received("devices")
 
         if not isinstance(message, dict):
             self._log_unparseable_ws_message(
@@ -387,46 +405,119 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         _LOGGER.log(level, msg, *args)
         setattr(self, warned_attr, True)
 
-    def _mark_ws_frame_received(self) -> None:
+    def _mark_ws_frame_received(self, stream: str) -> None:
         """
-        Record that a WebSocket frame was just delivered (task 5).
+        Record that a WebSocket frame was just delivered on `stream` (task 5).
 
+        Hardened by review finding 1 to be per-subscription, not shared.
         Called unconditionally at the top of both adapters, even for a
         frame that turns out to be unparseable - receiving anything at all
-        is evidence the wire is alive, which is exactly the "connected but
-        silent" vs. "delivering" distinction `websocket_health` exists to
-        answer.
+        is evidence that stream's wire is alive, which is exactly the
+        "connected but silent" vs. "delivering" distinction
+        `websocket_health` exists to answer. Only `stream`'s own entry in
+        `_ws_stream_health` is touched, so a chatty devices stream can never
+        make a silent events stream look alive, or vice versa.
         """
-        self._last_ws_message = datetime.now(UTC)
-        self._ws_connected = True
+        self._ws_stream_health[stream]["last_message_at"] = datetime.now(UTC)
+        self._ws_stream_health[stream]["connected"] = True
+        self._recompute_ws_health_rollup()
 
     @callback
-    def _on_websocket_connection_state_change(self, connected: bool) -> None:  # noqa: FBT001
-        # ^ positional bool is required here: this is registered as
-        # ProtectWebSocket.subscribe_with_callback's `on_connection_state_change`
-        # and invoked positionally to match `Callable[[bool], None]`.
+    def _on_devices_connection_state_change(self, connected: bool) -> None:  # noqa: FBT001
         """
-        Track WS connect/reconnect/disconnect transitions.
+        Adapt the devices subscription's connect/disconnect callback.
 
-        Drives two things: the `_ws_connected` half of the health signal
-        (task 5), and stale-latch reconciliation on every (re)connect
-        (task 2) - a reconnect means the subscription was down for some
-        stretch of time during which an "end" frame could have been
-        missed entirely, so waiting for the next 30s REST poll to notice
-        would leave a latched sensor ON longer than necessary.
+        See `_on_websocket_connection_state_change`; kept as its own bound
+        method (rather than e.g. `functools.partial`) so it still satisfies
+        `ProtectWebSocket.subscribe_with_callback`'s `Callable[[bool], None]`
+        contract exactly.
         """
-        self._ws_connected = connected
+        self._on_websocket_connection_state_change("devices", connected=connected)
+
+    @callback
+    def _on_events_connection_state_change(self, connected: bool) -> None:  # noqa: FBT001
+        """
+        Adapt the events subscription's connect/disconnect callback.
+
+        See `_on_devices_connection_state_change`.
+        """
+        self._on_websocket_connection_state_change("events", connected=connected)
+
+    @callback
+    def _on_websocket_connection_state_change(
+        self, stream: str, *, connected: bool
+    ) -> None:
+        """
+        Track WS connect/reconnect/disconnect transitions for `stream`.
+
+        `stream` is "devices" or "events" - each subscription is registered
+        with its own bound wrapper (`_on_devices_connection_state_change` /
+        `_on_events_connection_state_change`) so this always knows which one
+        transitioned, rather than the two subscriptions clobbering one
+        shared flag (review finding 1: that let a devices-only reconnect
+        read identically to a full recovery while the events subscription
+        stayed hung).
+
+        Drives two things: the per-stream half of the health signal
+        (task 5), and stale-latch reconciliation on every (re)connect of
+        EITHER stream (task 2) - a reconnect means that subscription was
+        down for some stretch of time during which an "end" frame could
+        have been missed entirely, so waiting for the next 30s REST poll to
+        notice would leave a latched sensor ON longer than necessary.
+        """
+        self._ws_stream_health[stream]["connected"] = connected
+        self._recompute_ws_health_rollup()
         if connected:
             self._reconcile_stale_events()
 
+    def _recompute_ws_health_rollup(self) -> None:
+        """
+        Recompute the top-level `_ws_connected`/`_last_ws_message` roll-up.
+
+        `_ws_connected` is True only when BOTH the devices and events
+        streams are connected - the whole point of review finding 1 is that
+        a half-dead pair (one stream healthy, one hung) must read as
+        unhealthy at the top level too, not just in the per-stream detail
+        that a human has to know to go look for. `_last_ws_message` stays
+        the most recent frame from EITHER stream, preserving the original
+        "is the wire alive at all" coarse-liveness semantics as a secondary
+        signal.
+        """
+        streams = self._ws_stream_health.values()
+        self._ws_connected = all(s["connected"] for s in streams)
+        timestamps = [s["last_message_at"] for s in streams if s["last_message_at"]]
+        self._last_ws_message = max(timestamps) if timestamps else None
+
     @property
     def websocket_health(self) -> dict[str, Any]:
-        """Expose WS connectivity/delivery health for diagnostics.py (task 5)."""
+        """
+        Expose WS connectivity/delivery health for diagnostics.py (task 5).
+
+        Surfaces BOTH a top-level roll-up (`connected`/`last_message_at`,
+        same key names as before this fix - review finding 1 asked to
+        preserve these where cheap so any existing consumer/dashboard
+        keeps working) AND per-subscription detail under `devices`/`events`,
+        since the top-level pair alone cannot distinguish "both streams
+        healthy" from "devices healthy, events silently hung" - exactly the
+        failure this signal exists to catch.
+        """
+
+        def _stream_payload(stream: dict[str, Any]) -> dict[str, Any]:
+            last_message_at = stream["last_message_at"]
+            return {
+                "connected": stream["connected"],
+                "last_message_at": (
+                    last_message_at.isoformat() if last_message_at else None
+                ),
+            }
+
         return {
             "connected": self._ws_connected,
             "last_message_at": (
                 self._last_ws_message.isoformat() if self._last_ws_message else None
             ),
+            "devices": _stream_payload(self._ws_stream_health["devices"]),
+            "events": _stream_payload(self._ws_stream_health["events"]),
         }
 
     @callback
@@ -571,7 +662,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         holds the real fields - there is no separate envelope to strip in
         that shape, so it is used directly.
         """
-        self._mark_ws_frame_received()
+        self._mark_ws_frame_received("events")
 
         if not isinstance(message, dict):
             self._log_unparseable_ws_message(
@@ -935,6 +1026,40 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                     camera.get("smartDetectTypes", []),
                 )
         self.data["cameras"] = cameras
+        self._drop_rebuilt_latch_trackers(cameras)
+
+    def _drop_rebuilt_latch_trackers(self, cameras: dict[str, Any]) -> None:
+        """
+        Pop event-derived latch trackers whose backing field vanished under them.
+
+        `_fetch_cameras()` wholesale-replaces `self.data["cameras"]` every
+        ~30s from REST models that carry no `lastMotionStart`/`lastRingStart`
+        field at all - those are only ever written by a paired WebSocket
+        "start" event (see `_apply_motion_event`/`_apply_ring_event`), never
+        by the REST API (confirmed: api/protect/models/camera.py declares
+        neither field). Without this, a still-armed tracker survives the
+        rebuild pointing at a camera dict that now has no "start" (or "end")
+        field either, and ~5 minutes later `_reconcile_stale_events` treats
+        that as an orphaned latch and logs a false "missed 'end' event?"
+        warning - even though the latch was already correctly cleared by
+        this exact REST poll 4m30s earlier. This fires on virtually every
+        real motion/ring event (the common "start"-only frame), flooding
+        INFO logs during exactly the window someone is watching them to
+        confirm a deploy worked.
+
+        Only pops when the camera is still present but has lost the field
+        entirely; a camera that vanished outright is left to the existing
+        "removed device" handling in `_expire_stale_latch`.
+        """
+        for device_id in list(self._camera_motion_started):
+            camera = cameras.get(device_id)
+            if isinstance(camera, dict) and "lastMotionStart" not in camera:
+                self._camera_motion_started.pop(device_id, None)
+
+        for device_id in list(self._camera_ring_started):
+            camera = cameras.get(device_id)
+            if isinstance(camera, dict) and "lastRingStart" not in camera:
+                self._camera_ring_started.pop(device_id, None)
 
     async def _fetch_lights(self) -> None:
         """Fetch light data."""
