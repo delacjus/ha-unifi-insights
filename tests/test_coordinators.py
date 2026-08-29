@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 from typing import TYPE_CHECKING, Any
@@ -256,9 +257,11 @@ def _create_mock_protect_client() -> MagicMock:
         ]
     )
 
-    # WebSocket registration
-    client.register_device_update_callback = MagicMock()
-    client.register_event_update_callback = MagicMock()
+    # WebSocket support
+    client.get_host_id = AsyncMock(return_value="nvr1")
+    client.websocket = MagicMock()
+    client.websocket.subscribe_with_callback = AsyncMock()
+    client.websocket.stop = MagicMock()
 
     client.close = AsyncMock()
     return client
@@ -1184,27 +1187,222 @@ class TestUnifiProtectCoordinator:
         assert "liveviews" in coordinator.data
         assert "events" in coordinator.data
 
-    def test_websocket_callbacks_registered(self, coordinator: UnifiProtectCoordinator):
-        """Test WebSocket callbacks are registered."""
-        coordinator.protect_client.register_device_update_callback.assert_called_once()
-        coordinator.protect_client.register_event_update_callback.assert_called_once()
+    def test_websocket_state_initialized(self, coordinator: UnifiProtectCoordinator):
+        """Test WebSocket state is initialized but not started at construction."""
+        assert coordinator.websocket_task is None
+        assert coordinator._protect_websocket is coordinator.protect_client.websocket
 
-    def test_websocket_callbacks_not_registered_without_client(
+    def test_websocket_state_without_client(
         self, coordinator_no_protect: UnifiProtectCoordinator
     ):
-        """Test WebSocket callbacks not registered without protect client."""
-        # No assertions needed - just ensure no exceptions
+        """Test WebSocket state without a protect client."""
         assert coordinator_no_protect.protect_client is None
+        assert coordinator_no_protect._protect_websocket is None
+        assert coordinator_no_protect.websocket_task is None
 
-    def test_setup_websocket_callbacks_returns_early_without_client(
+    @pytest.mark.asyncio
+    async def test_async_start_websocket_without_client(
         self, coordinator_no_protect: UnifiProtectCoordinator
     ):
-        """Test _setup_websocket_callbacks returns early without client (line 99)."""
-        # Explicitly call _setup_websocket_callbacks with no protect_client
-        # This should return early and not raise any exceptions
-        coordinator_no_protect._setup_websocket_callbacks()
-        # If we get here, the return statement was executed
-        assert coordinator_no_protect.protect_client is None
+        """Test async_start_websocket returns early without a protect client."""
+        await coordinator_no_protect.async_start_websocket()
+        assert coordinator_no_protect.websocket_task is None
+
+    @pytest.mark.asyncio
+    async def test_async_start_websocket_success(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_start_websocket resolves host_id and starts a task."""
+        coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
+        coordinator._protect_websocket.subscribe_with_callback = AsyncMock()
+
+        await coordinator.async_start_websocket()
+
+        assert coordinator.websocket_task is not None
+        coordinator.protect_client.get_host_id.assert_awaited_once()
+        await coordinator.websocket_task
+
+        coordinator._protect_websocket.subscribe_with_callback.assert_awaited_once_with(
+            "nvr1",
+            coordinator._site_id,
+            "devices",
+            coordinator._on_websocket_message,
+            reconnect=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_start_websocket_already_running(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_start_websocket is a no-op if already running."""
+        existing_task = asyncio.get_event_loop().create_future()
+        coordinator.websocket_task = existing_task  # type: ignore[assignment]
+        coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
+
+        await coordinator.async_start_websocket()
+
+        coordinator.protect_client.get_host_id.assert_not_called()
+        assert coordinator.websocket_task is existing_task
+        existing_task.set_result(None)
+
+    @pytest.mark.asyncio
+    async def test_async_start_websocket_host_id_failure(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_start_websocket swallows host_id resolution failures."""
+        coordinator.protect_client.get_host_id = AsyncMock(
+            side_effect=Exception("no NVR")
+        )
+
+        # Should not raise - WebSocket is additive, polling stays the fallback.
+        await coordinator.async_start_websocket()
+
+        assert coordinator.websocket_task is None
+
+    def test_on_websocket_message_top_level(self, coordinator: UnifiProtectCoordinator):
+        """Test the WS message adapter with fields at the top level."""
+        coordinator._on_websocket_message(
+            {"modelKey": "sensor", "id": "sensor3", "isOpened": True}
+        )
+
+        assert coordinator.data["sensors"]["sensor3"]["isOpened"] is True
+
+    def test_on_websocket_message_nested_payload(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the WS message adapter with fields nested under 'payload'."""
+        coordinator._on_websocket_message(
+            {"payload": {"modelKey": "sensor", "id": "sensor4", "isOpened": False}}
+        )
+
+        assert coordinator.data["sensors"]["sensor4"]["isOpened"] is False
+
+    def test_on_websocket_message_item_wrapper(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the WS message adapter with fields nested under 'item'.
+
+        Confirmed live against hardware 2026-08-12: local-console update
+        frames use {"type": "update", "item": {...}}, not top-level fields.
+        """
+        coordinator._on_websocket_message(
+            {
+                "type": "update",
+                "item": {"modelKey": "sensor", "id": "sensor9", "isOpened": True},
+            }
+        )
+
+        assert coordinator.data["sensors"]["sensor9"]["isOpened"] is True
+
+    def test_on_websocket_message_snake_case_model_key(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the WS message adapter accepts snake_case model_key."""
+        coordinator._on_websocket_message({"model_key": "light", "id": "light3"})
+
+        assert "light3" in coordinator.data["lights"]
+
+    def test_on_websocket_message_missing_model_key(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test the WS message adapter warns and drops unparseable messages."""
+        with caplog.at_level(logging.WARNING):
+            coordinator._on_websocket_message({"id": "sensor5"})
+
+        assert "missing modelKey" in caplog.text
+        assert "sensor5" not in coordinator.data["sensors"]
+
+    def test_on_websocket_message_not_a_dict(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test the WS message adapter warns on non-dict payloads."""
+        with caplog.at_level(logging.WARNING):
+            coordinator._on_websocket_message("not-a-dict")  # type: ignore[arg-type]
+
+        assert "not a JSON object" in caplog.text
+
+    def test_on_websocket_message_action_payload_split(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test the adapter merges a header/payload-split message.
+
+        Some UniFi WebSocket surfaces split the model identity into an
+        "action" header and the changed fields into "payload" (rather than
+        a single flat object). The adapter must resolve modelKey/id and the
+        field dict independently instead of picking one container and
+        giving up, or a message shaped this way would silently drop every
+        real frame.
+        """
+        coordinator._on_websocket_message(
+            {
+                "action": {"action": "update", "modelKey": "sensor", "id": "sensor6"},
+                "payload": {"isOpened": True},
+            }
+        )
+
+        assert coordinator.data["sensors"]["sensor6"]["id"] == "sensor6"
+        assert coordinator.data["sensors"]["sensor6"]["isOpened"] is True
+
+    def test_on_websocket_message_model_key_without_id(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a resolvable modelKey with no id logs at debug, not silently."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_message({"modelKey": "sensor", "isOpened": True})
+
+        assert "missing device id" in caplog.text
+        assert coordinator.data["sensors"] == {}
+
+    def test_on_websocket_message_warning_capped_after_first(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test repeated unparseable messages only WARNING once, then DEBUG."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_message({"id": "sensor7"})
+            caplog.clear()
+            coordinator._on_websocket_message({"id": "sensor8"})
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert warning_records == []
+        assert any("sensor8" in r.getMessage() for r in debug_records)
+
+    @pytest.mark.asyncio
+    async def test_async_stop_websocket_noop_when_never_started(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_stop_websocket is safe when no task was ever started.
+
+        It still calls ProtectWebSocket.stop() unconditionally (harmless -
+        it just sets a flag), but must not touch websocket_task since it's
+        None.
+        """
+        await coordinator.async_stop_websocket()
+
+        assert coordinator.websocket_task is None
+
+    @pytest.mark.asyncio
+    async def test_async_stop_websocket_stops_and_awaits_real_task(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_stop_websocket stops the socket and awaits a real task."""
+        coordinator.protect_client.get_host_id = AsyncMock(return_value="nvr1")
+
+        async def _run_forever(*_args, **_kwargs):
+            await asyncio.sleep(3600)
+
+        coordinator._protect_websocket.subscribe_with_callback = AsyncMock(
+            side_effect=_run_forever
+        )
+        await coordinator.async_start_websocket()
+        task = coordinator.websocket_task
+        assert task is not None
+        assert not task.done()
+
+        await coordinator.async_stop_websocket()
+
+        coordinator._protect_websocket.stop.assert_called_once()
+        assert task.done()
 
     @pytest.mark.asyncio
     async def test_async_update_data_success(
@@ -1554,25 +1752,24 @@ class TestUnifiProtectCoordinator:
             # camera2 should be marked for removal
             mock_registry.return_value.async_update_device.assert_called()
 
-    def test_websocket_callbacks_exception(
+    def test_websocket_construction_does_not_start_task(
         self, hass: HomeAssistant, mock_config_entry: MockConfigEntry
     ):
-        """Test WebSocket callback setup handles exceptions gracefully."""
+        """Test constructing the coordinator never starts the WebSocket task.
+
+        Starting requires an await (to resolve host_id), so it must happen via
+        async_start_websocket(), not as a side effect of __init__.
+        """
         network_client = _create_mock_network_client()
         protect_client = _create_mock_protect_client()
-        # Make callback registration raise an exception
-        protect_client.register_device_update_callback = MagicMock(
-            side_effect=Exception("Callback error")
-        )
 
-        # Should not raise - coordinator should handle the exception
         coordinator = UnifiProtectCoordinator(
             hass=hass,
             network_client=network_client,
             protect_client=protect_client,
             entry=mock_config_entry,
         )
-        assert coordinator is not None
+        assert coordinator.websocket_task is None
 
     def test_handle_event_update_unknown_device(
         self, coordinator: UnifiProtectCoordinator
@@ -2818,25 +3015,12 @@ class TestProtectCoordinatorEdgeCases:
             entry=mock_config_entry,
         )
 
-    def test_setup_websocket_callbacks_no_register_device_callback(
+    def test_site_id_default(
         self, hass: HomeAssistant, mock_config_entry: MockConfigEntry
     ):
-        """Test setup when protect_client lacks register_device_update_callback."""
+        """Test the coordinator defaults site_id to 'default' when unset."""
         network_client = _create_mock_network_client()
-        protect_client = MagicMock()
-        # Remove register_device_update_callback from spec
-        del protect_client.register_device_update_callback
-        protect_client.register_event_update_callback = MagicMock()
-        protect_client.cameras = MagicMock()
-        protect_client.cameras.get_all = AsyncMock(return_value=[])
-        protect_client.lights = MagicMock()
-        protect_client.lights.get_all = AsyncMock(return_value=[])
-        protect_client.sensors = MagicMock()
-        protect_client.sensors.get_all = AsyncMock(return_value=[])
-        protect_client.nvr = MagicMock()
-        protect_client.nvr.get = AsyncMock(return_value=MagicMock(id="nvr1"))
-        protect_client.chimes = MagicMock()
-        protect_client.chimes.get_all = AsyncMock(return_value=[])
+        protect_client = _create_mock_protect_client()
 
         coordinator = UnifiProtectCoordinator(
             hass=hass,
@@ -2845,70 +3029,24 @@ class TestProtectCoordinatorEdgeCases:
             entry=mock_config_entry,
         )
 
-        # Should not raise and event callback should still be registered
-        protect_client.register_event_update_callback.assert_called_once()
-        assert coordinator.protect_client is not None
+        assert coordinator._site_id == "default"
 
-    def test_setup_websocket_callbacks_no_register_event_callback(
+    def test_site_id_custom(
         self, hass: HomeAssistant, mock_config_entry: MockConfigEntry
     ):
-        """Test setup when protect_client lacks register_event_update_callback."""
+        """Test the coordinator accepts a custom site_id (REMOTE routing)."""
         network_client = _create_mock_network_client()
-        protect_client = MagicMock()
-        protect_client.register_device_update_callback = MagicMock()
-        # Remove register_event_update_callback from spec
-        del protect_client.register_event_update_callback
-        protect_client.cameras = MagicMock()
-        protect_client.cameras.get_all = AsyncMock(return_value=[])
-        protect_client.lights = MagicMock()
-        protect_client.lights.get_all = AsyncMock(return_value=[])
-        protect_client.sensors = MagicMock()
-        protect_client.sensors.get_all = AsyncMock(return_value=[])
-        protect_client.nvr = MagicMock()
-        protect_client.nvr.get = AsyncMock(return_value=MagicMock(id="nvr1"))
-        protect_client.chimes = MagicMock()
-        protect_client.chimes.get_all = AsyncMock(return_value=[])
+        protect_client = _create_mock_protect_client()
 
         coordinator = UnifiProtectCoordinator(
             hass=hass,
             network_client=network_client,
             protect_client=protect_client,
             entry=mock_config_entry,
+            site_id="site2",
         )
 
-        # Should not raise and device callback should still be registered
-        protect_client.register_device_update_callback.assert_called_once()
-        assert coordinator.protect_client is not None
-
-    def test_setup_websocket_callbacks_exception(
-        self, hass: HomeAssistant, mock_config_entry: MockConfigEntry
-    ):
-        """Test setup when callback registration raises exception."""
-        network_client = _create_mock_network_client()
-        protect_client = MagicMock()
-        protect_client.register_device_update_callback = MagicMock(
-            side_effect=Exception("Registration failed")
-        )
-        protect_client.register_event_update_callback = MagicMock()
-        protect_client.cameras = MagicMock()
-        protect_client.cameras.get_all = AsyncMock(return_value=[])
-        protect_client.lights = MagicMock()
-        protect_client.lights.get_all = AsyncMock(return_value=[])
-        protect_client.sensors = MagicMock()
-        protect_client.sensors.get_all = AsyncMock(return_value=[])
-        protect_client.nvr = MagicMock()
-        protect_client.nvr.get = AsyncMock(return_value=MagicMock(id="nvr1"))
-        protect_client.chimes = MagicMock()
-        protect_client.chimes.get_all = AsyncMock(return_value=[])
-
-        # Should not raise
-        coordinator = UnifiProtectCoordinator(
-            hass=hass,
-            network_client=network_client,
-            protect_client=protect_client,
-            entry=mock_config_entry,
-        )
-        assert coordinator.protect_client is not None
+        assert coordinator._site_id == "site2"
 
     @pytest.mark.asyncio
     async def test_fetch_viewers_no_viewers_attribute(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -61,6 +63,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         network_client: UniFiNetworkClient,
         protect_client: UniFiProtectClient | None,
         entry: ConfigEntry,
+        site_id: str = "default",
     ) -> None:
         """Initialize the Protect coordinator."""
         super().__init__(
@@ -95,33 +98,159 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "last_update": None,
         }
 
-        # Register WebSocket callbacks if Protect API is available
-        if self.protect_client:
-            self._setup_websocket_callbacks()
+        # Site ID used for WebSocket subscriptions (ignored for LOCAL REST
+        # calls, kept here for REMOTE/cloud routing - see
+        # ProtectWebSocket._subscribe_path).
+        self._site_id = site_id
 
-    def _setup_websocket_callbacks(self) -> None:
-        """Set up WebSocket callbacks for real-time updates."""
-        if not self.protect_client:
+        # Populated by async_start_websocket(); the background task handle is
+        # read by __init__.py's async_unload_entry to cancel the WebSocket
+        # loop on unload/reload.
+        self.websocket_task: asyncio.Task[None] | None = None
+        self._protect_websocket: Any = (
+            self.protect_client.websocket if self.protect_client else None
+        )
+        # Caps the "can't parse WebSocket message" warning to once, so a
+        # persistently wrong frame shape can't log-storm a production
+        # instance; every subsequent occurrence still logs at debug.
+        self._ws_parse_warned = False
+
+    async def async_start_websocket(self) -> None:
+        """
+        Start the real-time Protect WebSocket subscription.
+
+        This is additive to the 30 second poll (SCAN_INTERVAL_PROTECT), which
+        remains the fallback if the WebSocket is unavailable or drops - it is
+        never removed by this method. Any failure here is logged and
+        swallowed so a WebSocket problem never blocks integration setup or
+        leaves the coordinator without its polling fallback.
+        """
+        if not self.protect_client or not self._protect_websocket:
+            return
+        if self.websocket_task is not None and not self.websocket_task.done():
+            _LOGGER.debug("Protect coordinator: WebSocket already running")
             return
 
         try:
-            registered = False
-            if hasattr(self.protect_client, "register_device_update_callback"):
-                self.protect_client.register_device_update_callback(
-                    self._handle_device_update
-                )
-                registered = True
-            if hasattr(self.protect_client, "register_event_update_callback"):
-                self.protect_client.register_event_update_callback(
-                    self._handle_event_update
-                )
-                registered = True
-            if registered:
-                _LOGGER.debug("Protect coordinator: WebSocket callbacks registered")
+            host_id = await self.protect_client.get_host_id()
         except Exception as err:
-            _LOGGER.debug(
-                "Protect coordinator: WebSocket callbacks not supported: %s", err
+            _LOGGER.warning(
+                "Protect coordinator: Unable to resolve host_id for WebSocket "
+                "subscription, falling back to %s polling only: %s",
+                SCAN_INTERVAL_PROTECT,
+                err,
             )
+            return
+
+        self.websocket_task = self.hass.async_create_background_task(
+            self._protect_websocket.subscribe_with_callback(
+                host_id,
+                self._site_id,
+                "devices",
+                self._on_websocket_message,
+                reconnect=True,
+            ),
+            name=f"{DOMAIN}_protect_websocket",
+        )
+        _LOGGER.debug(
+            "Protect coordinator: WebSocket subscription started (host_id=%s, "
+            "site_id=%s)",
+            host_id,
+            self._site_id,
+        )
+
+    async def async_stop_websocket(self) -> None:
+        """
+        Stop the WebSocket subscription and await its background task.
+
+        Safe to call when the WebSocket was never started. Signals the
+        `ProtectWebSocket` loop to stop reconnecting *before* cancelling the
+        task, then awaits the cancellation - `cancel()` alone leaves the
+        reconnect loop free to spin back up, and the loop being parked in
+        `async for msg in ws` means `stop()` alone won't unblock it either;
+        both are needed to avoid an orphaned WebSocket loop.
+
+        Registered with `entry.async_on_unload()` (covers a setup failure
+        that happens after the WebSocket started but before setup
+        completes) and also called directly from `async_unload_entry`'s
+        normal unload path.
+        """
+        if self._protect_websocket:
+            self._protect_websocket.stop()
+        task = self.websocket_task
+        if task:
+            task.cancel()
+            if isinstance(task, asyncio.Task):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+    @callback
+    def _on_websocket_message(self, message: dict[str, Any]) -> None:
+        """
+        Adapt a raw WebSocket "devices" message to `_handle_device_update`.
+
+        Confirmed live against hardware 2026-08-12: the local-console shape is
+        `{"type": "update", "item": {"id", "modelKey", ...fields}}` - the
+        device delta lives under an "item" key, not at top level. `modelKey`
+        and `id` are still resolved independently across every plausible
+        container - "item", a "payload" key (REST-response-shaped push), and
+        an "action" key (the header/payload split used by UniFi's private
+        app WebSocket) - rather than picking one container and giving up.
+        Picking a single container wrong would silently drop every real
+        frame, which for a door sensor means a missed open/close event.
+        """
+        if not isinstance(message, dict):
+            self._log_unparseable_ws_message(
+                "Protect coordinator: WebSocket message was not a JSON object: %r",
+                message,
+            )
+            return
+
+        action = message.get("action")
+        payload = message.get("payload")
+        item = message.get("item")
+        containers = [
+            c for c in (payload, action, item, message) if isinstance(c, dict)
+        ]
+
+        def _pick(key_camel: str, key_snake: str) -> Any:
+            for container in containers:
+                value = container.get(key_camel) or container.get(key_snake)
+                if value:
+                    return value
+            return None
+
+        model_key = _pick("modelKey", "model_key")
+        if not model_key:
+            self._log_unparseable_ws_message(
+                "Protect coordinator: WebSocket device message missing modelKey: %s",
+                message,
+            )
+            return
+
+        device_id = _pick("id", "id")
+        if not device_id:
+            _LOGGER.debug(
+                "Protect coordinator: WebSocket %s update missing device id: %s",
+                model_key,
+                message,
+            )
+            return
+
+        # Merge every dict container so fields split across payload/action
+        # (e.g. id in the header, state fields in the payload) are all kept.
+        device_data: dict[str, Any] = {}
+        for container in reversed(containers):
+            device_data.update(container)
+        device_data["id"] = device_id
+
+        self._handle_device_update(model_key, device_data)
+
+    def _log_unparseable_ws_message(self, msg: str, *args: Any) -> None:
+        """Log an unparseable WS message once at WARNING, then at DEBUG."""
+        level = logging.WARNING if not self._ws_parse_warned else logging.DEBUG
+        _LOGGER.log(level, msg, *args)
+        self._ws_parse_warned = True
 
     @callback
     def _handle_device_update(
@@ -181,7 +310,12 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 **device_data,
             }
 
-        self.async_update_listeners()
+        # async_set_updated_data (rather than async_update_listeners) also
+        # marks the last update as successful and resets the poll timer, so
+        # entities relying on last_update_success don't stay unavailable
+        # while WebSocket data is flowing, and the 30s poll fallback re-arms
+        # from the last WebSocket message rather than firing needlessly.
+        self.async_set_updated_data(self.data)
 
     def _normalize_camera_data(self, camera: dict[str, Any]) -> dict[str, Any]:
         """Normalize camera fields across alias and legacy payload shapes."""
