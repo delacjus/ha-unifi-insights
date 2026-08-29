@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.3] - 2026-08-30
+
 ### Added
 
 - Added 5-minute event auto-off timeout (`STALE_EVENT_TIMEOUT`) and reconciliation logic during REST polls and WebSocket reconnections to prevent latched motion or ring states if an "end" frame is missed (closes #101)
