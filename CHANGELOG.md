@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed missing camera and sensor binary sensor translation keys in `translations/en.json` that caused naming collisions falling back to generic names (closes #101)
 - Added `heartbeat=30` to WebSocket connections to detect half-open sockets and trigger bounded reconnection (closes #101)
 
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for contributing the fixes and enhancements in PRs #98, #99, #100, and #101 (as well as #97 in 2026.8.2), bringing real-time Protect WebSocket device and event streaming, coordinator freshness gating, and lifecycle fixes!
+
 ## [2026.8.2] - 2026-08-29
 
 ### Fixed
