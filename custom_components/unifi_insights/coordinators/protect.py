@@ -176,7 +176,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # different failure classes.
         self._ws_parse_warned = False
         self._ws_event_parse_warned = False
-        self._ws_event_error_warned = False
+        self._ws_event_error_warned: bool = False
 
         # WebSocket health signal (task 5, hardened by review finding 1):
         # there was previously no way to tell "connected and delivering"
@@ -687,9 +687,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # to the unparseable path spends the one-time WARNING that exists to
         # surface a genuinely wrong frame shape, leaving a real problem to be
         # logged at DEBUG afterwards. Reported on its own warned-once flag.
-        error = _pick_field(containers, "error")
+        error: Any = _pick_field(containers, "error")
         if error:
-            level = logging.DEBUG if self._ws_event_error_warned else logging.WARNING
+            level: int = (
+                logging.DEBUG if self._ws_event_error_warned else logging.WARNING
+            )
             _LOGGER.log(
                 level,
                 "Protect coordinator: events stream reported an error: %s",
