@@ -35,3 +35,34 @@ async def test_diagnostics(
     assert "test_api_key" not in str(diagnostics)
     # The key name "api_key" will appear, but the value should be redacted
     assert diagnostics["entry"]["data"]["api_key"] == "**REDACTED**"
+
+
+async def test_diagnostics_includes_websocket_health(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations,
+) -> None:
+    """Test diagnostics surface the Protect WebSocket health signal.
+
+    There was previously no way to tell "WS connected and delivering" from
+    "connected but silent" from "reconnect-looping" (task 5) - diagnostics
+    is the first place an operator would look to distinguish those.
+    """
+    diagnostics = await async_get_config_entry_diagnostics(hass, init_integration)
+
+    assert "websocket" in diagnostics
+    assert diagnostics["websocket"]["connected"] is False
+    assert diagnostics["websocket"]["last_message_at"] is None
+
+    # Review finding 1: a single shared connected/last_message_at pair
+    # cannot tell "both subscriptions healthy" apart from "devices healthy,
+    # events silently hung" - per-subscription detail must reach this
+    # diagnostics payload too, not just the coordinator's own property.
+    assert diagnostics["websocket"]["devices"] == {
+        "connected": False,
+        "last_message_at": None,
+    }
+    assert diagnostics["websocket"]["events"] == {
+        "connected": False,
+        "last_message_at": None,
+    }

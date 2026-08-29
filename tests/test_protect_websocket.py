@@ -37,6 +37,37 @@ def _remote_client() -> UniFiProtectClient:
     )
 
 
+@pytest.mark.asyncio
+async def test_connect_passes_heartbeat_to_ws_connect() -> None:
+    """`_connect()` must pass `heartbeat=30` to `session.ws_connect()`.
+
+    Regression test (review finding 1, Major): without a heartbeat, aiohttp
+    never pings a half-open connection - if the NVR stops responding
+    without ever sending a close/error frame, `async for msg in ws` in
+    `subscribe_with_callback` blocks forever and the existing
+    reconnect/backoff logic below it never gets a chance to run (an events
+    subscription stuck like this while the devices subscription reconnects
+    cleanly is exactly the "motion silently stopped working for days"
+    scenario `websocket_health` exists to catch). `heartbeat=30` makes
+    aiohttp ping every 30s and force-close the connection (surfacing as
+    `WSMsgType.CLOSED`/`ERROR`, which `subscribe_with_callback` already
+    handles) if no pong comes back, turning a silent hang into a
+    bounded-time reconnect.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    mock_session = MagicMock()
+    mock_session.ws_connect = AsyncMock()
+    client._ensure_session = AsyncMock(return_value=mock_session)
+
+    await ws_socket._connect("/proxy/protect/integration/v1/subscribe/devices")
+
+    mock_session.ws_connect.assert_awaited_once()
+    _args, kwargs = mock_session.ws_connect.call_args
+    assert kwargs.get("heartbeat") == 30
+
+
 def test_subscribe_path_local_uses_integration_api() -> None:
     """LOCAL WS subscribe path must match the client's own REST convention.
 
@@ -208,3 +239,87 @@ def test_stop_sets_running_false() -> None:
     ws_socket.stop()
 
     assert ws_socket._running is False
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_reports_connect_then_disconnect() -> None:
+    """`on_connection_state_change` fires True after connect, False on exit.
+
+    The coordinator's WS health signal and its "reconcile on WS reconnect"
+    safety net (see coordinators/protect.py) both depend on knowing exactly
+    when a subscription connects/disconnects - this method is the only place
+    that actually knows.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    fake_ws = _make_ws([close_msg])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    states: list[bool] = []
+
+    await ws_socket.subscribe_with_callback(
+        "nvr1",
+        "default",
+        "devices",
+        lambda _msg: None,
+        reconnect=False,
+        on_connection_state_change=states.append,
+    )
+
+    assert states == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_reports_disconnect_before_reconnect() -> None:
+    """A connection error reports False (never connected) before the retry,
+    then True/False again around the successful reconnection.
+    """
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    good_ws = _make_ws([close_msg])
+
+    connect_calls = 0
+
+    async def _connect(_path: str):
+        nonlocal connect_calls
+        connect_calls += 1
+        if connect_calls == 1:
+            msg = "handshake failed"
+            raise aiohttp.ClientConnectionError(msg)
+        ws_socket.stop()
+        return good_ws
+
+    ws_socket._connect = _connect
+    states: list[bool] = []
+
+    await ws_socket.subscribe_with_callback(
+        "nvr1",
+        "default",
+        "devices",
+        lambda _msg: None,
+        reconnect=True,
+        reconnect_delay=0,
+        on_connection_state_change=states.append,
+    )
+
+    assert states == [False, True, False]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_without_state_callback_still_works() -> None:
+    """`on_connection_state_change` is optional and defaults to a no-op."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    fake_ws = _make_ws([close_msg])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    # Must not raise even though no callback was supplied.
+    await ws_socket.subscribe_with_callback(
+        "nvr1", "default", "devices", lambda _msg: None, reconnect=False
+    )
