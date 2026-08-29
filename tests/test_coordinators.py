@@ -538,6 +538,50 @@ class TestUnifiConfigCoordinator:
         assert coordinator._available is True
 
     @pytest.mark.asyncio
+    async def test_async_update_data_protect_only_console_non_json_sites(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test fetch succeeds when the sites endpoint returns 200 and no JSON."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        result = await coordinator._async_update_data()
+        assert result["sites"] == {}
+        assert result["wifi"] == {}
+        assert result["firewall_rules"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_non_json_sites_without_protect(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test a non-JSON sites response still fails when Protect is absent."""
+        coordinator.protect_client = None
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_server_error_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test a >=400 response is not swallowed by the non-JSON tolerance."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Server error", status_code=500)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_connection_error(
         self, coordinator: UnifiConfigCoordinator
     ):
