@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.2] - 2026-08-29
+
 ### Fixed
 
 - Fixed API client silently treating 2xx responses with non-JSON bodies (e.g. HTML login redirects or expired sessions from UniFi consoles and reverse proxies) as successful empty responses instead of raising `UniFiResponseError` — on Protect-only consoles like UNVR / UNVR-Pro, this previously allowed entities to freeze and serve stale cached data indefinitely without marking entities unavailable or triggering coordinator retry and backoff (closes #97, refs #93)
