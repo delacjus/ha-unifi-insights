@@ -221,13 +221,11 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 # hardware rather than a transient fault, and setup validation
                 # in __init__.py already tolerates it. Left unhandled, the
                 # first refresh raises UpdateFailed, then ConfigEntryNotReady,
-                # and the entry never loads. A genuine >=400 must still fail.
+                # and the entry never loads. Only a 200 is tolerated, so a
+                # redirect or any other sub-400 status still fails.
                 # UniFiNotFoundError subclasses UniFiResponseError, so this
                 # clause has to stay below the tuple above.
-                if (
-                    self.protect_client is None
-                    or err.status_code >= HTTPStatus.BAD_REQUEST
-                ):
+                if self.protect_client is None or err.status_code != HTTPStatus.OK:
                     raise
                 _LOGGER.debug(
                     "Config coordinator: sites endpoint returned a non-JSON "

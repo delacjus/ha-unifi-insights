@@ -570,6 +570,18 @@ class TestUnifiConfigCoordinator:
             await coordinator._async_update_data()
 
     @pytest.mark.asyncio
+    async def test_async_update_data_redirect_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test only a 200 is tolerated, so a 3xx is not swallowed."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Redirected", status_code=302)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_server_error_sites_still_fails(
         self, coordinator: UnifiConfigCoordinator
     ):
