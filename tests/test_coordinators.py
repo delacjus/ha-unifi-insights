@@ -2054,6 +2054,57 @@ class TestUnifiProtectCoordinator:
         assert warning_records == []
         assert any("event33" in r.getMessage() for r in debug_records)
 
+    def test_on_websocket_event_message_error_frame_warns_once_then_debug(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test a console error frame is reported as an error, not as a
+        parse failure, and is capped the same warn-once way.
+        """
+        frame = {
+            "error": "Too many requests",
+            "name": "TOO_MANY_REQUESTS_ERROR",
+            "windowMs": 1000,
+            "limit": 10,
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(dict(frame))
+            first = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert any("reported an error" in r.getMessage() for r in first)
+            assert not any("missing event type" in r.getMessage() for r in first)
+            caplog.clear()
+            coordinator._on_websocket_event_message(dict(frame))
+
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+        assert any(
+            "reported an error" in r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+        )
+
+    def test_on_websocket_event_message_error_frame_keeps_parse_warning(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test an error frame does not spend the unparseable-frame warning.
+
+        The two share a stream but not a cause, so a genuinely malformed
+        frame must still reach WARNING after an error frame has arrived.
+        """
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(
+                {
+                    "error": "Too many requests",
+                    "name": "TOO_MANY_REQUESTS_ERROR",
+                    "windowMs": 1000,
+                    "limit": 10,
+                }
+            )
+            caplog.clear()
+            coordinator._on_websocket_event_message({"id": "event41"})
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("missing event type" in r.getMessage() for r in warnings)
+
     def test_on_websocket_event_message_missing_id_is_dropped(
         self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
     ):
