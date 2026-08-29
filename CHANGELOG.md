@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added 5-minute event auto-off timeout (`STALE_EVENT_TIMEOUT`) and reconciliation logic during REST polls and WebSocket reconnections to prevent latched motion or ring states if an "end" frame is missed (closes #101)
+- Added granular per-subscription WebSocket health tracking (`devices` and `events`) to integration diagnostics (closes #101)
+
+### Fixed
+
+- Fixed camera motion, doorbell ring, and smart detection binary sensors remaining permanently `off` by subscribing to the UniFi Protect WebSocket "events" stream and dispatching real-time detection events (closes #101)
+- Fixed UniFi Protect entities only updating during periodic REST polling by connecting and driving the live Protect WebSocket "devices" stream with tolerant update envelope parsing and lifecycle management on setup and unload (closes #100)
+- Fixed `UnifiInsightsEntity` and `UnifiProtectEntity` reporting `available = True` and serving stale cached device states when their backing coordinator fails — both base entities now gate availability and state updates on `self.coordinator.available` (closes #98)
+- Fixed listener leak in `UnifiFacadeCoordinator` by storing unsubscribe callbacks returned by `async_add_listener()` and releasing them idempotently in `async_shutdown()` on config entry unload or reload (closes #99)
+- Fixed `UnifiFacadeCoordinator.async_request_refresh()` to concurrently execute `async_refresh()` across all sub-coordinators instead of debounced requests, ensuring immediate state propagation after service calls and user actions (closes #99)
+- Fixed missing camera and sensor binary sensor translation keys in `translations/en.json` that caused naming collisions falling back to generic names (closes #101)
+- Added `heartbeat=30` to WebSocket connections to detect half-open sockets and trigger bounded reconnection (closes #101)
+
 ## [2026.8.2] - 2026-08-29
 
 ### Fixed
@@ -315,7 +330,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Number entities for camera/light settings
 - Select entities for recording modes and video modes
 
-[Unreleased]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.1...HEAD
+[Unreleased]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.2...HEAD
+[2026.8.2]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.1...v2026.8.2
 [2026.8.1]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.0...v2026.8.1
 [2026.8.0]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.6.4...v2026.8.0
 [2026.6.4]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.6.3...v2026.6.4
