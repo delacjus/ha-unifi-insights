@@ -538,6 +538,62 @@ class TestUnifiConfigCoordinator:
         assert coordinator._available is True
 
     @pytest.mark.asyncio
+    async def test_async_update_data_protect_only_console_non_json_sites(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test fetch succeeds when the sites endpoint returns 200 and no JSON."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        result = await coordinator._async_update_data()
+        assert result["sites"] == {}
+        assert result["wifi"] == {}
+        assert result["firewall_rules"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_non_json_sites_without_protect(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test a non-JSON sites response still fails when Protect is absent."""
+        coordinator.protect_client = None
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_redirect_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test only a 200 is tolerated, so a 3xx is not swallowed."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Redirected", status_code=302)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_server_error_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test a >=400 response is not swallowed by the non-JSON tolerance."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Server error", status_code=500)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_connection_error(
         self, coordinator: UnifiConfigCoordinator
     ):
@@ -2009,6 +2065,61 @@ class TestUnifiProtectCoordinator:
         debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
         assert warning_records == []
         assert any("event33" in r.getMessage() for r in debug_records)
+
+    def test_on_websocket_event_message_error_frame_warns_once_then_debug(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test a console error frame is reported as an error, not as a
+        parse failure, and is capped the same warn-once way.
+        """
+        frame: dict[str, Any] = {
+            "error": "Too many requests",
+            "name": "TOO_MANY_REQUESTS_ERROR",
+            "windowMs": 1000,
+            "limit": 10,
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(dict(frame))
+            first: list[logging.LogRecord] = [
+                r for r in caplog.records if r.levelno == logging.WARNING
+            ]
+            assert any("reported an error" in r.getMessage() for r in first)
+            assert not any("missing event type" in r.getMessage() for r in first)
+            caplog.clear()
+            coordinator._on_websocket_event_message(dict(frame))
+
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+        assert any(
+            "reported an error" in r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+        )
+
+    def test_on_websocket_event_message_error_frame_keeps_parse_warning(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test an error frame does not spend the unparseable-frame warning.
+
+        The two share a stream but not a cause, so a genuinely malformed
+        frame must still reach WARNING after an error frame has arrived.
+        """
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(
+                {
+                    "error": "Too many requests",
+                    "name": "TOO_MANY_REQUESTS_ERROR",
+                    "windowMs": 1000,
+                    "limit": 10,
+                }
+            )
+            caplog.clear()
+            coordinator._on_websocket_event_message({"id": "event41"})
+
+        warnings: list[logging.LogRecord] = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("missing event type" in r.getMessage() for r in warnings)
 
     def test_on_websocket_event_message_missing_id_is_dropped(
         self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
