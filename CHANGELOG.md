@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.4] - 2026-08-30
+
+### Fixed
+
+- Fixed setup retries on Protect-only consoles (for example UNVR/UNVR-Pro) when the Network `sites` endpoint returns HTTP 200 with a non-JSON HTML body; the config coordinator now tolerates this specific response only when Protect is configured, while still failing for non-200 statuses and non-Protect scenarios (closes #102)
+- Fixed Protect WebSocket events stream error frames (for example rate-limit notices with an `error` field) being misclassified as parse failures; these frames are now handled explicitly and logged with a dedicated warned-once path so real parse-shape issues remain visible (closes #102)
+
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for the regression fix and WebSocket stream hardening in PR #102
+
 ## [2026.8.3] - 2026-08-30
 
 ### Added
