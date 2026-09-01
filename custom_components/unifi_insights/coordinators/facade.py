@@ -147,6 +147,9 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sites": self._config_coordinator.data.get("sites", {}),
             "wifi": self._config_coordinator.data.get("wifi", {}),
             "firewall_rules": self._config_coordinator.data.get("firewall_rules", {}),
+            "policy_based_routes": self._config_coordinator.data.get(
+                "policy_based_routes", {}
+            ),
             "network_info": self._config_coordinator.data.get("network_info", {}),
             # From device coordinator
             "devices": self._device_coordinator.data.get("devices", {}),
@@ -311,6 +314,27 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             enabled=enabled,
         )
 
+    async def async_set_policy_based_route_enabled(
+        self,
+        site_id: str,
+        route_id: str,
+        *,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a policy-based traffic route."""
+        legacy_site_name = self._resolve_legacy_site_name(site_id)
+        if not legacy_site_name or not self.network_client:
+            msg = "UniFi Network client is not available"
+            raise HomeAssistantError(msg)
+
+        await self._async_execute_api_action(
+            f"Unable to update policy-based route {route_id}",
+            self.network_client.routes.update_route,
+            legacy_site_name,
+            route_id,
+            enabled=enabled,
+        )
+
     async def async_update_camera(self, camera_id: str, **kwargs: Any) -> None:
         """Update a camera via the Protect cameras endpoint."""
         protect_client = self._require_protect_client()
@@ -328,6 +352,10 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Update camera settings (alias for async_update_camera)."""
         await self.async_update_camera(camera_id, **kwargs)
+
+    def _resolve_legacy_site_name(self, site_id: str) -> str:
+        """Resolve classic site name for a site ID."""
+        return self._device_coordinator.get_legacy_site_name(site_id) or "default"
 
     def _resolve_client_action_target(
         self, site_id: str, client_id: str
@@ -353,7 +381,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Fall back to "default" (the standard single-site name) when the
         # legacy site mapping has not been resolved yet.
-        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        site_name = self._resolve_legacy_site_name(site_id)
         return site_name, mac
 
     async def async_unblock_client(self, site_id: str, client_id: str) -> None:

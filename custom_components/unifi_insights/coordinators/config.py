@@ -59,6 +59,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             "sites": {},
             "wifi": {},
             "firewall_rules": {},
+            "policy_based_routes": {},
             "network_info": {},
         }
 
@@ -246,6 +247,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             if not self.data["sites"]:
                 self.data["wifi"] = {}
                 self.data["firewall_rules"] = {}
+                self.data["policy_based_routes"] = {}
                 self.data["network_info"] = {}
                 self._available = True
                 self.data["last_update"] = datetime.now(tz=UTC)
@@ -349,13 +351,51 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     )
                     self.data["firewall_rules"][site_id] = {}
 
+                try:
+                    _LOGGER.debug(
+                        "Config coordinator: Fetching policy-based routes for site %s",
+                        site_id,
+                    )
+                    legacy_site_name = legacy_site_names.get(site_id) or site_id
+                    raw_routes = await self.network_client.routes.list_routes(
+                        legacy_site_name
+                    )
+                    policy_routes_dict = {}
+                    for route in raw_routes:
+                        route_dict = self._model_to_dict(route)
+                        route_id = (
+                            getattr(route, "id", None)
+                            or route_dict.get("id")
+                            or route_dict.get("_id")
+                        )
+                        if route_id:
+                            policy_routes_dict[route_id] = route_dict
+                    self.data["policy_based_routes"][site_id] = policy_routes_dict
+                    _LOGGER.debug(
+                        "Config coordinator: Successfully fetched %d "
+                        "policy-based routes for site %s",
+                        len(policy_routes_dict),
+                        site_id,
+                    )
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Config coordinator: Policy-based routes unavailable "
+                        "for site %s: %s",
+                        site_id,
+                        err,
+                    )
+                    self.data["policy_based_routes"][site_id] = {}
+
             self._available = True
             _LOGGER.debug(
                 "Config coordinator: Update complete - %d sites, %d WiFi configs, "
-                "%d firewall rules",
+                "%d firewall rules, %d policy-based routes",
                 len(self.data["sites"]),
                 sum(len(w) for w in self.data["wifi"].values()),
                 sum(len(rules) for rules in self.data["firewall_rules"].values()),
+                sum(
+                    len(routes) for routes in self.data["policy_based_routes"].values()
+                ),
             )
 
             return self.data
@@ -392,4 +432,11 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
     def get_firewall_rules(self, site_id: str) -> dict[str, Any]:
         """Get firewall rules for a site."""
         result: dict[str, Any] = self.data.get("firewall_rules", {}).get(site_id, {})
+        return result
+
+    def get_policy_based_routes(self, site_id: str) -> dict[str, dict[str, Any]]:
+        """Get policy-based routes for a site."""
+        result: dict[str, dict[str, Any]] = self.data.get(
+            "policy_based_routes", {}
+        ).get(site_id, {})
         return result

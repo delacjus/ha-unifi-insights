@@ -156,6 +156,11 @@ def _create_mock_network_client() -> MagicMock:
         ]
     )
 
+    # Routes namespace
+    client.routes = MagicMock()
+    client.routes.list_routes = AsyncMock(return_value=[])
+    client.routes.update_route = AsyncMock()
+
     client.close = AsyncMock()
     return client
 
@@ -731,6 +736,61 @@ class TestUnifiConfigCoordinator:
         assert "wifi1" in result["wifi"].get("default", {})
         # WiFi without ID should not be in the dict
         assert None not in result["wifi"].get("default", {})
+
+    @pytest.mark.asyncio
+    async def test_config_coordinator_fetches_policy_based_routes(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test policy-based routes are fetched and mapped by site and route ID."""
+        route1 = _create_mock_model(
+            {
+                "id": "route1",
+                "name": "Route to VPN",
+                "description": "Route traffic to VPN",
+                "enabled": True,
+            }
+        )
+        coordinator.network_client.routes.list_routes = AsyncMock(return_value=[route1])
+
+        result = await coordinator._async_update_data()
+
+        coordinator.network_client.routes.list_routes.assert_any_call("default")
+        assert "policy_based_routes" in result
+        assert "default" in result["policy_based_routes"]
+        assert "route1" in result["policy_based_routes"]["default"]
+        assert (
+            result["policy_based_routes"]["default"]["route1"]["name"] == "Route to VPN"
+        )
+        routes_for_site = coordinator.get_policy_based_routes("default")
+        assert "route1" in routes_for_site
+        assert routes_for_site["route1"]["name"] == "Route to VPN"
+        assert coordinator.get_policy_based_routes("nonexistent") == {}
+
+    @pytest.mark.asyncio
+    async def test_config_coordinator_policy_based_routes_graceful_error(
+        self, coordinator: UnifiConfigCoordinator, caplog: pytest.LogCaptureFixture
+    ):
+        """Test policy-based routes error is caught and defaults to empty dict."""
+        caplog.set_level(
+            logging.DEBUG,
+            logger="custom_components.unifi_insights.coordinators.config",
+        )
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=Exception("Routes endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["policy_based_routes"]["default"] == {}
+        assert coordinator.get_policy_based_routes("default") == {}
+        assert coordinator._available is True
+        assert any(
+            record.levelno == logging.DEBUG
+            and "Policy-based routes unavailable" in record.message
+            for record in caplog.records
+        )
 
 
 # ============================================================================
@@ -2360,9 +2420,7 @@ class TestUnifiProtectCoordinator:
         still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(
-                "devices", connected=True
-            )
+            coordinator._on_websocket_connection_state_change("devices", connected=True)
 
         mock_reconcile.assert_called_once()
 
@@ -2453,7 +2511,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback (see `async_start_websocket`)
         updates only the devices stream's health entry.
         """
-        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_devices_connection_state_change(True)
 
         assert coordinator.websocket_health["devices"]["connected"] is True
         assert coordinator.websocket_health["events"]["connected"] is False
@@ -2465,7 +2523,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback updates only the events
         stream's health entry.
         """
-        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_events_connection_state_change(True)
 
         assert coordinator.websocket_health["events"]["connected"] is True
         assert coordinator.websocket_health["devices"]["connected"] is False
@@ -2855,6 +2913,9 @@ class TestUnifiFacadeCoordinator:
             "firewall_rules": {
                 "default": {"rule1": {"id": "rule1", "name": "Block Instagram"}}
             },
+            "policy_based_routes": {
+                "default": {"route1": {"id": "route1", "name": "Route to VPN"}}
+            },
             "network_info": {},
         }
         return coord
@@ -2978,6 +3039,8 @@ class TestUnifiFacadeCoordinator:
         assert "wifi" in facade_coordinator.data
         assert "firewall_rules" in facade_coordinator.data
         assert "rule1" in facade_coordinator.data["firewall_rules"]["default"]
+        assert "policy_based_routes" in facade_coordinator.data
+        assert "route1" in facade_coordinator.data["policy_based_routes"]["default"]
 
         # Check device coordinator data
         assert "devices" in facade_coordinator.data
@@ -3295,6 +3358,35 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.network_client.firewall.update_rule.assert_called_once_with(
             "site1", "rule1", enabled=True
         )
+
+    @pytest.mark.asyncio
+    async def test_facade_coordinator_set_policy_based_route_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test async_set_policy_based_route_enabled delegates correctly."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
+        facade_coordinator._device_coordinator._legacy_site_names = {"site1": "branch"}
+
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "site1", "route1", enabled=True
+        )
+
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "branch", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_facade_coordinator_set_route_enabled_raises_without_network_client(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test route toggle raises when network client is unavailable."""
+        facade_coordinator.network_client = None
+        with pytest.raises(
+            HomeAssistantError, match="UniFi Network client is not available"
+        ):
+            await facade_coordinator.async_set_policy_based_route_enabled(
+                "site1", "route1", enabled=True
+            )
 
     @pytest.mark.asyncio
     async def test_async_update_camera(
