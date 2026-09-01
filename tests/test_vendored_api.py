@@ -974,6 +974,8 @@ async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
 
     assert len(result) == 1
     assert result[0].id == "pend-1"
+
+
 def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
     """Build a fake aiohttp.ClientResponse for _handle_response tests."""
     response = MagicMock()
@@ -1040,3 +1042,138 @@ async def test_handle_response_valid_json_returns_data() -> None:
     result = await client._handle_response(response)
 
     assert result == {"ok": True}
+
+
+async def test_routes_list_routes() -> None:
+    """Test listing traffic routes parses TrafficRoute models."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "_id": "route-1",
+                    "description": "Route 1",
+                    "enabled": True,
+                    "matching_target": "INTERNET",
+                },
+                {
+                    "_id": "route-2",
+                    "description": "Route 2",
+                    "enabled": False,
+                    "matching_target": "DOMAIN",
+                },
+            ]
+        }
+    )
+
+    routes = await client.routes.list_routes("default")
+
+    assert len(routes) == 2
+    assert routes[0].id == "route-1"
+    assert routes[0].name == "Route 1"
+    assert routes[0].enabled is True
+    assert routes[0].matching_target == "INTERNET"
+    assert routes[1].id == "route-2"
+    assert routes[1].name == "Route 2"
+    assert routes[1].enabled is False
+    assert routes[1].matching_target == "DOMAIN"
+    client._get.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+    # Test empty / None response
+    client._get = AsyncMock(return_value=None)
+    assert await client.routes.list_routes("default") == []
+
+    # Test unwrapped list response
+    client._get = AsyncMock(return_value=[{"_id": "route-3", "description": "Route 3"}])
+    unwrapped = await client.routes.list_routes("default")
+    assert len(unwrapped) == 1
+    assert unwrapped[0].id == "route-3"
+
+
+async def test_routes_get_route() -> None:
+    """Test getting a specific traffic route or raising ValueError."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "_id": "route-1",
+                    "description": "Route 1",
+                    "enabled": True,
+                },
+                {
+                    "_id": "route-2",
+                    "description": "Route 2",
+                    "enabled": False,
+                },
+            ]
+        }
+    )
+
+    route = await client.routes.get_route("default", "route-1")
+    assert route.id == "route-1"
+    assert route.name == "Route 1"
+    assert route.enabled is True
+    client._get.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        await client.routes.get_route("default", "non-existent")
+
+
+async def test_routes_update_route() -> None:
+    """Test updating a traffic route fetches list, modifies payload, and PUTs."""
+    client = _network_client()
+    initial_payload = {
+        "_id": "route-1",
+        "description": "Route 1",
+        "enabled": True,
+        "matching_target": "INTERNET",
+    }
+    client._get = AsyncMock(return_value={"data": [initial_payload]})
+    updated_payload = {
+        "_id": "route-1",
+        "description": "Route 1",
+        "enabled": False,
+        "matching_target": "INTERNET",
+    }
+    client._put = AsyncMock(return_value={"data": updated_payload})
+
+    result = await client.routes.update_route("default", "route-1", enabled=False)
+
+    client._get.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+    client._put.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes/route-1",
+        json_data={
+            "_id": "route-1",
+            "description": "Route 1",
+            "enabled": False,
+            "matching_target": "INTERNET",
+        },
+    )
+    assert result.id == "route-1"
+    assert result.enabled is False
+
+    # Test update with PUT returning None (fallbacks to matching_payload)
+    client._get = AsyncMock(return_value=[initial_payload])
+    client._put = AsyncMock(return_value=None)
+    fallback_result = await client.routes.update_route(
+        "default", "route-1", enabled=True
+    )
+    assert fallback_result.id == "route-1"
+    assert fallback_result.enabled is True
+
+    # Test update when route list response is non-list
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="not found"):
+        await client.routes.update_route("default", "route-1", enabled=True)
+
+    # Test update with missing route ID
+    client._get = AsyncMock(return_value={"data": [initial_payload]})
+    with pytest.raises(ValueError, match="not found"):
+        await client.routes.update_route("default", "missing-route", enabled=True)

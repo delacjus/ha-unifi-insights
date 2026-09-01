@@ -24,6 +24,7 @@ from .endpoints import (
     LagsEndpoint,
     NetworksEndpoint,
     ResourcesEndpoint,
+    RoutesEndpoint,
     SitesEndpoint,
     StacksEndpoint,
     TrafficEndpoint,
@@ -134,6 +135,7 @@ class UniFiNetworkClient(BaseUniFiClient):
         self._acl = ACLEndpoint(self)
         self._traffic = TrafficEndpoint(self)
         self._resources = ResourcesEndpoint(self)
+        self._routes = RoutesEndpoint(self)
         self._dns = DNSEndpoint(self)
         self._lags = LagsEndpoint(self)
         self._stacks = StacksEndpoint(self)
@@ -312,6 +314,11 @@ class UniFiNetworkClient(BaseUniFiClient):
     def resources(self) -> ResourcesEndpoint:
         """Access supporting resources (WAN, VPN, RADIUS, etc)."""
         return self._resources
+
+    @property
+    def routes(self) -> RoutesEndpoint:
+        """Access policy-based traffic route endpoints."""
+        return self._routes
 
     @property
     def dns(self) -> DNSEndpoint:
