@@ -1226,6 +1226,36 @@ class TestUnifiPolicyBasedRouteSwitch:
             is False
         )
 
+    @pytest.mark.asyncio
+    async def test_turn_off_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test route disable failures do not write optimistic state."""
+        mock_coordinator.network_client.routes.update_route.side_effect = Exception(
+            "API error"
+        )
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            True
+        )
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(
+            HomeAssistantError, match="Unable to update policy-based route"
+        ):
+            await switch.async_turn_off()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is True
+        )
+
 
 class TestAsyncSetupEntryPolicyBasedRoutes:
     """Tests policy-based route discovery in switch platform setup."""
@@ -1507,6 +1537,29 @@ class TestUnifiVpnClientSwitch:
 
         switch.async_write_ha_state.assert_not_called()
         assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_turn_off_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test VPN client disable failures do not write optimistic state."""
+        mock_coordinator.network_client.vpn_clients.update_vpn_client.side_effect = (
+            Exception("API error")
+        )
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = True
+
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError, match="Unable to update VPN client"):
+            await switch.async_turn_off()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is True
 
 
 class TestAsyncSetupEntryVpnClients:

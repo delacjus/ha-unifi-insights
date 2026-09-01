@@ -1108,7 +1108,14 @@ async def test_routes_endpoint_get_route() -> None:
     route2 = await client.routes.get_route("default", "route2")
     assert route2.id == "route2"
 
-    # Not found raises ValueError
+
+async def test_routes_endpoint_get_route_not_found_raises() -> None:
+    """Test getting a missing policy-based route raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
     client._get = AsyncMock(return_value=[])
     with pytest.raises(ValueError, match="Policy-Based Route missing not found"):
         await client.routes.get_route("default", "missing")
@@ -1230,6 +1237,36 @@ async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
     )
 
 
+async def test_vpn_clients_endpoint_list_vpn_clients_unwrapped_and_empty() -> None:
+    """Test listing VPN client configurations with bare list and None responses."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Bare list
+    client._get = AsyncMock(
+        return_value=[
+            {
+                "_id": "vpn1",
+                "name": "Privado VPN",
+                "purpose": "vpn-client",
+                "vpn_type": "openvpn-client",
+                "enabled": True,
+            }
+        ]
+    )
+    clients: list[VpnClient] = await client.vpn_clients.list_vpn_clients("default")
+    assert len(clients) == 1
+    assert clients[0].id == "vpn1"
+
+    # None / empty response
+    client._get = AsyncMock(return_value=None)
+    clients = await client.vpn_clients.list_vpn_clients("default")
+    assert clients == []
+
+
 async def test_vpn_clients_endpoint_get_vpn_client() -> None:
     """Test getting a specific VPN client configuration."""
     client: UniFiNetworkClient = UniFiNetworkClient(
@@ -1255,7 +1292,14 @@ async def test_vpn_clients_endpoint_get_vpn_client() -> None:
     assert vpn_client.id == "vpn1"
     assert vpn_client.name == "Privado VPN"
 
-    # Not found raises ValueError
+
+async def test_vpn_clients_endpoint_get_vpn_client_not_found_raises() -> None:
+    """Test getting a missing VPN client raises ValueError."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
     client._get = AsyncMock(return_value={"meta": {"rc": "ok"}, "data": []})
     with pytest.raises(ValueError, match="VPN Client missing not found"):
         await client.vpn_clients.get_vpn_client("default", "missing")
