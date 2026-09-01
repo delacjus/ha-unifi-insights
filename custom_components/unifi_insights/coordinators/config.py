@@ -367,7 +367,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                         route_models = await self.network_client.routes.list_routes(
                             legacy_name
                         )
-                        routes_dict = {}
+                        routes_dict: dict[str, Any] = {}
                         for route_model in route_models:
                             route = self._model_to_dict(route_model)
                             route_id = route.get("id") or route.get("_id")
@@ -390,6 +390,9 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                             err,
                         )
                         self.data["policy_based_routes"][site_id] = {}
+                else:
+                    self.data["policy_based_routes"][site_id] = {}
+
                 # Fetch VPN clients via classic networkconf endpoint
                 if legacy_name:
                     try:
@@ -403,7 +406,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                                 legacy_name
                             )
                         )
-                        vpn_clients_dict = {}
+                        vpn_clients_dict: dict[str, Any] = {}
                         for vpn_client_model in vpn_client_models:
                             vpn_client = self._model_to_dict(vpn_client_model)
                             vpn_client_id = vpn_client.get("id") or vpn_client.get(

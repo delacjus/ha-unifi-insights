@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from custom_components.unifi_insights.api.const import ENDPOINT_NETWORKCONF
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network.models.vpn_client import VpnClient
 
@@ -62,7 +63,7 @@ class VpnClientsEndpoint:
             List of VpnClient models.
 
         """
-        path = self._client.build_legacy_api_path(site_name, "/rest/networkconf")
+        path = self._client.build_legacy_api_path(site_name, ENDPOINT_NETWORKCONF)
         response = await self._client._get(path)
         items = self._extract_items(response)
 
@@ -94,7 +95,7 @@ class VpnClientsEndpoint:
 
         """
         path = self._client.build_legacy_api_path(
-            site_name, f"/rest/networkconf/{client_id}"
+            site_name, f"{ENDPOINT_NETWORKCONF}/{client_id}"
         )
         response = await self._client._get(path)
         items = self._extract_items(response)
@@ -135,7 +136,7 @@ class VpnClientsEndpoint:
 
         """
         path = self._client.build_legacy_api_path(
-            site_name, f"/rest/networkconf/{client_id}"
+            site_name, f"{ENDPOINT_NETWORKCONF}/{client_id}"
         )
         response = await self._client._get(path)
         items = self._extract_items(response)
@@ -149,7 +150,7 @@ class VpnClientsEndpoint:
         if current_payload is None:
             # Fall back to list_vpn_clients search
             list_path = self._client.build_legacy_api_path(
-                site_name, "/rest/networkconf"
+                site_name, ENDPOINT_NETWORKCONF
             )
             list_response = await self._client._get(list_path)
             for item in self._extract_items(list_response):
