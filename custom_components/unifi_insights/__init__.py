@@ -27,11 +27,9 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
     CONNECTION_TYPE_LOCAL,
+    CONNECTION_TYPE_REMOTE,
     DEFAULT_API_HOST,
     DOMAIN,
-)
-from .const import (
-    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
 )
 from .coordinators import (
     UnifiConfigCoordinator,
