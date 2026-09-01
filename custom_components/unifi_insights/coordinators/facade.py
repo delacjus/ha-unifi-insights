@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -147,6 +147,10 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sites": self._config_coordinator.data.get("sites", {}),
             "wifi": self._config_coordinator.data.get("wifi", {}),
             "firewall_rules": self._config_coordinator.data.get("firewall_rules", {}),
+            "policy_based_routes": self._config_coordinator.data.get(
+                "policy_based_routes", {}
+            ),
+            "vpn_clients": self._config_coordinator.data.get("vpn_clients", {}),
             "network_info": self._config_coordinator.data.get("network_info", {}),
             # From device coordinator
             "devices": self._device_coordinator.data.get("devices", {}),
@@ -308,6 +312,40 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.network_client.firewall.update_rule,
             site_id,
             rule_id,
+            enabled=enabled,
+        )
+
+    async def async_set_policy_based_route_enabled(
+        self,
+        site_id: str,
+        route_id: str,
+        *,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a policy-based route (traffic route)."""
+        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        await self._async_execute_api_action(
+            f"Unable to update policy-based route {route_id}",
+            self.network_client.routes.update_route,
+            site_name,
+            route_id,
+            enabled=enabled,
+        )
+
+    async def async_set_vpn_client_enabled(
+        self,
+        site_id: str,
+        client_id: str,
+        *,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a VPN client configuration."""
+        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        await self._async_execute_api_action(
+            f"Unable to update VPN client {client_id}",
+            self.network_client.vpn_clients.update_vpn_client,
+            site_name,
+            client_id,
             enabled=enabled,
         )
 

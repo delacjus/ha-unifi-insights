@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 import pytest
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
 from custom_components.unifi_insights.binary_sensor import (
     BINARY_SENSOR_TYPES,

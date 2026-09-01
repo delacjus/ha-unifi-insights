@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
@@ -49,8 +49,10 @@ from .coordinators import UnifiFacadeCoordinator
 from .entity import (
     UnifiInsightsEntity,
     UnifiProtectEntity,
-    get_client_type as _get_client_type,
     get_field,
+)
+from .entity import (
+    get_client_type as _get_client_type,
 )
 
 if TYPE_CHECKING:
@@ -1117,7 +1119,7 @@ async def async_setup_entry(
                 *,
                 _site_id: str = site_id,
                 _device_id: str = device_id,
-                _device_features: dict[str, Any] = device_features,
+                _device_features: list[Any] | set[Any] = device_features,
                 _active_ports: set[int] = active_port_indices,
             ) -> None:
                 """Create per-port sensors from stats."""

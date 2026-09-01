@@ -21,7 +21,8 @@ from .const import (
     MANUFACTURER,
 )
 from .coordinators import UnifiFacadeCoordinator
-from .entity import get_client_type as _get_client_type, get_field
+from .entity import get_client_type as _get_client_type
+from .entity import get_field
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -198,6 +199,8 @@ class UnifiClientTracker(CoordinatorEntity[UnifiFacadeCoordinator], ScannerEntit
         if not isinstance(clients, dict):
             return None
         for client_data in clients.values():
+            if not isinstance(client_data, dict):
+                continue
             mac = get_field(client_data, "macAddress", "mac_address", "mac", default="")
             if mac and mac.lower() == self._mac:
                 return client_data

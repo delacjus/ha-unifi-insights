@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
-import pytest
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_insights.const import (
     ATTR_CAMERA_ID,
@@ -24,10 +28,12 @@ from custom_components.unifi_insights.switch import (
     PARALLEL_UPDATES,
     UnifiClientBlockSwitch,
     UnifiFirewallRuleSwitch,
+    UnifiPolicyBasedRouteSwitch,
     UnifiProtectHighFPSSwitch,
     UnifiProtectMicrophoneSwitch,
     UnifiProtectPrivacySwitch,
     UnifiProtectStatusLightSwitch,
+    UnifiVpnClientSwitch,
     UnifiWifiSwitch,
     async_setup_entry,
 )
@@ -987,6 +993,645 @@ class TestAsyncSetupEntryFirewallRules:
         ]
         assert len(firewall_switches) == 2
         assert {entity._rule_id for entity in firewall_switches} == {"rule1", "rule2"}
+
+
+class TestUnifiPolicyBasedRouteSwitch:
+    """Tests for policy-based route switches."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with policy-based routes."""
+        coordinator = MagicMock()
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.routes = MagicMock()
+        coordinator.network_client.routes.update_route = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {
+                "site1": {
+                    "gateway1": {
+                        "id": "gateway1",
+                        "name": "Main Gateway",
+                        "model": "UCG-Max",
+                        "features": ["gateway"],
+                        "state": "ONLINE",
+                    }
+                }
+            },
+            "clients": {},
+            "stats": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {
+                "site1": {
+                    "route1": {
+                        "id": "route1",
+                        "description": "Route via Privado VPN",
+                        "enabled": True,
+                        "interface": "vpn",
+                        "vpnClientId": "vpn123",
+                        "matchingTarget": "DOMAIN",
+                        "killSwitch": True,
+                        "fallBackToDefaultWAN": False,
+                        "domains": ["privado.com"],
+                        "ipAddresses": ["1.2.3.4"],
+                        "clientMacs": ["aa:bb:cc:dd:ee:ff"],
+                        "networkIds": ["net1"],
+                    },
+                    "route2": {
+                        "id": "route2",
+                        "name": "Route WAN2",
+                        "enabled": False,
+                        "interface": "WAN2",
+                    },
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    def test_initialization(self, mock_coordinator: MagicMock) -> None:
+        """Test policy-based route switch initialization."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        assert switch._attr_unique_id == "site1_route1_policy_based_route"
+        assert switch._attr_name == "Route via Privado VPN"
+        assert switch._attr_entity_category == EntityCategory.CONFIG
+        assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
+
+    def test_is_on(self, mock_coordinator: MagicMock) -> None:
+        """Test switch state mirrors route enabled state."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        assert switch.is_on is True
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        assert switch.is_on is False
+
+    def test_extra_state_attributes(self, mock_coordinator: MagicMock) -> None:
+        """Test route metadata attributes."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        attrs = switch.extra_state_attributes
+        assert attrs["route_id"] == "route1"
+        assert attrs["description"] == "Route via Privado VPN"
+        assert attrs["interface"] == "vpn"
+        assert attrs["vpn_client_id"] == "vpn123"
+        assert attrs["matching_target"] == "DOMAIN"
+        assert attrs["kill_switch"] is True
+        assert attrs["fall_back_to_default_wan"] is False
+        assert attrs["domains"] == ["privado.com"]
+        assert attrs["ip_addresses"] == ["1.2.3.4"]
+        assert attrs["client_macs"] == ["aa:bb:cc:dd:ee:ff"]
+        assert attrs["network_ids"] == ["net1"]
+
+    def test_icon_changes_with_state(self, mock_coordinator: MagicMock) -> None:
+        """Test route switch icon reflects VPN and enabled state."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch.icon == "mdi:vpn"
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        assert switch.icon == "mdi:vpn-off"
+
+        # Non-VPN route
+        switch2 = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route2",
+        )
+        assert switch2.icon == "mdi:routes-clock"
+        mock_coordinator.data["policy_based_routes"]["site1"]["route2"]["enabled"] = (
+            True
+        )
+        assert switch2.icon == "mdi:routes"
+
+    @pytest.mark.asyncio
+    async def test_turn_on_updates_route(self, mock_coordinator: MagicMock) -> None:
+        """Test enabling a policy-based route."""
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is True
+        )
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_turn_off_updates_route(self, mock_coordinator: MagicMock) -> None:
+        """Test disabling a policy-based route."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        mock_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=False
+        )
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is False
+        )
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+    def test_fallback_device_info_without_gateway(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test fallback device registry entry when no gateway device is found."""
+        mock_coordinator.data["devices"]["site1"] = {}
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        assert switch._attr_device_info["identifiers"] == {
+            (DOMAIN, "policy_based_routes_site1")
+        }
+        assert switch._attr_device_info["name"] == "Policy-Based Routes (Default)"
+
+    @pytest.mark.asyncio
+    async def test_turn_on_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test route update failures do not write optimistic state."""
+        mock_coordinator.network_client.routes.update_route.side_effect = Exception(
+            "API error"
+        )
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(
+            HomeAssistantError, match="Unable to update policy-based route"
+        ):
+            await switch.async_turn_on()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test route disable failures do not write optimistic state."""
+        mock_coordinator.network_client.routes.update_route.side_effect = Exception(
+            "API error"
+        )
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            True
+        )
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(
+            HomeAssistantError, match="Unable to update policy-based route"
+        ):
+            await switch.async_turn_off()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is True
+        )
+
+
+class TestAsyncSetupEntryPolicyBasedRoutes:
+    """Tests policy-based route discovery in switch platform setup."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with policy-based route data."""
+        coordinator = MagicMock()
+        coordinator.protect_client = None
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.base_url = "https://192.168.1.1"
+        coordinator.network_client.routes = MagicMock()
+        coordinator.network_client.routes.update_route = AsyncMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {},
+            "clients": {},
+            "stats": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {
+                "site1": {
+                    "route1": {
+                        "id": "route1",
+                        "description": "Route 1",
+                        "enabled": True,
+                    },
+                    "route2": {
+                        "id": "route2",
+                        "name": "Route 2",
+                        "enabled": False,
+                    },
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_route_switches(
+        self, hass: HomeAssistant, mock_coordinator: MagicMock
+    ) -> None:
+        """Test policy-based route switches created during platform setup."""
+        mock_entry = MagicMock()
+        mock_entry.options = {}
+        mock_entry.entry_id = "test_entry_id"
+        mock_entry.runtime_data = MagicMock()
+        mock_entry.runtime_data.coordinator = mock_coordinator
+
+        async_add_entities = MagicMock()
+
+        await async_setup_entry(hass, mock_entry, async_add_entities)
+
+        entities = async_add_entities.call_args[0][0]
+        route_switches = [
+            entity
+            for entity in entities
+            if isinstance(entity, UnifiPolicyBasedRouteSwitch)
+        ]
+        assert len(route_switches) == 2
+        assert {entity._route_id for entity in route_switches} == {"route1", "route2"}
+
+
+class TestUnifiVpnClientSwitch:
+    """Tests for UnifiVpnClientSwitch entity."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with VPN client data."""
+        coordinator = MagicMock()
+        coordinator.protect_client = None
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.base_url = "https://192.168.1.1"
+        coordinator.network_client.vpn_clients = MagicMock()
+        coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {
+                "site1": {
+                    "gateway1": {
+                        "id": "gateway1",
+                        "model": "UDM-PRO",
+                        "features": {"gateway": True},
+                    }
+                }
+            },
+            "clients": {},
+            "stats": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {},
+            "vpn_clients": {
+                "site1": {
+                    "vpn1": {
+                        "id": "vpn1",
+                        "name": "Privado VPN",
+                        "purpose": "vpn-client",
+                        "vpn_type": "openvpn-client",
+                        "enabled": True,
+                        "ip_subnet": "172.21.25.217/32",
+                        "openvpn_id": 1,
+                        "remote_host": "syd-012.vpn.privado.io",
+                    },
+                    "vpn2": {
+                        "id": "vpn2",
+                        "name": "WireGuard Client",
+                        "purpose": "vpn-client",
+                        "vpn_type": "wireguard-client",
+                        "enabled": False,
+                    },
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    def test_initialization(self, mock_coordinator: MagicMock) -> None:
+        """Test VPN client switch initialization."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+
+        assert switch._attr_unique_id == "site1_vpn1_vpn_client"
+        assert switch._attr_name == "Privado VPN"
+        assert switch._attr_entity_category == EntityCategory.CONFIG
+        assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
+
+    def test_available(self, mock_coordinator: MagicMock) -> None:
+        """Test switch availability depends on coordinator and data."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        assert switch.available is True
+        mock_coordinator.last_update_success = False
+        assert switch.available is False
+
+        mock_coordinator.last_update_success = True
+        mock_coordinator.data["vpn_clients"]["site1"] = {}
+        assert switch.available is False
+
+    def test_is_on(self, mock_coordinator: MagicMock) -> None:
+        """Test switch state mirrors VPN client enabled state."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+
+        assert switch.is_on is True
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = False
+        assert switch.is_on is False
+
+    def test_extra_state_attributes(self, mock_coordinator: MagicMock) -> None:
+        """Test VPN client metadata attributes."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+
+        attrs = switch.extra_state_attributes
+        assert attrs["client_id"] == "vpn1"
+        assert attrs["name"] == "Privado VPN"
+        assert attrs["purpose"] == "vpn-client"
+        assert attrs["vpn_type"] == "openvpn-client"
+        assert attrs["ip_subnet"] == "172.21.25.217/32"
+        assert attrs["openvpn_id"] == 1
+        assert attrs["remote_host"] == "syd-012.vpn.privado.io"
+
+    def test_icon_changes_with_state(self, mock_coordinator: MagicMock) -> None:
+        """Test VPN client switch icon reflects enabled state."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        assert switch.icon == "mdi:vpn"
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = False
+        assert switch.icon == "mdi:vpn-off"
+
+    @pytest.mark.asyncio
+    async def test_turn_on_updates_vpn_client(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test enabling a VPN client."""
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = False
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_update = mock_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
+        assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is True
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_turn_off_updates_vpn_client(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test disabling a VPN client."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        mock_update = mock_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=False)
+        assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is False
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+    def test_fallback_device_info_without_gateway(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test fallback device registry entry when no gateway device is found."""
+        mock_coordinator.data["devices"]["site1"] = {}
+
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+
+        assert switch._attr_device_info["identifiers"] == {
+            (DOMAIN, "vpn_clients_site1")
+        }
+        assert switch._attr_device_info["name"] == "VPN Clients (Default)"
+
+    @pytest.mark.asyncio
+    async def test_turn_on_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test VPN client update failures do not write optimistic state."""
+        mock_coordinator.network_client.vpn_clients.update_vpn_client.side_effect = (
+            Exception("API error")
+        )
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = False
+
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError, match="Unable to update VPN client"):
+            await switch.async_turn_on()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_turn_off_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test VPN client disable failures do not write optimistic state."""
+        mock_coordinator.network_client.vpn_clients.update_vpn_client.side_effect = (
+            Exception("API error")
+        )
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = True
+
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError, match="Unable to update VPN client"):
+            await switch.async_turn_off()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is True
+
+
+class TestAsyncSetupEntryVpnClients:
+    """Tests VPN client discovery in switch platform setup."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with VPN client data."""
+        coordinator = MagicMock()
+        coordinator.protect_client = None
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.base_url = "https://192.168.1.1"
+        coordinator.network_client.vpn_clients = MagicMock()
+        coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {},
+            "clients": {},
+            "stats": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {},
+            "vpn_clients": {
+                "site1": {
+                    "vpn1": {
+                        "id": "vpn1",
+                        "name": "Privado VPN",
+                        "purpose": "vpn-client",
+                        "enabled": True,
+                    },
+                    "vpn2": {
+                        "id": "vpn2",
+                        "name": "WireGuard Client",
+                        "purpose": "vpn-client",
+                        "enabled": False,
+                    },
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_vpn_client_switches(
+        self, hass: HomeAssistant, mock_coordinator: MagicMock
+    ) -> None:
+        """Test VPN client switches created during platform setup."""
+        mock_entry = MagicMock()
+        mock_entry.options = {}
+        mock_entry.entry_id = "test_entry_id"
+        mock_entry.runtime_data = MagicMock()
+        mock_entry.runtime_data.coordinator = mock_coordinator
+
+        async_add_entities = MagicMock()
+
+        await async_setup_entry(hass, mock_entry, async_add_entities)
+
+        entities = async_add_entities.call_args[0][0]
+        vpn_switches = [
+            entity for entity in entities if isinstance(entity, UnifiVpnClientSwitch)
+        ]
+        assert len(vpn_switches) == 2
+        assert {entity._client_id for entity in vpn_switches} == {"vpn1", "vpn2"}
 
 
 class TestUnifiProtectPrivacySwitch:

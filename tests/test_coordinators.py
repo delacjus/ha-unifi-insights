@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
-import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import (
@@ -121,6 +121,22 @@ def _create_mock_network_client() -> MagicMock:
         ]
     )
     client.firewall.update_rule = AsyncMock()
+
+    # Routes namespace
+    client.routes = MagicMock()
+    client.routes.list_routes = AsyncMock(
+        return_value=[
+            _create_mock_model(
+                {
+                    "id": "route1",
+                    "description": "Route via VPN",
+                    "enabled": True,
+                    "interface": "vpn",
+                }
+            )
+        ]
+    )
+    client.routes.update_route = AsyncMock()
 
     # Devices namespace
     client.devices = MagicMock()
@@ -460,6 +476,7 @@ class TestUnifiConfigCoordinator:
         assert "sites" in coordinator.data
         assert "wifi" in coordinator.data
         assert "firewall_rules" in coordinator.data
+        assert "policy_based_routes" in coordinator.data
         assert "network_info" in coordinator.data
 
     @pytest.mark.asyncio
@@ -473,6 +490,8 @@ class TestUnifiConfigCoordinator:
         assert "wifi" in result
         assert "firewall_rules" in result
         assert "rule1" in result["firewall_rules"]["default"]
+        assert "policy_based_routes" in result
+        assert "route1" in result["policy_based_routes"]["default"]
         assert coordinator._available is True
 
     @pytest.mark.asyncio
@@ -508,6 +527,64 @@ class TestUnifiConfigCoordinator:
         assert "default" in result["sites"]
         assert result["firewall_rules"]["default"] == {}
         assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_routes_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test policy-based routes are optional when the endpoint is unavailable."""
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=Exception("Routes endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["policy_based_routes"]["default"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_routes_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test auth error during routes fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test VPN clients are optional when the endpoint is unavailable."""
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=Exception("VPN clients endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["vpn_clients"]["default"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test auth error during VPN clients fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_auth_error(
@@ -685,6 +762,36 @@ class TestUnifiConfigCoordinator:
     def test_get_firewall_rules_missing_site(self, coordinator: UnifiConfigCoordinator):
         """Test getting firewall rules for missing site."""
         result = coordinator.get_firewall_rules("nonexistent")
+        assert result == {}
+
+    def test_get_policy_based_routes(self, coordinator: UnifiConfigCoordinator):
+        """Test getting policy-based routes for a site."""
+        coordinator.data["policy_based_routes"] = {
+            "default": {"route1": {"id": "route1", "description": "Route to VPN"}}
+        }
+        result = coordinator.get_policy_based_routes("default")
+        assert "route1" in result
+
+    def test_get_policy_based_routes_missing_site(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test getting policy-based routes for missing site."""
+        result = coordinator.get_policy_based_routes("nonexistent")
+        assert result == {}
+
+    def test_get_vpn_clients(self, coordinator: UnifiConfigCoordinator) -> None:
+        """Test getting VPN clients for a site."""
+        coordinator.data["vpn_clients"] = {
+            "default": {"client1": {"_id": "client1", "name": "Privado VPN"}}
+        }
+        result = coordinator.get_vpn_clients("default")
+        assert "client1" in result
+
+    def test_get_vpn_clients_missing_site(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test getting VPN clients for missing site."""
+        result = coordinator.get_vpn_clients("nonexistent")
         assert result == {}
 
     @pytest.mark.asyncio
@@ -2360,9 +2467,7 @@ class TestUnifiProtectCoordinator:
         still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(
-                "devices", connected=True
-            )
+            coordinator._on_websocket_connection_state_change("devices", connected=True)
 
         mock_reconcile.assert_called_once()
 
@@ -3295,6 +3400,68 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.network_client.firewall.update_rule.assert_called_once_with(
             "site1", "rule1", enabled=True
         )
+
+    @pytest.mark.asyncio
+    async def test_async_set_policy_based_route_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_policy_based_route_enabled delegates correctly."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value="default"
+        )
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "site1", "route1", enabled=True
+        )
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_policy_based_route_enabled_fallback(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_policy_based_route_enabled falls back to default."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "unknown_site", "route1", enabled=True
+        )
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled delegates correctly."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value="default"
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "site1", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled_fallback(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled falls back to default site."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "unknown_site", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
 
     @pytest.mark.asyncio
     async def test_async_update_camera(
