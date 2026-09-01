@@ -6,9 +6,9 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
+import pytest
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

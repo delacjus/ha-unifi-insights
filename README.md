@@ -36,14 +36,16 @@ This project overlaps with and complements Home Assistant's official integration
 
 ### UniFi Network
 
-- Device monitoring: CPU, memory, uptime, and throughput for all adopted devices
-- Per-port sensors: PoE power, port speed, TX/RX traffic counters
-- Client tracking: device tracker entities for wireless and wired clients
-- WiFi control: enable and disable WiFi networks
+- Device monitoring: CPU, memory, uptime, temperature, and throughput for all adopted devices
+- Per-port sensors: PoE power, port speed, link state, SFP module info, TX/RX traffic counters
+- Client tracking & control: presence detection, block/allow switches, and reconnect buttons
+- WiFi control & QR codes: enable/disable WiFi networks and scan-to-connect QR code images
 - Firewall policy control: enable and disable user-defined firewall rules
-- Client management: block and allow network clients
-- Firmware update management
+- Traffic route management: enable and disable policy-based routing rules dynamically
+- VPN client control: enable and disable VPN client interfaces (WireGuard, OpenVPN, Privado VPN)
+- Firmware update management: check and initiate device upgrades
 - Device and port actions: restart devices, power cycle PoE ports
+- Guest & voucher services: authorize guests, generate and delete hotspot vouchers
 
 ### UniFi Protect
 

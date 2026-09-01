@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant.exceptions import HomeAssistantError
+import pytest
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
