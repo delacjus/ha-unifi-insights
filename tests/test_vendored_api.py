@@ -9,7 +9,10 @@ import pytest
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
-from custom_components.unifi_insights.api.network import UniFiNetworkClient
+from custom_components.unifi_insights.api.network import (
+    PolicyBasedRoute,
+    UniFiNetworkClient,
+)
 from custom_components.unifi_insights.api.protect import UniFiProtectClient
 
 
@@ -83,6 +86,46 @@ def test_build_legacy_global_api_path_remote() -> None:
         client.build_legacy_global_api_path("/self/sites")
         == "/v1/connector/consoles/console-id/network/api/self/sites"
     )
+
+
+def test_build_legacy_v2_api_path_local() -> None:
+    """Test building legacy v2 API paths for local connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    assert (
+        client.build_legacy_v2_api_path("default", "/trafficroutes")
+        == "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+
+def test_build_legacy_v2_api_path_remote() -> None:
+    """Test building legacy v2 API paths for remote connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        connection_type=ConnectionType.REMOTE,
+        console_id="console-id",
+    )
+
+    assert (
+        client.build_legacy_v2_api_path("default", "trafficroutes")
+        == "/v1/connector/consoles/console-id/network/v2/api/site/default/trafficroutes"
+    )
+
+
+def test_build_legacy_v2_api_path_empty_site_raises() -> None:
+    """Test building legacy v2 API path with empty site raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    with pytest.raises(ValueError, match="site_name is required"):
+        client.build_legacy_v2_api_path("", "/trafficroutes")
 
 
 async def test_get_hosts_remote_without_console_id() -> None:
@@ -869,6 +912,8 @@ async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
 
     assert len(result) == 1
     assert result[0].id == "pend-1"
+
+
 def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
     """Build a fake aiohttp.ClientResponse for _handle_response tests."""
     response = MagicMock()
@@ -935,3 +980,182 @@ async def test_handle_response_valid_json_returns_data() -> None:
     result = await client._handle_response(response)
 
     assert result == {"ok": True}
+
+
+def test_policy_based_route_model() -> None:
+    """Test PolicyBasedRoute model validation and display name."""
+    # Test with _id alias
+    route = PolicyBasedRoute.model_validate(
+        {
+            "_id": "route123",
+            "description": "Route via VPN",
+            "enabled": True,
+            "matchingTarget": "DOMAIN",
+            "interface": "vpn",
+            "vpnClientId": "vpn123",
+            "killSwitch": True,
+            "domains": ["example.com"],
+            "ipAddresses": ["1.1.1.1"],
+            "clientMacs": ["aa:bb:cc:dd:ee:ff"],
+            "networkIds": ["net123"],
+        }
+    )
+    assert route.id == "route123"
+    assert route.description == "Route via VPN"
+    assert route.enabled is True
+    assert route.matching_target == "DOMAIN"
+    assert route.interface == "vpn"
+    assert route.vpn_client_id == "vpn123"
+    assert route.kill_switch is True
+    assert route.domains == ["example.com"]
+    assert route.ip_addresses == ["1.1.1.1"]
+    assert route.client_macs == ["aa:bb:cc:dd:ee:ff"]
+    assert route.network_ids == ["net123"]
+    assert route.display_name == "Route via VPN"
+
+    # Test display name fallbacks
+    route2 = PolicyBasedRoute.model_validate({"_id": "r2", "name": "Named Route"})
+    assert route2.display_name == "Named Route"
+
+    route3 = PolicyBasedRoute.model_validate(
+        {"_id": "r3", "matchingTarget": "INTERNET", "interface": "WAN2"}
+    )
+    assert route3.display_name == "Route INTERNET to WAN2"
+
+    route4 = PolicyBasedRoute.model_validate({"_id": "r4"})
+    assert route4.display_name == "Route r4"
+
+
+async def test_routes_endpoint_list_routes() -> None:
+    """Test listing policy-based routes."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[
+            {"_id": "route1", "description": "Route 1", "enabled": True},
+            {"_id": "route2", "description": "Route 2", "enabled": False},
+        ]
+    )
+
+    routes = await client.routes.list_routes("default")
+    assert len(routes) == 2
+    assert routes[0].id == "route1"
+    assert routes[0].enabled is True
+    assert routes[1].id == "route2"
+    assert routes[1].enabled is False
+    client._get.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+
+async def test_routes_endpoint_list_routes_wrapped_and_empty() -> None:
+    """Test listing policy-based routes with wrapped dict and empty response."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Wrapped dict with data key
+    client._get = AsyncMock(
+        return_value={"data": [{"_id": "route1", "description": "Route 1"}]}
+    )
+    routes = await client.routes.list_routes("default")
+    assert len(routes) == 1
+    assert routes[0].id == "route1"
+
+    # None / empty response
+    client._get = AsyncMock(return_value=None)
+    routes = await client.routes.list_routes("default")
+    assert routes == []
+
+
+async def test_routes_endpoint_get_route() -> None:
+    """Test getting a specific policy-based route."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Found via direct GET
+    client._get = AsyncMock(
+        return_value={"_id": "route1", "description": "Route 1", "enabled": True}
+    )
+    route = await client.routes.get_route("default", "route1")
+    assert route.id == "route1"
+    assert route.enabled is True
+
+    # Fallback to searching list_routes when direct GET returns empty
+    client._get = AsyncMock(
+        side_effect=[
+            [],  # direct GET /trafficroutes/route2 returns empty
+            [
+                {"_id": "route2", "description": "Route 2", "enabled": False}
+            ],  # list_routes returns it
+        ]
+    )
+    route2 = await client.routes.get_route("default", "route2")
+    assert route2.id == "route2"
+
+    # Not found raises ValueError
+    client._get = AsyncMock(return_value=[])
+    with pytest.raises(ValueError, match="Policy-Based Route missing not found"):
+        await client.routes.get_route("default", "missing")
+
+
+async def test_routes_endpoint_update_route() -> None:
+    """Test updating a policy-based route via PUT."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[{"_id": "route1", "description": "Route 1", "enabled": True}]
+    )
+    client._put = AsyncMock(
+        return_value=[{"_id": "route1", "description": "Route 1", "enabled": False}]
+    )
+
+    updated = await client.routes.update_route("default", "route1", enabled=False)
+    assert updated.id == "route1"
+    assert updated.enabled is False
+
+    client._put.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes/route1",
+        json_data={"_id": "route1", "description": "Route 1", "enabled": False},
+    )
+
+
+async def test_routes_endpoint_update_route_not_found_raises() -> None:
+    """Test updating a non-existent policy-based route raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(return_value=[])
+
+    with pytest.raises(ValueError, match="Policy-Based Route missing not found"):
+        await client.routes.update_route("default", "missing", enabled=False)
+
+
+async def test_routes_endpoint_soft_error_raises() -> None:
+    """Test that meta.rc == 'error' envelope raises UniFiResponseError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={"meta": {"rc": "error", "msg": "API error message"}}
+    )
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.routes.list_routes("default")
+    assert exc_info.value.message == "API error message"
+    assert exc_info.value.status_code == 200

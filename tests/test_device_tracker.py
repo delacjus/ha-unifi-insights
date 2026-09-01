@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from homeassistant.components.device_tracker import SourceType
 import pytest
+from homeassistant.components.device_tracker import SourceType
 
 from custom_components.unifi_insights.device_tracker import (
     PARALLEL_UPDATES,

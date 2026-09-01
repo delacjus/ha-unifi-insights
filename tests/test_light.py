@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from homeassistant.components.light import ATTR_BRIGHTNESS, ColorMode
 from homeassistant.exceptions import HomeAssistantError
-import pytest
 
 from custom_components.unifi_insights.const import (
     ATTR_LIGHT_DARK,

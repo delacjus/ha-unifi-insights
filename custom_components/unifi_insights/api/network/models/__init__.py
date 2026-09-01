@@ -57,6 +57,7 @@ from .resources import (
     WANInterface,
     WANStatus,
 )
+from .routes import PolicyBasedRoute
 from .site import Site, SiteHealth
 from .stack import SwitchStack, SwitchStackLag, SwitchStackMember
 from .traffic import (
@@ -132,6 +133,8 @@ __all__ = [
     "VPNTunnelStatus",
     "WANInterface",
     "WANStatus",
+    # Routes
+    "PolicyBasedRoute",
     # Site
     "Site",
     "SiteHealth",

@@ -311,9 +311,7 @@ class ClientsEndpoint:
         }
         command = command_map.get(action)
         if command is None:
-            raise ValueError(
-                f"Action must be one of: {', '.join(sorted(command_map))}"
-            )
+            raise ValueError(f"Action must be one of: {', '.join(sorted(command_map))}")
         return await self._stamgr_command(site_name, command, mac)
 
     async def authorize_guest(
@@ -357,7 +355,5 @@ class ClientsEndpoint:
         path = self._client.build_api_path(
             f"/sites/{site_id}/clients/{client_id}/actions"
         )
-        await self._client._post(
-            path, json_data={"action": "UNAUTHORIZE_GUEST_ACCESS"}
-        )
+        await self._client._post(path, json_data={"action": "UNAUTHORIZE_GUEST_ACCESS"})
         return True
