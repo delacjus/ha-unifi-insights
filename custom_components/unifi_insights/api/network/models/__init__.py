@@ -68,6 +68,7 @@ from .traffic import (
     TrafficMatchingType,
 )
 from .voucher import Voucher, VoucherCreateRequest
+from .vpn_client import VpnClient
 from .wifi import WifiNetwork, WifiSecurity
 
 __all__ = [
@@ -147,6 +148,8 @@ __all__ = [
     # Voucher
     "Voucher",
     "VoucherCreateRequest",
+    # VPN Client
+    "VpnClient",
     # WiFi
     "WifiNetwork",
     "WifiSecurity",

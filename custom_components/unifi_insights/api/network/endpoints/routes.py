@@ -74,9 +74,7 @@ class RoutesEndpoint:
             List of PolicyBasedRoute models.
 
         """
-        path = self._client.build_legacy_v2_api_path(
-            site_name, ENDPOINT_TRAFFIC_ROUTES
-        )
+        path = self._client.build_legacy_v2_api_path(site_name, ENDPOINT_TRAFFIC_ROUTES)
         response = await self._client._get(path)
         items: list[dict[str, Any]] = self._extract_routes_list(response)
 
@@ -90,9 +88,7 @@ class RoutesEndpoint:
 
         return routes
 
-    async def get_route(
-        self, site_name: str, route_id: str
-    ) -> PolicyBasedRoute:
+    async def get_route(self, site_name: str, route_id: str) -> PolicyBasedRoute:
         """
         Get a specific policy-based route by ID.
 
@@ -150,9 +146,7 @@ class RoutesEndpoint:
             ValueError: If the route is not found.
 
         """
-        path = self._client.build_legacy_v2_api_path(
-            site_name, ENDPOINT_TRAFFIC_ROUTES
-        )
+        path = self._client.build_legacy_v2_api_path(site_name, ENDPOINT_TRAFFIC_ROUTES)
         response = await self._client._get(path)
         items: list[dict[str, Any]] = self._extract_routes_list(response)
 
