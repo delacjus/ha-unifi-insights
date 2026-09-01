@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
+from custom_components.unifi_insights.api.const import ENDPOINT_TRAFFIC_ROUTES
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network import (
     PolicyBasedRoute,
@@ -97,8 +98,8 @@ def test_build_legacy_v2_api_path_local() -> None:
     )
 
     assert (
-        client.build_legacy_v2_api_path("default", "/trafficroutes")
-        == "/proxy/network/v2/api/site/default/trafficroutes"
+        client.build_legacy_v2_api_path("default", f"/{ENDPOINT_TRAFFIC_ROUTES}")
+        == f"/proxy/network/v2/api/site/default/{ENDPOINT_TRAFFIC_ROUTES}"
     )
 
 
@@ -111,8 +112,8 @@ def test_build_legacy_v2_api_path_remote() -> None:
     )
 
     assert (
-        client.build_legacy_v2_api_path("default", "trafficroutes")
-        == "/v1/connector/consoles/console-id/network/v2/api/site/default/trafficroutes"
+        client.build_legacy_v2_api_path("default", ENDPOINT_TRAFFIC_ROUTES)
+        == f"/v1/connector/consoles/console-id/network/v2/api/site/default/{ENDPOINT_TRAFFIC_ROUTES}"
     )
 
 
@@ -125,7 +126,7 @@ def test_build_legacy_v2_api_path_empty_site_raises() -> None:
     )
 
     with pytest.raises(ValueError, match="site_name is required"):
-        client.build_legacy_v2_api_path("", "/trafficroutes")
+        client.build_legacy_v2_api_path("", f"/{ENDPOINT_TRAFFIC_ROUTES}")
 
 
 async def test_get_hosts_remote_without_console_id() -> None:

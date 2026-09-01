@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from custom_components.unifi_insights.api.const import ENDPOINT_TRAFFIC_ROUTES
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network.models.routes import PolicyBasedRoute
 
@@ -73,9 +74,11 @@ class RoutesEndpoint:
             List of PolicyBasedRoute models.
 
         """
-        path = self._client.build_legacy_v2_api_path(site_name, "trafficroutes")
+        path = self._client.build_legacy_v2_api_path(
+            site_name, ENDPOINT_TRAFFIC_ROUTES
+        )
         response = await self._client._get(path)
-        items = self._extract_routes_list(response)
+        items: list[dict[str, Any]] = self._extract_routes_list(response)
 
         routes: list[PolicyBasedRoute] = []
         for item in items:
@@ -105,10 +108,10 @@ class RoutesEndpoint:
 
         """
         path = self._client.build_legacy_v2_api_path(
-            site_name, f"trafficroutes/{route_id}"
+            site_name, f"{ENDPOINT_TRAFFIC_ROUTES}/{route_id}"
         )
         response = await self._client._get(path)
-        items = self._extract_routes_list(response)
+        items: list[dict[str, Any]] = self._extract_routes_list(response)
         if items:
             return PolicyBasedRoute.model_validate(items[0])
 
@@ -147,9 +150,11 @@ class RoutesEndpoint:
             ValueError: If the route is not found.
 
         """
-        path = self._client.build_legacy_v2_api_path(site_name, "trafficroutes")
+        path = self._client.build_legacy_v2_api_path(
+            site_name, ENDPOINT_TRAFFIC_ROUTES
+        )
         response = await self._client._get(path)
-        items = self._extract_routes_list(response)
+        items: list[dict[str, Any]] = self._extract_routes_list(response)
 
         current_payload: dict[str, Any] | None = None
         for item in items:
@@ -169,10 +174,10 @@ class RoutesEndpoint:
         current_payload.update(kwargs)
 
         put_path = self._client.build_legacy_v2_api_path(
-            site_name, f"trafficroutes/{route_id}"
+            site_name, f"{ENDPOINT_TRAFFIC_ROUTES}/{route_id}"
         )
         put_response = await self._client._put(put_path, json_data=current_payload)
-        put_items = self._extract_routes_list(put_response)
+        put_items: list[dict[str, Any]] = self._extract_routes_list(put_response)
         if put_items:
             return PolicyBasedRoute.model_validate(put_items[0])
 
