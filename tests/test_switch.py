@@ -13,6 +13,9 @@ from homeassistant.helpers.entity import EntityCategory
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
+from custom_components.unifi_insights.api.network.models.routes import (
+    PolicyBasedRoute,
+)
 from custom_components.unifi_insights.const import (
     ATTR_CAMERA_ID,
     ATTR_CAMERA_NAME,
@@ -25,6 +28,7 @@ from custom_components.unifi_insights.const import (
     VIDEO_MODE_DEFAULT,
     VIDEO_MODE_HIGH_FPS,
 )
+from custom_components.unifi_insights.coordinators.base import UnifiBaseCoordinator
 from custom_components.unifi_insights.switch import (
     PARALLEL_UPDATES,
     UnifiClientBlockSwitch,
@@ -1166,6 +1170,93 @@ class TestUnifiPolicyBasedRouteSwitch:
             coordinator=mock_coordinator,
             site_id="site1",
             route_id="route3",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            await switch.async_turn_off()
+
+        assert any("kill switch" in record.message.lower() for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("route_kwargs", "expected"),
+        [
+            ({"kill_switch_enabled": True}, True),
+            ({"kill_switch_enabled": False}, False),
+            ({"kill_switch": True}, True),
+            ({"kill_switch": False}, False),
+            ({}, None),
+        ],
+        ids=[
+            "live-shape-on",
+            "live-shape-off",
+            "legacy-shape-on",
+            "legacy-shape-off",
+            "unset",
+        ],
+    )
+    def test_kill_switch_resolves_through_coordinator_serialization(
+        self,
+        mock_coordinator: MagicMock,
+        route_kwargs: dict[str, bool],
+        *,
+        expected: bool | None,
+    ) -> None:
+        """Test both payload shapes survive the coordinator's own serialization.
+
+        The coordinator stores routes via ``_model_to_dict``, which dumps with
+        ``by_alias=True, exclude_none=False`` -- so **every** alias key is
+        present, ``None`` included. A membership test (``key in route_data``)
+        would stop at ``killSwitchEnabled`` and return ``None`` for a
+        legacy-shape route, so the resolver must skip ``None`` values rather
+        than merely-absent keys. Building the dict from a real
+        ``PolicyBasedRoute`` here is the point: hand-built dicts that omit the
+        sibling alias key do not reproduce real coordinator data.
+        """
+        route = PolicyBasedRoute.model_validate(
+            {
+                "_id": "route4",
+                "description": "Serialized Route",
+                "enabled": True,
+                **route_kwargs,
+            }
+        )
+        route_data = UnifiBaseCoordinator._model_to_dict(mock_coordinator, route)
+
+        # Guard the premise: both alias keys really are present in the dump.
+        assert "killSwitchEnabled" in route_data
+        assert "killSwitch" in route_data
+
+        mock_coordinator.data["policy_based_routes"]["site1"]["route4"] = route_data
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route4",
+        )
+
+        assert switch._kill_switch_enabled is expected
+        assert switch.extra_state_attributes["kill_switch_enabled"] is expected
+
+    @pytest.mark.asyncio
+    async def test_turn_off_warns_for_legacy_shape_through_serialization(
+        self, mock_coordinator: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test the disable warning fires for a serialized legacy-shape route."""
+        route = PolicyBasedRoute.model_validate(
+            {
+                "_id": "route4",
+                "description": "Serialized Route",
+                "enabled": True,
+                "kill_switch": True,
+            }
+        )
+        mock_coordinator.data["policy_based_routes"]["site1"]["route4"] = (
+            UnifiBaseCoordinator._model_to_dict(mock_coordinator, route)
+        )
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route4",
         )
         switch.async_write_ha_state = MagicMock()
 

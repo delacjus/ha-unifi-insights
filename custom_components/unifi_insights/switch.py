@@ -520,6 +520,13 @@ class UnifiInsightsPolicyBasedRouteSwitch(
         Prefers the controller's own field names (``kill_switch_enabled`` /
         ``killSwitchEnabled``), falling back to the maintainer's original
         ``kill_switch`` / ``killSwitch`` names so both payload shapes work.
+
+        Skips ``None`` values rather than absent keys: the coordinator stores
+        routes via ``_model_to_dict``, which dumps with ``by_alias=True,
+        exclude_none=False``, so every alias key is always present. A
+        membership test would stop at ``killSwitchEnabled`` and report ``None``
+        for a legacy-shape route -- silently reporting "no kill switch" for a
+        route whose kill switch is on.
         """
         route_data = self._get_route_data()
         for key in (
@@ -528,8 +535,9 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             "killSwitch",
             "kill_switch",
         ):
-            if key in route_data:
-                return route_data.get(key)
+            value = route_data.get(key)
+            if value is not None:
+                return value
         return None
 
     @property
