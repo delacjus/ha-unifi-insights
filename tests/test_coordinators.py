@@ -510,6 +510,35 @@ class TestUnifiConfigCoordinator:
         assert coordinator._available is True
 
     @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test VPN clients are optional when the endpoint is unavailable."""
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=Exception("VPN clients endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["vpn_clients"]["default"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test auth error during VPN clients fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_auth_error(
         self, coordinator: UnifiConfigCoordinator
     ):
@@ -2360,9 +2389,7 @@ class TestUnifiProtectCoordinator:
         still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(
-                "devices", connected=True
-            )
+            coordinator._on_websocket_connection_state_change("devices", connected=True)
 
         mock_reconcile.assert_called_once()
 
@@ -2453,7 +2480,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback (see `async_start_websocket`)
         updates only the devices stream's health entry.
         """
-        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_devices_connection_state_change(True)
 
         assert coordinator.websocket_health["devices"]["connected"] is True
         assert coordinator.websocket_health["events"]["connected"] is False
@@ -2465,7 +2492,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback updates only the events
         stream's health entry.
         """
-        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_events_connection_state_change(True)
 
         assert coordinator.websocket_health["events"]["connected"] is True
         assert coordinator.websocket_health["devices"]["connected"] is False
@@ -3295,6 +3322,36 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.network_client.firewall.update_rule.assert_called_once_with(
             "site1", "rule1", enabled=True
         )
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled delegates correctly."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value="default"
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "site1", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled_fallback(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled falls back to default site."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "unknown_site", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
 
     @pytest.mark.asyncio
     async def test_async_update_camera(

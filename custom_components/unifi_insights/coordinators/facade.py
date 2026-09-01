@@ -147,6 +147,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sites": self._config_coordinator.data.get("sites", {}),
             "wifi": self._config_coordinator.data.get("wifi", {}),
             "firewall_rules": self._config_coordinator.data.get("firewall_rules", {}),
+            "vpn_clients": self._config_coordinator.data.get("vpn_clients", {}),
             "network_info": self._config_coordinator.data.get("network_info", {}),
             # From device coordinator
             "devices": self._device_coordinator.data.get("devices", {}),
@@ -308,6 +309,23 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.network_client.firewall.update_rule,
             site_id,
             rule_id,
+            enabled=enabled,
+        )
+
+    async def async_set_vpn_client_enabled(
+        self,
+        site_id: str,
+        client_id: str,
+        *,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a VPN client configuration."""
+        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        await self._async_execute_api_action(
+            f"Unable to update VPN client {client_id}",
+            self.network_client.vpn_clients.update_vpn_client,
+            site_name,
+            client_id,
             enabled=enabled,
         )
 

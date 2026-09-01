@@ -19,6 +19,7 @@ from .models import (
     PortBytesMetrics,
     Site,
     SiteHealth,
+    VpnClient,
     WifiNetwork,
     WifiSecurity,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "Site",
     "SiteHealth",
     "UniFiNetworkClient",
+    "VpnClient",
     "WifiNetwork",
     "WifiSecurity",
 ]

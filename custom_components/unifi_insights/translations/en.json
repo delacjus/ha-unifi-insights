@@ -306,6 +306,9 @@
       }
     },
     "switch": {
+      "vpn_client": {
+        "name": "{vpn_client_name}"
+      },
       "microphone": {
         "name": "Microphone"
       },

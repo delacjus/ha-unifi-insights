@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added VPN Client switch control (`UnifiVpnClientSwitch`) to enable or disable VPN client interfaces (for example WireGuard and OpenVPN clients) directly from Home Assistant
+- Added `VpnClientsEndpoint` and `VpnClient` model in the vendored Network API client targeting `/proxy/network/api/s/{site}/rest/networkconf`
+- Exposed VPN client metadata attributes (`client_id`, `purpose`, `vpn_type`, `ip_subnet`, `openvpn_id`, `wireguard_id`, `remote_host`) on VPN client switch entities
+
 ## [2026.8.4] - 2026-08-30
 
 ### Fixed

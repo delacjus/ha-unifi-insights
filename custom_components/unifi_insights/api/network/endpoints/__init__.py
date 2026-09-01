@@ -14,6 +14,7 @@ from .sites import SitesEndpoint
 from .stacks import StacksEndpoint
 from .traffic import TrafficEndpoint
 from .vouchers import VouchersEndpoint
+from .vpn_clients import VpnClientsEndpoint
 from .wifi import WifiEndpoint
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "StacksEndpoint",
     "TrafficEndpoint",
     "VouchersEndpoint",
+    "VpnClientsEndpoint",
     "WifiEndpoint",
 ]
