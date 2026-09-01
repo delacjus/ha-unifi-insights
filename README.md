@@ -159,6 +159,7 @@ After setup, open the integration's options flow (**Settings** → **Devices & S
 | ------------------- | ------------------------------------------------ |
 | WiFi Network        | Enable or disable a WiFi broadcast               |
 | Firewall Rule       | Enable or disable a user-defined firewall policy |
+| Policy-Based Route  | Enable or disable a policy-based traffic route   |
 | Client Allow        | Block or allow a connected network client        |
 | Camera Microphone   | Enable or disable the camera microphone          |
 | Camera Privacy Mode | Enable or disable privacy mode                   |

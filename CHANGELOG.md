@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added policy-based routing (traffic route) control: each UniFi traffic route is exposed as a switch that enables or disables the route, with `kill_switch_enabled`, `matching_target`, `target_devices`, `domains`, `ip_addresses`, `ip_ranges`, `regions`, and `next_hop` available as state attributes (closes #79)
+- Added a warning when a traffic route is disabled while its kill switch is still enabled, since the controller keeps dropping the matched traffic instead of falling back to the default route
+
 ## [2026.8.4] - 2026-08-30
 
 ### Fixed
