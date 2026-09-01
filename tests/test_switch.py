@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1005,6 +1006,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         coordinator.network_client = MagicMock()
         coordinator.network_client.routes = MagicMock()
         coordinator.network_client.routes.update_route = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         coordinator.async_request_refresh = AsyncMock()
         coordinator.data = {
             "sites": {"site1": {"id": "site1", "name": "Default"}},
@@ -1100,12 +1102,77 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert attrs["interface"] == "vpn"
         assert attrs["vpn_client_id"] == "vpn123"
         assert attrs["matching_target"] == "DOMAIN"
-        assert attrs["kill_switch"] is True
+        assert attrs["kill_switch_enabled"] is True
         assert attrs["fall_back_to_default_wan"] is False
         assert attrs["domains"] == ["privado.com"]
         assert attrs["ip_addresses"] == ["1.2.3.4"]
         assert attrs["client_macs"] == ["aa:bb:cc:dd:ee:ff"]
         assert attrs["network_ids"] == ["net1"]
+
+    def test_extra_state_attributes_live_controller_payload(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test attributes for a route shaped like the live controller payload.
+
+        Captured from a UniFi Dream Machine SE (UniFi OS 5.1.31, Network
+        10.6.101): the controller uses ``kill_switch_enabled``, not
+        ``killSwitch``/``kill_switch``, and also sends ``network_id``,
+        ``next_hop``, ``regions``, ``ip_ranges``, and ``target_devices``.
+        """
+        mock_coordinator.data["policy_based_routes"]["site1"]["route3"] = {
+            "id": "route3",
+            "description": "Nord Route",
+            "enabled": True,
+            "matching_target": "INTERNET",
+            "kill_switch_enabled": True,
+            "domains": [],
+            "ip_addresses": [],
+            "ip_ranges": [],
+            "next_hop": "",
+            "regions": [],
+            "network_id": "67678a746c1d8157c66f444e",
+            "target_devices": [
+                {"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}
+            ],
+        }
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route3",
+        )
+
+        attrs = switch.extra_state_attributes
+        assert attrs["kill_switch_enabled"] is True
+        assert attrs["network_id"] == "67678a746c1d8157c66f444e"
+        assert attrs["next_hop"] == ""
+        assert attrs["regions"] == []
+        assert attrs["ip_ranges"] == []
+        assert attrs["target_devices"] == [
+            {"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_turn_off_warns_when_kill_switch_enabled_live_payload(
+        self, mock_coordinator: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test disable warning fires for the live ``kill_switch_enabled`` field."""
+        mock_coordinator.data["policy_based_routes"]["site1"]["route3"] = {
+            "id": "route3",
+            "description": "Nord Route",
+            "enabled": True,
+            "kill_switch_enabled": True,
+        }
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route3",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            await switch.async_turn_off()
+
+        assert any("kill switch" in record.message.lower() for record in caplog.records)
 
     def test_icon_changes_with_state(self, mock_coordinator: MagicMock) -> None:
         """Test route switch icon reflects VPN and enabled state."""
@@ -1178,6 +1245,66 @@ class TestUnifiPolicyBasedRouteSwitch:
         )
         switch.async_write_ha_state.assert_called_once()
         mock_coordinator.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_turn_on_fallback_uses_resolved_site_name(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test the fallback path resolves the real site name on multi-site."""
+        mock_coordinator.resolve_legacy_site_name = MagicMock(return_value="mysite")
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "mysite", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_warns_when_kill_switch_enabled(
+        self, mock_coordinator: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test disabling a route with an active kill switch logs a warning."""
+        # route1 has killSwitch=True in the fixture data.
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            await switch.async_turn_off()
+
+        assert any("kill switch" in record.message.lower() for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_turn_off_no_warning_when_kill_switch_disabled(
+        self, mock_coordinator: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test disabling a route without a kill switch logs no warning."""
+        # route2 has no killSwitch key in the fixture data.
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route2",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            await switch.async_turn_off()
+
+        assert not any(
+            "kill switch" in record.message.lower() for record in caplog.records
+        )
 
     def test_fallback_device_info_without_gateway(
         self, mock_coordinator: MagicMock
@@ -1269,6 +1396,7 @@ class TestAsyncSetupEntryPolicyBasedRoutes:
         coordinator.network_client.base_url = "https://192.168.1.1"
         coordinator.network_client.routes = MagicMock()
         coordinator.network_client.routes.update_route = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         coordinator.data = {
             "sites": {"site1": {"id": "site1", "name": "Default"}},
             "devices": {},
@@ -1339,6 +1467,7 @@ class TestUnifiVpnClientSwitch:
         coordinator.network_client.base_url = "https://192.168.1.1"
         coordinator.network_client.vpn_clients = MagicMock()
         coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         coordinator.async_request_refresh = AsyncMock()
         coordinator.data = {
             "sites": {"site1": {"id": "site1", "name": "Default"}},
@@ -1498,6 +1627,26 @@ class TestUnifiVpnClientSwitch:
         switch.async_write_ha_state.assert_called_once()
         mock_coordinator.async_request_refresh.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_turn_on_fallback_uses_resolved_site_name(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test the fallback path resolves the real site name on multi-site."""
+        mock_coordinator.resolve_legacy_site_name = MagicMock(return_value="mysite")
+        mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] = False
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_update = mock_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("mysite", "vpn1", enabled=True)
+        mock_coordinator.async_request_refresh.assert_called_once()
+
     def test_fallback_device_info_without_gateway(
         self, mock_coordinator: MagicMock
     ) -> None:
@@ -1574,6 +1723,7 @@ class TestAsyncSetupEntryVpnClients:
         coordinator.network_client.base_url = "https://192.168.1.1"
         coordinator.network_client.vpn_clients = MagicMock()
         coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         coordinator.async_request_refresh = AsyncMock()
         coordinator.data = {
             "sites": {"site1": {"id": "site1", "name": "Default"}},

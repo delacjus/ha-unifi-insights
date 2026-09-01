@@ -315,6 +315,15 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             enabled=enabled,
         )
 
+    def resolve_legacy_site_name(self, site_id: str) -> str:
+        """
+        Resolve the classic site name for a facade (integration API) site id.
+
+        Falls back to ``"default"`` (the standard single-site name) when the
+        legacy site mapping has not resolved yet.
+        """
+        return self._device_coordinator.get_legacy_site_name(site_id) or "default"
+
     async def async_set_policy_based_route_enabled(
         self,
         site_id: str,
@@ -323,7 +332,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a policy-based route (traffic route)."""
-        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        site_name = self.resolve_legacy_site_name(site_id)
         await self._async_execute_api_action(
             f"Unable to update policy-based route {route_id}",
             self.network_client.routes.update_route,
@@ -340,7 +349,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a VPN client configuration."""
-        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        site_name = self.resolve_legacy_site_name(site_id)
         await self._async_execute_api_action(
             f"Unable to update VPN client {client_id}",
             self.network_client.vpn_clients.update_vpn_client,

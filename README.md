@@ -160,6 +160,8 @@ After setup, open the integration's options flow (**Settings** → **Devices & S
 | WiFi Network        | Enable or disable a WiFi broadcast               |
 | Firewall Rule       | Enable or disable a user-defined firewall policy |
 | Client Allow        | Block or allow a connected network client        |
+| Traffic Route       | Enable or disable a policy-based traffic route   |
+| VPN Client          | Enable or disable a VPN client interface         |
 | Camera Microphone   | Enable or disable the camera microphone          |
 | Camera Privacy Mode | Enable or disable privacy mode                   |
 | Camera Status Light | Enable or disable the status LED                 |
