@@ -10,6 +10,10 @@ import pytest
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
 from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.api.network import UniFiNetworkClient
+from custom_components.unifi_insights.api.network.models import (
+    TrafficRoute,
+    TrafficRouteTargetDevice,
+)
 from custom_components.unifi_insights.api.protect import UniFiProtectClient
 
 
@@ -58,6 +62,107 @@ def test_build_legacy_api_path_remote() -> None:
         == "/v1/connector/consoles/console-id/network/api/s/default/"
         "stat/device/aa:bb:cc"
     )
+
+
+def test_build_legacy_v2_api_path_local() -> None:
+    """Test building legacy v2 API paths for local connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    assert (
+        client.build_legacy_v2_api_path("default", "/trafficroutes")
+        == "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+
+def test_build_legacy_v2_api_path_remote() -> None:
+    """Test building legacy v2 API paths for remote connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        connection_type=ConnectionType.REMOTE,
+        console_id="console-id",
+    )
+
+    assert (
+        client.build_legacy_v2_api_path("default", "trafficroutes")
+        == "/v1/connector/consoles/console-id/network/v2/api/site/default/trafficroutes"
+    )
+
+
+def test_traffic_route_model_parsing() -> None:
+    """Test parsing TrafficRoute and TrafficRouteTargetDevice models."""
+    raw_route = {
+        "_id": "67678b976c1d8157c66f44a2",
+        "description": "Nord Route",
+        "matching_target": "INTERNET",
+        "network_id": "67678b326c1d8157c66f4466",
+        "enabled": True,
+        "kill_switch_enabled": True,
+        "next_hop": "10.8.0.1",
+        "target_devices": [
+            {
+                "type": "NETWORK",
+                "network_id": "67678b326c1d8157c66f4466",
+            },
+            {
+                "type": "CLIENT",
+                "client_mac": "aa:bb:cc:dd:ee:ff",
+            },
+        ],
+        "domains": [{"domain": "example.com", "ports": []}],
+        "ip_addresses": [{"ip": "1.1.1.1"}],
+        "ip_ranges": [{"start": "10.0.0.1", "end": "10.0.0.10"}],
+        "regions": ["US"],
+    }
+    route = TrafficRoute.model_validate(raw_route)
+    assert route.id == "67678b976c1d8157c66f44a2"
+    assert route.name == "Nord Route"
+    assert route.description == "Nord Route"
+    assert route.matching_target == "INTERNET"
+    assert route.network_id == "67678b326c1d8157c66f4466"
+    assert route.enabled is True
+    assert route.kill_switch_enabled is True
+    assert route.next_hop == "10.8.0.1"
+    assert len(route.target_devices) == 2
+    assert isinstance(route.target_devices[0], TrafficRouteTargetDevice)
+    assert route.target_devices[0].type == "NETWORK"
+    assert route.target_devices[0].network_id == "67678b326c1d8157c66f4466"
+    assert route.target_devices[1].type == "CLIENT"
+    assert route.target_devices[1].client_mac == "aa:bb:cc:dd:ee:ff"
+    assert route.domains == [{"domain": "example.com", "ports": []}]
+    assert route.ip_addresses == [{"ip": "1.1.1.1"}]
+    assert route.ip_ranges == [{"start": "10.0.0.1", "end": "10.0.0.10"}]
+    assert route.regions == ["US"]
+
+    # Also test fallback / camelCase / direct name field parsing
+    alt_route = TrafficRoute.model_validate(
+        {
+            "id": "route-2",
+            "name": "Alternative Route",
+            "matchingTarget": "DOMAIN",
+            "networkId": "net-2",
+            "killSwitchEnabled": False,
+            "targetDevices": [
+                {
+                    "type": "DEVICE",
+                    "deviceMac": "11:22:33:44:55:66",
+                    "ipAddress": "192.168.1.50",
+                }
+            ],
+        }
+    )
+    assert alt_route.id == "route-2"
+    assert alt_route.name == "Alternative Route"
+    assert alt_route.description == "Alternative Route"
+    assert alt_route.matching_target == "DOMAIN"
+    assert alt_route.network_id == "net-2"
+    assert alt_route.kill_switch_enabled is False
+    assert len(alt_route.target_devices) == 1
+    assert alt_route.target_devices[0].device_mac == "11:22:33:44:55:66"
+    assert alt_route.target_devices[0].ip_address == "192.168.1.50"
 
 
 def test_build_api_path_remote_requires_console_id() -> None:
