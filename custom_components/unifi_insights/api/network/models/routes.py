@@ -53,16 +53,16 @@ class TrafficRoute(BaseModel):
         alias="targetDevices",
         description="Target devices/networks the route applies to",
     )
-    domains: list[dict[str, Any]] | list[Any] = Field(
+    domains: list[Any] = Field(
         default_factory=list,
         description="List of domains with ports (used with matching_target: DOMAIN)",
     )
-    ip_addresses: list[dict[str, Any]] | list[Any] = Field(
+    ip_addresses: list[Any] = Field(
         default_factory=list,
         alias="ipAddresses",
         description="List of IPs/subnets with ports (used with matching_target: IP)",
     )
-    ip_ranges: list[dict[str, Any]] | list[Any] = Field(
+    ip_ranges: list[Any] = Field(
         default_factory=list,
         alias="ipRanges",
         description="List of IP ranges (used with matching_target: IP)",

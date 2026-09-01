@@ -356,7 +356,12 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                         "Config coordinator: Fetching policy-based routes for site %s",
                         site_id,
                     )
-                    legacy_site_name = legacy_site_names.get(site_id) or site_id
+                    # Traffic routes live on the classic v2 API, which is scoped
+                    # by site *name* rather than the integration site UUID. Fall
+                    # back to "default" (the standard single-site name) so reads
+                    # target the same site the write path uses when the legacy
+                    # mapping has not resolved.
+                    legacy_site_name = legacy_site_names.get(site_id) or "default"
                     raw_routes = await self.network_client.routes.list_routes(
                         legacy_site_name
                     )

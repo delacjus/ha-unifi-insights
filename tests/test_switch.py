@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.exceptions import HomeAssistantError
@@ -2286,6 +2287,92 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert (
             mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
             is False
+        )
+
+    def test_extra_state_attributes_include_route_id(self, mock_coordinator) -> None:
+        """Test route_id is exposed for parity with the firewall rule switch."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        assert switch.extra_state_attributes["route_id"] == "route1"
+
+    @pytest.mark.asyncio
+    async def test_turn_off_warns_when_kill_switch_enabled(
+        self, mock_coordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test disabling a kill-switch route warns about blackholed traffic."""
+        caplog.set_level(
+            logging.WARNING, logger="custom_components.unifi_insights.switch"
+        )
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        assert any(
+            record.levelno == logging.WARNING
+            and "kill switch is still enabled" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_kill_switch_warning_when_disabled_or_turning_on(
+        self, mock_coordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test no kill-switch warning when enabling, or when it is not set."""
+        caplog.set_level(
+            logging.WARNING, logger="custom_components.unifi_insights.switch"
+        )
+        route = mock_coordinator.data["policy_based_routes"]["site1"]["route1"]
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        # Enabling a kill-switch route is safe.
+        await switch.async_turn_on()
+
+        # Disabling a route without a kill switch is safe.
+        route["kill_switch_enabled"] = False
+        await switch.async_turn_off()
+
+        assert not [
+            record for record in caplog.records if record.levelno == logging.WARNING
+        ]
+
+    @pytest.mark.asyncio
+    async def test_turn_off_falls_back_to_client_with_legacy_site_name(
+        self, mock_coordinator
+    ) -> None:
+        """Test the direct-client fallback resolves the classic site name.
+
+        Traffic routes are scoped by site *name* on the classic v2 API, so the
+        fallback must not pass the integration site ID through.
+        """
+        del mock_coordinator.async_set_policy_based_route_enabled
+        mock_coordinator.resolve_legacy_site_name = MagicMock(return_value="branch")
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        mock_coordinator.resolve_legacy_site_name.assert_called_once_with("site1")
+        mock_coordinator.network_client.routes.update_route.assert_awaited_once_with(
+            "branch", "route1", enabled=False
         )
 
     def test_name_fallbacks(self, mock_coordinator) -> None:

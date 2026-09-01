@@ -53,6 +53,59 @@ def _device_has_feature(device_data: dict[str, Any], *features_to_match: str) ->
     return False
 
 
+def _find_site_gateway_device_id(
+    coordinator: UnifiFacadeCoordinator, site_id: str
+) -> str | None:
+    """Return the gateway-like device ID for a site if one exists."""
+    site_devices = coordinator.data.get("devices", {}).get(site_id, {})
+    if not isinstance(site_devices, dict):
+        return None
+
+    for device_id, device_data in site_devices.items():
+        if not isinstance(device_data, dict):
+            continue
+
+        model = str(device_data.get("model", "")).upper()
+        if _device_has_feature(device_data, "gateway", "router") or model.startswith(
+            ("UDM", "USG", "UXG", "UCG")
+        ):
+            return str(device_id)
+
+    return None
+
+
+def _build_gateway_scoped_device_info(
+    coordinator: UnifiFacadeCoordinator,
+    site_id: str,
+    *,
+    group_key: str,
+    group_name: str,
+    group_model: str,
+) -> DeviceInfo:
+    """
+    Build device info for a site-wide gateway feature.
+
+    Attaches to the site gateway when one is known, so the entities appear on
+    the real device. Falls back to a virtual per-site device otherwise.
+    """
+    gateway_device_id = _find_site_gateway_device_id(coordinator, site_id)
+    if gateway_device_id is not None:
+        return DeviceInfo(identifiers={(DOMAIN, f"{site_id}_{gateway_device_id}")})
+
+    site_data = coordinator.data.get("sites", {}).get(site_id, {})
+    meta = site_data.get("meta", {})
+    site_name = (meta.get("name") if isinstance(meta, dict) else None) or site_data.get(
+        "name", site_id
+    )
+
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{group_key}_{site_id}")},
+        name=f"{group_name} ({site_name})",
+        manufacturer=MANUFACTURER,
+        model=group_model,
+    )
+
+
 def _get_firewall_rule_action(rule_data: dict[str, Any]) -> str | None:
     """Return the firewall rule action regardless of payload shape."""
     action = rule_data.get("action")
@@ -285,43 +338,14 @@ class UnifiFirewallRuleSwitch(
         )
         return result
 
-    def _find_gateway_device_id(self) -> str | None:
-        """Return the gateway-like device ID for the site if one exists."""
-        site_devices = self.coordinator.data.get("devices", {}).get(self._site_id, {})
-        if not isinstance(site_devices, dict):
-            return None
-
-        for device_id, device_data in site_devices.items():
-            if not isinstance(device_data, dict):
-                continue
-
-            model = str(device_data.get("model", "")).upper()
-            if _device_has_feature(
-                device_data, "gateway", "router"
-            ) or model.startswith(("UDM", "USG", "UXG", "UCG")):
-                return str(device_id)
-
-        return None
-
     def _build_device_info(self) -> DeviceInfo:
         """Build device info for firewall rule grouping."""
-        gateway_device_id = self._find_gateway_device_id()
-        if gateway_device_id is not None:
-            return DeviceInfo(
-                identifiers={(DOMAIN, f"{self._site_id}_{gateway_device_id}")}
-            )
-
-        site_data = self.coordinator.data.get("sites", {}).get(self._site_id, {})
-        meta = site_data.get("meta", {})
-        site_name = (
-            meta.get("name") if isinstance(meta, dict) else None
-        ) or site_data.get("name", self._site_id)
-
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"firewall_policies_{self._site_id}")},
-            name=f"Firewall Policies ({site_name})",
-            manufacturer=MANUFACTURER,
-            model="UniFi Firewall Policies",
+        return _build_gateway_scoped_device_info(
+            self.coordinator,
+            self._site_id,
+            group_key="firewall_policies",
+            group_name="Firewall Policies",
+            group_model="UniFi Firewall Policies",
         )
 
     def _update_local_state(self, *, enabled: bool) -> None:
@@ -439,43 +463,14 @@ class UnifiPolicyBasedRouteSwitch(
         )
         return result
 
-    def _find_gateway_device_id(self) -> str | None:
-        """Return the gateway-like device ID for the site if one exists."""
-        site_devices = self.coordinator.data.get("devices", {}).get(self._site_id, {})
-        if not isinstance(site_devices, dict):
-            return None
-
-        for device_id, device_data in site_devices.items():
-            if not isinstance(device_data, dict):
-                continue
-
-            model = str(device_data.get("model", "")).upper()
-            if _device_has_feature(
-                device_data, "gateway", "router"
-            ) or model.startswith(("UDM", "USG", "UXG", "UCG")):
-                return str(device_id)
-
-        return None
-
     def _build_device_info(self) -> DeviceInfo:
         """Build device info for policy-based route grouping."""
-        gateway_device_id = self._find_gateway_device_id()
-        if gateway_device_id is not None:
-            return DeviceInfo(
-                identifiers={(DOMAIN, f"{self._site_id}_{gateway_device_id}")}
-            )
-
-        site_data = self.coordinator.data.get("sites", {}).get(self._site_id, {})
-        meta = site_data.get("meta", {})
-        site_name = (
-            meta.get("name") if isinstance(meta, dict) else None
-        ) or site_data.get("name", self._site_id)
-
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"policy_based_routes_{self._site_id}")},
-            name=f"Policy-Based Routes ({site_name})",
-            manufacturer=MANUFACTURER,
-            model="UniFi Policy-Based Routes",
+        return _build_gateway_scoped_device_info(
+            self.coordinator,
+            self._site_id,
+            group_key="policy_based_routes",
+            group_name="Policy-Based Routes",
+            group_model="UniFi Policy-Based Routes",
         )
 
     def _update_local_state(self, *, enabled: bool) -> None:
@@ -503,12 +498,18 @@ class UnifiPolicyBasedRouteSwitch(
         return "mdi:routes" if self.is_on else "mdi:routes-clock"
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return policy-based route metadata useful in automations and debugging."""
+    def kill_switch_enabled(self) -> bool:
+        """Return True when the route's kill switch is active."""
         route_data = self._get_route_data()
         kill_switch = route_data.get("kill_switch_enabled")
         if kill_switch is None:
             kill_switch = route_data.get("killSwitchEnabled", False)
+        return bool(kill_switch)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return policy-based route metadata useful in automations and debugging."""
+        route_data = self._get_route_data()
 
         target_devices = route_data.get("target_devices")
         if target_devices is None:
@@ -523,8 +524,9 @@ class UnifiPolicyBasedRouteSwitch(
             ip_ranges = route_data.get("ipRanges", [])
 
         return {
+            "route_id": self._route_id,
             "description": route_data.get("description"),
-            "kill_switch_enabled": bool(kill_switch),
+            "kill_switch_enabled": self.kill_switch_enabled,
             "matching_target": route_data.get("matching_target")
             or route_data.get("matchingTarget"),
             "network_id": route_data.get("network_id") or route_data.get("networkId"),
@@ -546,6 +548,17 @@ class UnifiPolicyBasedRouteSwitch(
             self._site_id,
         )
 
+        if not enabled and self.kill_switch_enabled:
+            # The kill switch is a separate controller setting that keeps
+            # dropping the route's traffic after the route itself is disabled,
+            # which silently blackholes the matched clients.
+            _LOGGER.warning(
+                "Policy-based route %s is being disabled while its kill switch "
+                "is still enabled; matched traffic will be blocked rather than "
+                "fall back to the default route",
+                self._attr_name or self._route_id,
+            )
+
         await async_call_coordinator_action(
             self.coordinator,
             "async_set_policy_based_route_enabled",
@@ -555,9 +568,7 @@ class UnifiPolicyBasedRouteSwitch(
             enabled=enabled,
             fallback_factory=lambda: (
                 self.coordinator.network_client.routes.update_route(
-                    self.coordinator._resolve_legacy_site_name(self._site_id)
-                    if hasattr(self.coordinator, "_resolve_legacy_site_name")
-                    else self._site_id,
+                    self.coordinator.resolve_legacy_site_name(self._site_id),
                     self._route_id,
                     enabled=enabled,
                 )

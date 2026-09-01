@@ -322,7 +322,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a policy-based traffic route."""
-        legacy_site_name = self._resolve_legacy_site_name(site_id)
+        legacy_site_name = self.resolve_legacy_site_name(site_id)
         if not legacy_site_name or not self.network_client:
             msg = "UniFi Network client is not available"
             raise HomeAssistantError(msg)
@@ -353,8 +353,13 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Update camera settings (alias for async_update_camera)."""
         await self.async_update_camera(camera_id, **kwargs)
 
-    def _resolve_legacy_site_name(self, site_id: str) -> str:
-        """Resolve classic site name for a site ID."""
+    def resolve_legacy_site_name(self, site_id: str) -> str:
+        """
+        Resolve the classic ("legacy") site name for an integration site ID.
+
+        Falls back to ``default`` (the standard single-site name) when the
+        legacy site mapping has not been resolved yet.
+        """
         return self._device_coordinator.get_legacy_site_name(site_id) or "default"
 
     def _resolve_client_action_target(
@@ -381,7 +386,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Fall back to "default" (the standard single-site name) when the
         # legacy site mapping has not been resolved yet.
-        site_name = self._resolve_legacy_site_name(site_id)
+        site_name = self.resolve_legacy_site_name(site_id)
         return site_name, mac
 
     async def async_unblock_client(self, site_id: str, client_id: str) -> None:

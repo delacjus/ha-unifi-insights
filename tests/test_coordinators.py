@@ -767,6 +767,31 @@ class TestUnifiConfigCoordinator:
         assert coordinator.get_policy_based_routes("nonexistent") == {}
 
     @pytest.mark.asyncio
+    async def test_config_coordinator_routes_default_site_name_fallback(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test routes fall back to the "default" site name, not the site UUID.
+
+        Traffic routes live on the classic v2 API, which is scoped by site
+        *name*. When the legacy mapping cannot be resolved the read path must
+        fall back to the same name the write path uses (``default``), otherwise
+        reads query a site UUID that the classic API does not know about.
+        """
+        coordinator.network_client.sites.get_legacy_all = AsyncMock(
+            side_effect=Exception("legacy sites unavailable")
+        )
+        coordinator.network_client.routes.list_routes = AsyncMock(return_value=[])
+
+        await coordinator._async_update_data()
+
+        called_site_names = {
+            call.args[0]
+            for call in coordinator.network_client.routes.list_routes.call_args_list
+        }
+        assert called_site_names == {"default"}
+        assert "site2" not in called_site_names
+
+    @pytest.mark.asyncio
     async def test_config_coordinator_policy_based_routes_graceful_error(
         self, coordinator: UnifiConfigCoordinator, caplog: pytest.LogCaptureFixture
     ):
@@ -2511,7 +2536,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback (see `async_start_websocket`)
         updates only the devices stream's health entry.
         """
-        coordinator._on_devices_connection_state_change(True)
+        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
 
         assert coordinator.websocket_health["devices"]["connected"] is True
         assert coordinator.websocket_health["events"]["connected"] is False
@@ -2523,7 +2548,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback updates only the events
         stream's health entry.
         """
-        coordinator._on_events_connection_state_change(True)
+        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
 
         assert coordinator.websocket_health["events"]["connected"] is True
         assert coordinator.websocket_health["devices"]["connected"] is False

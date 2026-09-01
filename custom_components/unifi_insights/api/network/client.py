@@ -13,6 +13,7 @@ from ..const import (
     NETWORK_API_BASE_URL,
     NETWORK_INTEGRATION_PATH,
     NETWORK_LEGACY_PATH,
+    NETWORK_LEGACY_V2_PATH,
     ConnectionType,
 )
 from .endpoints import (
@@ -226,6 +227,10 @@ class UniFiNetworkClient(BaseUniFiClient):
         Returns:
             Full legacy v2 API path with the proper prefix for the connection type.
 
+        Raises:
+            ValueError: If ``site_name`` is empty, or a REMOTE connection has no
+                console ID configured.
+
         """
         if not site_name:
             raise ValueError("site_name is required")
@@ -234,13 +239,15 @@ class UniFiNetworkClient(BaseUniFiClient):
             endpoint = f"/{endpoint}"
 
         if self._connection_type == ConnectionType.LOCAL:
-            return f"/proxy/network/v2/api/site/{site_name}{endpoint}"
+            return f"{NETWORK_LEGACY_V2_PATH}/site/{site_name}{endpoint}"
 
         console_id = self._require_console_id()
 
+        # The connector adds /proxy/ when forwarding to the console, so strip it.
+        connector_path = NETWORK_LEGACY_V2_PATH.removeprefix("/proxy")
         return (
             f"/v1/connector/consoles/{console_id}"
-            f"/network/v2/api/site/{site_name}{endpoint}"
+            f"{connector_path}/site/{site_name}{endpoint}"
         )
 
     def build_legacy_global_api_path(self, endpoint: str) -> str:
