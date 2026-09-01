@@ -24,6 +24,7 @@ from custom_components.unifi_insights.switch import (
     PARALLEL_UPDATES,
     UnifiClientBlockSwitch,
     UnifiFirewallRuleSwitch,
+    UnifiPolicyBasedRouteSwitch,
     UnifiProtectHighFPSSwitch,
     UnifiProtectMicrophoneSwitch,
     UnifiProtectPrivacySwitch,
@@ -2086,3 +2087,430 @@ class TestUnifiWifiSwitchEdgeCases:
 
         wifi_data = switch._get_wifi_data()
         assert wifi_data == initial_wifi_data
+
+
+class TestUnifiPolicyBasedRouteSwitch:
+    """Tests for UnifiPolicyBasedRouteSwitch entity."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with policy-based routes."""
+        coordinator = MagicMock()
+        coordinator.last_update_success = True
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.routes = MagicMock()
+        coordinator.network_client.routes.update_route = AsyncMock()
+        coordinator.async_set_policy_based_route_enabled = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {
+                "site1": {
+                    "gateway1": {
+                        "id": "gateway1",
+                        "name": "Main Gateway",
+                        "model": "UCG-Max",
+                        "features": ["gateway"],
+                        "state": "ONLINE",
+                    }
+                }
+            },
+            "clients": {},
+            "stats": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {
+                "site1": {
+                    "route1": {
+                        "id": "route1",
+                        "name": "Route to VPN",
+                        "description": "Route traffic to VPN",
+                        "enabled": True,
+                        "matching_target": "DOMAIN",
+                        "network_id": "net1",
+                        "target_devices": [
+                            {"type": "CLIENT", "client_mac": "AA:BB:CC:DD:EE:FF"}
+                        ],
+                        "domains": [{"domain": "example.com", "port": 443}],
+                        "ip_addresses": [{"ip": "1.1.1.1", "port": 53}],
+                        "ip_ranges": [{"start": "10.0.0.1", "end": "10.0.0.10"}],
+                        "regions": ["US"],
+                        "kill_switch_enabled": True,
+                        "next_hop": "192.168.1.1",
+                    }
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    def test_policy_based_route_switch_properties(self, mock_coordinator) -> None:
+        """Test policy-based route switch properties and attributes."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+
+        assert switch.unique_id == "site1_route1_policy_based_route"
+        assert switch.name == "Route to VPN"
+        assert switch.is_on is True
+        assert switch.icon == "mdi:routes"
+        assert switch.available is True
+        assert switch.entity_category == EntityCategory.CONFIG
+        assert switch.device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
+
+        # Test extra_state_attributes
+        attrs = switch.extra_state_attributes
+        assert attrs["description"] == "Route traffic to VPN"
+        assert attrs["kill_switch_enabled"] is True
+        assert attrs["matching_target"] == "DOMAIN"
+        assert attrs["network_id"] == "net1"
+        assert attrs["target_devices"] == [
+            {"type": "CLIENT", "client_mac": "AA:BB:CC:DD:EE:FF"}
+        ]
+        assert attrs["domains"] == [{"domain": "example.com", "port": 443}]
+        assert attrs["ip_addresses"] == [{"ip": "1.1.1.1", "port": 53}]
+        assert attrs["ip_ranges"] == [{"start": "10.0.0.1", "end": "10.0.0.10"}]
+        assert attrs["regions"] == ["US"]
+        assert attrs["next_hop"] == "192.168.1.1"
+
+        # Test is_on and icon when disabled
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        assert switch.is_on is False
+        assert switch.icon == "mdi:routes-clock"
+
+        # Test device info fallback when gateway is not present
+        mock_coordinator.data["devices"]["site1"] = {}
+        switch_fallback = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch_fallback.device_info["identifiers"] == {
+            (DOMAIN, "policy_based_routes_site1")
+        }
+        assert switch_fallback.device_info["name"] == "Policy-Based Routes (Default)"
+
+        # Test available property when route is removed
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"] = {}
+        assert switch.available is False
+
+        # Test available property when coordinator last_update_success is False
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"] = {
+            "id": "route1",
+            "enabled": True,
+        }
+        mock_coordinator.last_update_success = False
+        assert switch.available is False
+
+    @pytest.mark.asyncio
+    async def test_policy_based_route_switch_turn_on_turn_off(
+        self, mock_coordinator
+    ) -> None:
+        """Test policy-based route switch turn_on and turn_off actions."""
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        # Turn ON
+        await switch.async_turn_on()
+        mock_coordinator.async_set_policy_based_route_enabled.assert_called_once_with(
+            "site1", "route1", enabled=True
+        )
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is True
+        )
+        assert switch.is_on is True
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+        # Reset mocks for Turn OFF
+        mock_coordinator.async_set_policy_based_route_enabled.reset_mock()
+        switch.async_write_ha_state.reset_mock()
+        mock_coordinator.async_request_refresh.reset_mock()
+
+        # Turn OFF
+        await switch.async_turn_off()
+        mock_coordinator.async_set_policy_based_route_enabled.assert_called_once_with(
+            "site1", "route1", enabled=False
+        )
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is False
+        )
+        assert switch.is_on is False
+        switch.async_write_ha_state.assert_called_once()
+        mock_coordinator.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_turn_on_error_does_not_write_state(self, mock_coordinator) -> None:
+        """Test route update failures do not write optimistic state."""
+        mock_coordinator.async_set_policy_based_route_enabled.side_effect = Exception(
+            "API error"
+        )
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        with pytest.raises(
+            HomeAssistantError, match="Unable to update policy-based route"
+        ):
+            await switch.async_turn_on()
+
+        switch.async_write_ha_state.assert_not_called()
+        assert (
+            mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"]
+            is False
+        )
+
+    def test_name_fallbacks(self, mock_coordinator) -> None:
+        """Test route name fallbacks to description and route_id."""
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"] = {
+            "description": "Fallback Description",
+            "enabled": True,
+        }
+        switch_desc = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch_desc.name == "Fallback Description"
+
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"] = {
+            "enabled": True,
+        }
+        switch_id = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch_id.name == "route1"
+
+    def test_camel_case_attributes(self, mock_coordinator) -> None:
+        """Test attributes handling camelCase fields from controller."""
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"] = {
+            "description": "Route CamelCase",
+            "killSwitchEnabled": True,
+            "matchingTarget": "IP",
+            "networkId": "net_camel",
+            "targetDevices": [{"type": "NETWORK", "networkId": "net_camel"}],
+            "domains": [],
+            "ipAddresses": [{"ip": "8.8.8.8"}],
+            "ipRanges": [{"start": "1.1.1.1", "end": "1.1.1.2"}],
+            "regions": ["CA"],
+            "nextHop": "10.0.0.1",
+            "enabled": True,
+        }
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        attrs = switch.extra_state_attributes
+        assert attrs["kill_switch_enabled"] is True
+        assert attrs["matching_target"] == "IP"
+        assert attrs["network_id"] == "net_camel"
+        assert attrs["target_devices"] == [
+            {"type": "NETWORK", "networkId": "net_camel"}
+        ]
+        assert attrs["ip_addresses"] == [{"ip": "8.8.8.8"}]
+        assert attrs["ip_ranges"] == [{"start": "1.1.1.1", "end": "1.1.1.2"}]
+        assert attrs["regions"] == ["CA"]
+        assert attrs["next_hop"] == "10.0.0.1"
+
+
+class TestAsyncSetupEntryPolicyBasedRoutes:
+    """Tests policy-based route discovery in switch platform setup."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator."""
+        coordinator = MagicMock()
+        coordinator.protect_client = None
+        coordinator.network_client = MagicMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {},
+            "clients": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {
+                "site1": {
+                    "route1": {
+                        "id": "route1",
+                        "name": "Route 1",
+                        "enabled": True,
+                    },
+                    "route2": {
+                        "id": "route2",
+                        "name": "Route 2",
+                        "enabled": False,
+                    },
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_creates_policy_based_route_switches(
+        self, hass, mock_coordinator
+    ) -> None:
+        """Test async_setup_entry discovers policy-based routes and creates switches."""
+        mock_entry = MagicMock()
+        mock_entry.entry_id = "test_entry"
+        mock_entry.options = {}
+        mock_entry.runtime_data = MagicMock()
+        mock_entry.runtime_data.coordinator = mock_coordinator
+
+        async_add_entities = MagicMock()
+        await async_setup_entry(hass, mock_entry, async_add_entities)
+
+        async_add_entities.assert_called_once()
+        entities = async_add_entities.call_args[0][0]
+        pbr_switches = [
+            e for e in entities if isinstance(e, UnifiPolicyBasedRouteSwitch)
+        ]
+        assert len(pbr_switches) == 2
+        assert {s._route_id for s in pbr_switches} == {"route1", "route2"}
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_skips_invalid_route_data(
+        self, hass, mock_coordinator
+    ) -> None:
+        """Test async_setup_entry skips malformed route payloads."""
+        mock_entry = MagicMock()
+        mock_entry.entry_id = "test_entry"
+        mock_entry.options = {}
+        mock_entry.runtime_data = MagicMock()
+        mock_entry.runtime_data.coordinator = mock_coordinator
+
+        mock_coordinator.data["policy_based_routes"] = {
+            "site1": "not-a-dict",
+            "site2": {
+                "route1": "not-a-dict",
+                "route2": {
+                    "id": "route2",
+                    "name": "Route 2",
+                    "enabled": True,
+                },
+            },
+        }
+
+        async_add_entities = MagicMock()
+        await async_setup_entry(hass, mock_entry, async_add_entities)
+
+        entities = async_add_entities.call_args[0][0]
+        pbr_switches = [
+            e for e in entities if isinstance(e, UnifiPolicyBasedRouteSwitch)
+        ]
+        assert len(pbr_switches) == 1
+        assert pbr_switches[0]._route_id == "route2"
+
+
+class TestUnifiPolicyBasedRouteSwitchEdgeCases:
+    """Edge cases for UnifiPolicyBasedRouteSwitch."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator."""
+        coordinator = MagicMock()
+        coordinator.last_update_success = True
+        coordinator.network_client = MagicMock()
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {},
+            "clients": {},
+            "wifi": {},
+            "firewall_rules": {},
+            "policy_based_routes": {
+                "site1": {
+                    "route1": {
+                        "id": "route1",
+                        "enabled": True,
+                    }
+                }
+            },
+            "protect": {
+                "cameras": {},
+                "lights": {},
+                "sensors": {},
+                "nvrs": {},
+                "viewers": {},
+                "chimes": {},
+                "liveviews": {},
+            },
+        }
+        return coordinator
+
+    def test_find_gateway_device_id_branches(self, mock_coordinator) -> None:
+        """Test gateway lookup when site devices structure is abnormal."""
+        # Non-dict site devices
+        mock_coordinator.data["devices"] = {"site1": "not-a-dict"}
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch.device_info["identifiers"] == {
+            (DOMAIN, "policy_based_routes_site1")
+        }
+
+        # Non-dict device entry and non-gateway device
+        mock_coordinator.data["devices"] = {
+            "site1": {
+                "dev1": "not-a-dict",
+                "dev2": {"id": "dev2", "model": "USW-24-POE"},
+            }
+        }
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="route1",
+        )
+        assert switch.device_info["identifiers"] == {
+            (DOMAIN, "policy_based_routes_site1")
+        }
+
+    def test_update_local_state_missing_route(self, mock_coordinator) -> None:
+        """Test update local state when route is not found in data."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="missing_route",
+        )
+        # Should not raise
+        switch._update_local_state(enabled=False)
