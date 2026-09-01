@@ -323,10 +323,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a policy-based route (traffic route)."""
-        site_name = self._device_coordinator.get_legacy_site_name(site_id)
-        if not site_name:
-            msg = f"Unable to determine site for policy-based route {route_id}"
-            raise HomeAssistantError(msg)
+        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
         await self._async_execute_api_action(
             f"Unable to update policy-based route {route_id}",
             self.network_client.routes.update_route,
@@ -343,10 +340,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a VPN client configuration."""
-        site_name = self._device_coordinator.get_legacy_site_name(site_id)
-        if not site_name:
-            msg = f"Unable to determine site for VPN client {client_id}"
-            raise HomeAssistantError(msg)
+        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
         await self._async_execute_api_action(
             f"Unable to update VPN client {client_id}",
             self.network_client.vpn_clients.update_vpn_client,

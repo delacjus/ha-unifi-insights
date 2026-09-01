@@ -1115,6 +1115,10 @@ class TestUnifiPolicyBasedRouteSwitch:
             route_id="route1",
         )
         assert switch.icon == "mdi:vpn"
+        mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
+            False
+        )
+        assert switch.icon == "mdi:vpn-off"
 
         # Non-VPN route
         switch2 = UnifiPolicyBasedRouteSwitch(
@@ -1368,6 +1372,21 @@ class TestUnifiVpnClientSwitch:
         assert switch._attr_entity_category == EntityCategory.CONFIG
         assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
 
+    def test_available(self, mock_coordinator: MagicMock) -> None:
+        """Test switch availability depends on coordinator and data."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="vpn1",
+        )
+        assert switch.available is True
+        mock_coordinator.last_update_success = False
+        assert switch.available is False
+
+        mock_coordinator.last_update_success = True
+        mock_coordinator.data["vpn_clients"]["site1"] = {}
+        assert switch.available is False
+
     def test_is_on(self, mock_coordinator: MagicMock) -> None:
         """Test switch state mirrors VPN client enabled state."""
         switch = UnifiVpnClientSwitch(
@@ -1423,9 +1442,8 @@ class TestUnifiVpnClientSwitch:
 
         await switch.async_turn_on()
 
-        mock_coordinator.network_client.vpn_clients.update_vpn_client.assert_called_once_with(
-            "default", "vpn1", enabled=True
-        )
+        mock_update = mock_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
         assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is True
         switch.async_write_ha_state.assert_called_once()
         mock_coordinator.async_request_refresh.assert_called_once()
@@ -1444,9 +1462,8 @@ class TestUnifiVpnClientSwitch:
 
         await switch.async_turn_off()
 
-        mock_coordinator.network_client.vpn_clients.update_vpn_client.assert_called_once_with(
-            "default", "vpn1", enabled=False
-        )
+        mock_update = mock_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=False)
         assert mock_coordinator.data["vpn_clients"]["site1"]["vpn1"]["enabled"] is False
         switch.async_write_ha_state.assert_called_once()
         mock_coordinator.async_request_refresh.assert_called_once()

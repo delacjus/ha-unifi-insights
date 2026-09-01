@@ -990,7 +990,7 @@ async def test_handle_response_valid_json_returns_data() -> None:
 def test_policy_based_route_model() -> None:
     """Test PolicyBasedRoute model validation and display name."""
     # Test with _id alias
-    route = PolicyBasedRoute.model_validate(
+    route: PolicyBasedRoute = PolicyBasedRoute.model_validate(
         {
             "_id": "route123",
             "description": "Route via VPN",
@@ -1019,21 +1019,23 @@ def test_policy_based_route_model() -> None:
     assert route.display_name == "Route via VPN"
 
     # Test display name fallbacks
-    route2 = PolicyBasedRoute.model_validate({"_id": "r2", "name": "Named Route"})
+    route2: PolicyBasedRoute = PolicyBasedRoute.model_validate(
+        {"_id": "r2", "name": "Named Route"}
+    )
     assert route2.display_name == "Named Route"
 
-    route3 = PolicyBasedRoute.model_validate(
+    route3: PolicyBasedRoute = PolicyBasedRoute.model_validate(
         {"_id": "r3", "matchingTarget": "INTERNET", "interface": "WAN2"}
     )
     assert route3.display_name == "Route INTERNET to WAN2"
 
-    route4 = PolicyBasedRoute.model_validate({"_id": "r4"})
+    route4: PolicyBasedRoute = PolicyBasedRoute.model_validate({"_id": "r4"})
     assert route4.display_name == "Route r4"
 
 
 async def test_routes_endpoint_list_routes() -> None:
     """Test listing policy-based routes."""
-    client = UniFiNetworkClient(
+    client: UniFiNetworkClient = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
@@ -1045,7 +1047,7 @@ async def test_routes_endpoint_list_routes() -> None:
         ]
     )
 
-    routes = await client.routes.list_routes("default")
+    routes: list[PolicyBasedRoute] = await client.routes.list_routes("default")
     assert len(routes) == 2
     assert routes[0].id == "route1"
     assert routes[0].enabled is True
@@ -1168,7 +1170,7 @@ async def test_routes_endpoint_soft_error_raises() -> None:
 
 def test_vpn_client_model() -> None:
     """Test VpnClient model validation and fields."""
-    client = VpnClient.model_validate(
+    client: VpnClient = VpnClient.model_validate(
         {
             "_id": "vpn1",
             "name": "Privado VPN",
@@ -1192,7 +1194,7 @@ def test_vpn_client_model() -> None:
 
 async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
     """Test listing VPN client configurations."""
-    client = UniFiNetworkClient(
+    client: UniFiNetworkClient = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
@@ -1218,7 +1220,7 @@ async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
         }
     )
 
-    clients = await client.vpn_clients.list_vpn_clients("default")
+    clients: list[VpnClient] = await client.vpn_clients.list_vpn_clients("default")
     assert len(clients) == 1
     assert clients[0].id == "vpn1"
     assert clients[0].name == "Privado VPN"
@@ -1230,7 +1232,7 @@ async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
 
 async def test_vpn_clients_endpoint_get_vpn_client() -> None:
     """Test getting a specific VPN client configuration."""
-    client = UniFiNetworkClient(
+    client: UniFiNetworkClient = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
@@ -1249,7 +1251,7 @@ async def test_vpn_clients_endpoint_get_vpn_client() -> None:
         }
     )
 
-    vpn_client = await client.vpn_clients.get_vpn_client("default", "vpn1")
+    vpn_client: VpnClient = await client.vpn_clients.get_vpn_client("default", "vpn1")
     assert vpn_client.id == "vpn1"
     assert vpn_client.name == "Privado VPN"
 
@@ -1261,7 +1263,7 @@ async def test_vpn_clients_endpoint_get_vpn_client() -> None:
 
 async def test_vpn_clients_endpoint_update_vpn_client() -> None:
     """Test updating a VPN client configuration via PUT."""
-    client = UniFiNetworkClient(
+    client: UniFiNetworkClient = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
@@ -1293,7 +1295,7 @@ async def test_vpn_clients_endpoint_update_vpn_client() -> None:
         }
     )
 
-    updated = await client.vpn_clients.update_vpn_client(
+    updated: VpnClient = await client.vpn_clients.update_vpn_client(
         "default", "vpn1", enabled=False
     )
     assert updated.id == "vpn1"
@@ -1311,7 +1313,7 @@ async def test_vpn_clients_endpoint_update_vpn_client() -> None:
 
 async def test_vpn_clients_endpoint_update_not_found_raises() -> None:
     """Test updating a missing VPN client raises ValueError."""
-    client = UniFiNetworkClient(
+    client: UniFiNetworkClient = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,

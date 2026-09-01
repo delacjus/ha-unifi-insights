@@ -74,6 +74,38 @@ def _is_predefined_firewall_rule(rule_data: dict[str, Any]) -> bool:
     )
 
 
+def _find_gateway_device_id(
+    coordinator: UnifiFacadeCoordinator, site_id: str
+) -> str | None:
+    """Return the gateway-like device ID for the site if one exists."""
+    site_devices = coordinator.data.get("devices", {}).get(site_id, {})
+    if not isinstance(site_devices, dict):
+        return None
+
+    for device_id, device_data in site_devices.items():
+        if not isinstance(device_data, dict):
+            continue
+
+        model = str(device_data.get("model", "")).upper()
+        if _device_has_feature(device_data, "gateway", "router") or model.startswith(
+            ("UDM", "USG", "UXG", "UCG", "GATEWAY")
+        ):
+            return str(device_id)
+
+    return None
+
+
+def _resolve_site_name(coordinator: UnifiFacadeCoordinator, site_id: str) -> str:
+    """Resolve human-readable site name from coordinator data."""
+    site_data = coordinator.data.get("sites", {}).get(site_id, {})
+    meta = site_data.get("meta", {})
+    return str(
+        (meta.get("name") if isinstance(meta, dict) else None)
+        or site_data.get("name")
+        or site_id
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: UnifiInsightsConfigEntry,
@@ -237,7 +269,7 @@ async def async_setup_entry(
                 route_name,
             )
             entities.append(
-                UnifiPolicyBasedRouteSwitch(
+                UnifiInsightsPolicyBasedRouteSwitch(
                     coordinator=coordinator,
                     site_id=site_id,
                     route_id=route_id,
@@ -256,7 +288,7 @@ async def async_setup_entry(
                 client_name,
             )
             entities.append(
-                UnifiVpnClientSwitch(
+                UnifiInsightsVpnClientSwitch(
                     coordinator=coordinator,
                     site_id=site_id,
                     client_id=client_id,
@@ -302,38 +334,15 @@ class UnifiFirewallRuleSwitch(
         )
         return result
 
-    def _find_gateway_device_id(self) -> str | None:
-        """Return the gateway-like device ID for the site if one exists."""
-        site_devices = self.coordinator.data.get("devices", {}).get(self._site_id, {})
-        if not isinstance(site_devices, dict):
-            return None
-
-        for device_id, device_data in site_devices.items():
-            if not isinstance(device_data, dict):
-                continue
-
-            model = str(device_data.get("model", "")).upper()
-            if _device_has_feature(
-                device_data, "gateway", "router"
-            ) or model.startswith(("UDM", "USG", "UXG", "UCG")):
-                return str(device_id)
-
-        return None
-
     def _build_device_info(self) -> DeviceInfo:
         """Build device info for firewall rule grouping."""
-        gateway_device_id = self._find_gateway_device_id()
+        gateway_device_id = _find_gateway_device_id(self.coordinator, self._site_id)
         if gateway_device_id is not None:
             return DeviceInfo(
                 identifiers={(DOMAIN, f"{self._site_id}_{gateway_device_id}")}
             )
 
-        site_data = self.coordinator.data.get("sites", {}).get(self._site_id, {})
-        meta = site_data.get("meta", {})
-        site_name = (
-            meta.get("name") if isinstance(meta, dict) else None
-        ) or site_data.get("name", self._site_id)
-
+        site_name = _resolve_site_name(self.coordinator, self._site_id)
         return DeviceInfo(
             identifiers={(DOMAIN, f"firewall_policies_{self._site_id}")},
             name=f"Firewall Policies ({site_name})",
@@ -421,7 +430,7 @@ class UnifiFirewallRuleSwitch(
         await self._async_set_enabled(enabled=False)
 
 
-class UnifiPolicyBasedRouteSwitch(
+class UnifiInsightsPolicyBasedRouteSwitch(
     CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntity
 ):
     """Switch to enable or disable a policy-based route (traffic route)."""
@@ -460,38 +469,15 @@ class UnifiPolicyBasedRouteSwitch(
         )
         return result
 
-    def _find_gateway_device_id(self) -> str | None:
-        """Return the gateway-like device ID for the site if one exists."""
-        site_devices = self.coordinator.data.get("devices", {}).get(self._site_id, {})
-        if not isinstance(site_devices, dict):
-            return None
-
-        for device_id, device_data in site_devices.items():
-            if not isinstance(device_data, dict):
-                continue
-
-            model = str(device_data.get("model", "")).upper()
-            if _device_has_feature(
-                device_data, "gateway", "router"
-            ) or model.startswith(("UDM", "USG", "UXG", "UCG")):
-                return str(device_id)
-
-        return None
-
     def _build_device_info(self) -> DeviceInfo:
         """Build device info for policy-based route grouping."""
-        gateway_device_id = self._find_gateway_device_id()
+        gateway_device_id = _find_gateway_device_id(self.coordinator, self._site_id)
         if gateway_device_id is not None:
             return DeviceInfo(
                 identifiers={(DOMAIN, f"{self._site_id}_{gateway_device_id}")}
             )
 
-        site_data = self.coordinator.data.get("sites", {}).get(self._site_id, {})
-        meta = site_data.get("meta", {})
-        site_name = (
-            meta.get("name") if isinstance(meta, dict) else None
-        ) or site_data.get("name", self._site_id)
-
+        site_name = _resolve_site_name(self.coordinator, self._site_id)
         return DeviceInfo(
             identifiers={(DOMAIN, f"policy_based_routes_{self._site_id}")},
             name=f"Policy-Based Routes ({site_name})",
@@ -523,7 +509,7 @@ class UnifiPolicyBasedRouteSwitch(
         """Return a context-specific icon for the route state."""
         route_data = self._get_route_data()
         if route_data.get("vpn_client_id") or route_data.get("vpnClientId"):
-            return "mdi:vpn"
+            return "mdi:vpn" if self.is_on else "mdi:vpn-off"
         return "mdi:routes" if self.is_on else "mdi:routes-clock"
 
     @property
@@ -601,7 +587,9 @@ class UnifiPolicyBasedRouteSwitch(
         await self._async_set_enabled(enabled=False)
 
 
-class UnifiVpnClientSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntity):
+class UnifiInsightsVpnClientSwitch(
+    CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntity
+):
     """Switch to enable or disable a UniFi VPN Client network connection."""
 
     _attr_has_entity_name = True
@@ -628,18 +616,13 @@ class UnifiVpnClientSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEn
 
     def _build_device_info(self) -> DeviceInfo:
         """Build device info for VPN client grouping."""
-        gateway_device_id = self._find_gateway_device_id()
+        gateway_device_id = _find_gateway_device_id(self.coordinator, self._site_id)
         if gateway_device_id is not None:
             return DeviceInfo(
                 identifiers={(DOMAIN, f"{self._site_id}_{gateway_device_id}")}
             )
 
-        site_data = self.coordinator.data.get("sites", {}).get(self._site_id, {})
-        meta = site_data.get("meta", {})
-        site_name = (
-            meta.get("name") if isinstance(meta, dict) else None
-        ) or site_data.get("name", self._site_id)
-
+        site_name = _resolve_site_name(self.coordinator, self._site_id)
         return DeviceInfo(
             identifiers={(DOMAIN, f"vpn_clients_{self._site_id}")},
             name=f"VPN Clients ({site_name})",
@@ -655,25 +638,19 @@ class UnifiVpnClientSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEn
         data = vpn_clients.get(self._client_id, {})
         return data if isinstance(data, dict) else {}
 
-    def _find_gateway_device_id(self) -> str | None:
-        """Find the gateway device ID for this site to group the switch under."""
-        devices = self.coordinator.data.get("devices", {}).get(self._site_id, {})
-        for device_id, device_data in devices.items():
-            if not isinstance(device_data, dict):
-                continue
-            model = str(device_data.get("model", "")).upper()
-            if _device_has_feature(
-                device_data, "gateway", "router"
-            ) or model.startswith(("UDM", "USG", "UXG", "UCG", "GATEWAY")):
-                return str(device_id)
-        return None
-
     def _update_local_state(self, *, enabled: bool) -> None:
         """Optimistically update local coordinator state for immediate UI feedback."""
         vpn_clients = self.coordinator.data.setdefault("vpn_clients", {})
         site_vpn_clients = vpn_clients.setdefault(self._site_id, {})
         if self._client_id in site_vpn_clients:
             site_vpn_clients[self._client_id]["enabled"] = enabled
+
+    @property
+    def available(self) -> bool:
+        """Return if the switch is available."""
+        return bool(
+            self.coordinator.last_update_success and self._get_vpn_client_data()
+        )
 
     @property
     def is_on(self) -> bool:
@@ -739,6 +716,11 @@ class UnifiVpnClientSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEn
         """Disable the VPN client."""
         _ = kwargs
         await self._async_set_enabled(enabled=False)
+
+
+# Backward compatibility aliases for switch classes
+UnifiPolicyBasedRouteSwitch = UnifiInsightsPolicyBasedRouteSwitch
+UnifiVpnClientSwitch = UnifiInsightsVpnClientSwitch
 
 
 class UnifiProtectMicrophoneSwitch(UnifiProtectEntity, SwitchEntity):

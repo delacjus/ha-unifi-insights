@@ -531,7 +531,7 @@ class TestUnifiConfigCoordinator:
     @pytest.mark.asyncio
     async def test_async_update_data_routes_error(
         self, coordinator: UnifiConfigCoordinator
-    ):
+    ) -> None:
         """Test policy-based routes are optional when the endpoint is unavailable."""
         coordinator.network_client.routes.list_routes = AsyncMock(
             side_effect=Exception("Routes endpoint unavailable")
@@ -547,7 +547,7 @@ class TestUnifiConfigCoordinator:
     @pytest.mark.asyncio
     async def test_async_update_data_routes_auth_error(
         self, coordinator: UnifiConfigCoordinator
-    ):
+    ) -> None:
         """Test auth error during routes fetch triggers reauth."""
         coordinator.protect_client = None
         coordinator.network_client.routes.list_routes = AsyncMock(
@@ -560,7 +560,7 @@ class TestUnifiConfigCoordinator:
     @pytest.mark.asyncio
     async def test_async_update_data_vpn_clients_error(
         self, coordinator: UnifiConfigCoordinator
-    ):
+    ) -> None:
         """Test VPN clients are optional when the endpoint is unavailable."""
         coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
             side_effect=Exception("VPN clients endpoint unavailable")
@@ -576,7 +576,7 @@ class TestUnifiConfigCoordinator:
     @pytest.mark.asyncio
     async def test_async_update_data_vpn_clients_auth_error(
         self, coordinator: UnifiConfigCoordinator
-    ):
+    ) -> None:
         """Test auth error during VPN clients fetch triggers reauth."""
         coordinator.protect_client = None
         coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
@@ -3389,7 +3389,7 @@ class TestUnifiFacadeCoordinator:
     @pytest.mark.asyncio
     async def test_async_set_policy_based_route_enabled(
         self, facade_coordinator: UnifiFacadeCoordinator
-    ):
+    ) -> None:
         """Test async_set_policy_based_route_enabled delegates correctly."""
         facade_coordinator.network_client.routes.update_route = AsyncMock()
         facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
@@ -3403,25 +3403,25 @@ class TestUnifiFacadeCoordinator:
         )
 
     @pytest.mark.asyncio
-    async def test_async_set_policy_based_route_enabled_missing_site_raises(
+    async def test_async_set_policy_based_route_enabled_fallback(
         self, facade_coordinator: UnifiFacadeCoordinator
-    ):
-        """Test async_set_policy_based_route_enabled raises on missing site."""
+    ) -> None:
+        """Test async_set_policy_based_route_enabled falls back to default."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
         facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
             return_value=None
         )
-        with pytest.raises(
-            HomeAssistantError,
-            match="Unable to determine site for policy-based route route1",
-        ):
-            await facade_coordinator.async_set_policy_based_route_enabled(
-                "unknown_site", "route1", enabled=True
-            )
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "unknown_site", "route1", enabled=True
+        )
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
 
     @pytest.mark.asyncio
     async def test_async_set_vpn_client_enabled(
         self, facade_coordinator: UnifiFacadeCoordinator
-    ):
+    ) -> None:
         """Test async_set_vpn_client_enabled delegates correctly."""
         facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
         facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
@@ -3430,25 +3430,23 @@ class TestUnifiFacadeCoordinator:
         await facade_coordinator.async_set_vpn_client_enabled(
             "site1", "vpn1", enabled=True
         )
-        facade_coordinator.network_client.vpn_clients.update_vpn_client.assert_called_once_with(
-            "default", "vpn1", enabled=True
-        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
 
     @pytest.mark.asyncio
-    async def test_async_set_vpn_client_enabled_missing_site_raises(
+    async def test_async_set_vpn_client_enabled_fallback(
         self, facade_coordinator: UnifiFacadeCoordinator
-    ):
-        """Test async_set_vpn_client_enabled raises when site name is missing."""
+    ) -> None:
+        """Test async_set_vpn_client_enabled falls back to default site."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
         facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
             return_value=None
         )
-        with pytest.raises(
-            HomeAssistantError,
-            match="Unable to determine site for VPN client vpn1",
-        ):
-            await facade_coordinator.async_set_vpn_client_enabled(
-                "unknown_site", "vpn1", enabled=True
-            )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "unknown_site", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
 
     @pytest.mark.asyncio
     async def test_async_update_camera(
