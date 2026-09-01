@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added Policy-Based Routes (Traffic Routes) switch control to enable or disable traffic and VPN client routing rules dynamically from Home Assistant (closes #79)
+- Added VPN Client switch control (`UnifiVpnClientSwitch`) to enable or disable VPN client interfaces (e.g. Privado VPN, WireGuard, OpenVPN) directly from Home Assistant (closes #79)
+- Added Policy-Based Routes (Traffic Routes) switch control (`UnifiPolicyBasedRouteSwitch`) to enable or disable traffic and VPN client routing rules dynamically from Home Assistant (closes #79)
+- Added `VpnClientsEndpoint` and `VpnClient` model in the vendored Network API client targeting `/proxy/network/api/s/{site}/rest/networkconf`
 - Added `RoutesEndpoint` and `PolicyBasedRoute` model in the vendored Network API client targeting `/proxy/network/v2/api/site/{site}/trafficroutes`
-- Exposed route metadata attributes (`matching_target`, `interface`, `vpn_client_id`, `kill_switch`, `domains`, `ip_addresses`, `client_macs`, `network_ids`) on the route switch entity
+- Exposed route metadata attributes (`matching_target`, `interface`, `vpn_client_id`, `kill_switch`, `domains`, `ip_addresses`, `client_macs`, `network_ids`) on route switch entities
+- Exposed VPN client metadata attributes (`client_id`, `purpose`, `vpn_type`, `ip_subnet`, `openvpn_id`, `wireguard_id`, `remote_host`) on VPN client switch entities
 
 ## [2026.8.4] - 2026-08-30
 

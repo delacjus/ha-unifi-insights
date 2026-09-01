@@ -30,6 +30,7 @@ from .endpoints import (
     StacksEndpoint,
     TrafficEndpoint,
     VouchersEndpoint,
+    VpnClientsEndpoint,
     WifiEndpoint,
 )
 from .models import ApplicationInfo
@@ -140,6 +141,7 @@ class UniFiNetworkClient(BaseUniFiClient):
         self._lags = LagsEndpoint(self)
         self._stacks = StacksEndpoint(self)
         self._routes = RoutesEndpoint(self)
+        self._vpn_clients = VpnClientsEndpoint(self)
 
     @property
     def connection_type(self) -> ConnectionType:
@@ -340,6 +342,11 @@ class UniFiNetworkClient(BaseUniFiClient):
     def routes(self) -> RoutesEndpoint:
         """Access policy-based routes (traffic routes) endpoints."""
         return self._routes
+
+    @property
+    def vpn_clients(self) -> VpnClientsEndpoint:
+        """Access VPN client configuration endpoints."""
+        return self._vpn_clients
 
     async def validate_connection(self) -> bool:
         """
