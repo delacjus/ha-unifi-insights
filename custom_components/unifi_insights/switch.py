@@ -26,7 +26,11 @@ from .const import (
     VIDEO_MODE_DEFAULT,
     VIDEO_MODE_HIGH_FPS,
 )
-from .entity import UnifiProtectEntity, async_call_coordinator_action
+from .entity import (
+    UnifiProtectEntity,
+    async_call_coordinator_action,
+    get_field,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -528,8 +532,9 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             "killSwitch",
             "kill_switch",
         ):
-            if key in route_data:
-                return route_data.get(key)
+            val = route_data.get(key)
+            if val is not None:
+                return bool(val)
         return None
 
     @property
@@ -537,10 +542,11 @@ class UnifiInsightsPolicyBasedRouteSwitch(
         """Return route metadata useful in automations and debugging."""
         route_data = self._get_route_data()
         kill_switch = self._kill_switch_enabled
-        fall_back = (
-            route_data.get("fallBackToDefaultWAN")
-            if "fallBackToDefaultWAN" in route_data
-            else route_data.get("fall_back_to_default_wan")
+        fall_back = get_field(
+            route_data,
+            "fallBackToDefaultWAN",
+            "fall_back_to_default_wan",
+            default=None,
         )
         return {
             "route_id": self._route_id,
