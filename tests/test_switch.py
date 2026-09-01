@@ -1026,13 +1026,13 @@ class TestUnifiVpnClientSwitch:
                 "site1": {
                     "vpn1": {
                         "id": "vpn1",
-                        "name": "Privado VPN",
+                        "name": "Example VPN",
                         "purpose": "vpn-client",
                         "vpn_type": "openvpn-client",
                         "enabled": True,
                         "ip_subnet": "172.21.25.217/32",
                         "openvpn_id": 1,
-                        "remote_host": "syd-012.vpn.privado.io",
+                        "remote_host": "vpn.example.com",
                     },
                     "vpn2": {
                         "id": "vpn2",
@@ -1066,7 +1066,7 @@ class TestUnifiVpnClientSwitch:
         assert switch._attr_unique_id == "site1_vpn1_vpn_client"
         assert switch._attr_translation_key == "vpn_client"
         assert switch._attr_translation_placeholders == {
-            "vpn_client_name": "Privado VPN"
+            "vpn_client_name": "Example VPN"
         }
         assert switch._attr_entity_category == EntityCategory.CONFIG
         assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
@@ -1108,12 +1108,12 @@ class TestUnifiVpnClientSwitch:
 
         attrs = switch.extra_state_attributes
         assert attrs["client_id"] == "vpn1"
-        assert attrs["name"] == "Privado VPN"
+        assert attrs["name"] == "Example VPN"
         assert attrs["purpose"] == "vpn-client"
         assert attrs["vpn_type"] == "openvpn-client"
         assert attrs["ip_subnet"] == "172.21.25.217/32"
         assert attrs["openvpn_id"] == 1
-        assert attrs["remote_host"] == "syd-012.vpn.privado.io"
+        assert attrs["remote_host"] == "vpn.example.com"
 
     def test_icon_changes_with_state(self, mock_coordinator: MagicMock) -> None:
         """Test VPN client switch icon reflects enabled state."""
@@ -1255,7 +1255,7 @@ class TestAsyncSetupEntryVpnClients:
                 "site1": {
                     "vpn1": {
                         "id": "vpn1",
-                        "name": "Privado VPN",
+                        "name": "Example VPN",
                         "purpose": "vpn-client",
                         "enabled": True,
                     },

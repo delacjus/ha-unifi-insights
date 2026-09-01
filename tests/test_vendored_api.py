@@ -947,23 +947,23 @@ def test_vpn_client_model() -> None:
     client: VpnClient = VpnClient.model_validate(
         {
             "_id": "vpn1",
-            "name": "Privado VPN",
+            "name": "Example VPN",
             "purpose": "vpn-client",
             "vpn_type": "openvpn-client",
             "enabled": True,
             "ip_subnet": "172.21.25.217/32",
             "openvpn_id": 1,
-            "remote_host": "syd-012.vpn.privado.io",
+            "remote_host": "vpn.example.com",
         }
     )
     assert client.id == "vpn1"
-    assert client.name == "Privado VPN"
+    assert client.name == "Example VPN"
     assert client.purpose == "vpn-client"
     assert client.vpn_type == "openvpn-client"
     assert client.enabled is True
     assert client.ip_subnet == "172.21.25.217/32"
     assert client.openvpn_id == 1
-    assert client.remote_host == "syd-012.vpn.privado.io"
+    assert client.remote_host == "vpn.example.com"
 
 
 async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
@@ -979,7 +979,7 @@ async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
             "data": [
                 {
                     "_id": "vpn1",
-                    "name": "Privado VPN",
+                    "name": "Example VPN",
                     "purpose": "vpn-client",
                     "vpn_type": "openvpn-client",
                     "enabled": True,
@@ -997,7 +997,7 @@ async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
     clients: list[VpnClient] = await client.vpn_clients.list_vpn_clients("default")
     assert len(clients) == 1
     assert clients[0].id == "vpn1"
-    assert clients[0].name == "Privado VPN"
+    assert clients[0].name == "Example VPN"
     assert clients[0].enabled is True
     client._get.assert_awaited_once_with(
         "/proxy/network/api/s/default/rest/networkconf"
@@ -1017,7 +1017,7 @@ async def test_vpn_clients_endpoint_list_vpn_clients_unwrapped_and_empty() -> No
         return_value=[
             {
                 "_id": "vpn1",
-                "name": "Privado VPN",
+                "name": "Example VPN",
                 "purpose": "vpn-client",
                 "vpn_type": "openvpn-client",
                 "enabled": True,
@@ -1047,7 +1047,7 @@ async def test_vpn_clients_endpoint_get_vpn_client() -> None:
             "data": [
                 {
                     "_id": "vpn1",
-                    "name": "Privado VPN",
+                    "name": "Example VPN",
                     "purpose": "vpn-client",
                     "enabled": True,
                 }
@@ -1057,7 +1057,7 @@ async def test_vpn_clients_endpoint_get_vpn_client() -> None:
 
     vpn_client: VpnClient = await client.vpn_clients.get_vpn_client("default", "vpn1")
     assert vpn_client.id == "vpn1"
-    assert vpn_client.name == "Privado VPN"
+    assert vpn_client.name == "Example VPN"
 
 
 async def test_vpn_clients_endpoint_get_vpn_client_not_found_raises() -> None:
@@ -1085,7 +1085,7 @@ async def test_vpn_clients_endpoint_update_vpn_client() -> None:
             "data": [
                 {
                     "_id": "vpn1",
-                    "name": "Privado VPN",
+                    "name": "Example VPN",
                     "purpose": "vpn-client",
                     "enabled": True,
                 }
@@ -1098,7 +1098,7 @@ async def test_vpn_clients_endpoint_update_vpn_client() -> None:
             "data": [
                 {
                     "_id": "vpn1",
-                    "name": "Privado VPN",
+                    "name": "Example VPN",
                     "purpose": "vpn-client",
                     "enabled": False,
                 }
@@ -1115,7 +1115,7 @@ async def test_vpn_clients_endpoint_update_vpn_client() -> None:
         "/proxy/network/api/s/default/rest/networkconf/vpn1",
         json_data={
             "_id": "vpn1",
-            "name": "Privado VPN",
+            "name": "Example VPN",
             "purpose": "vpn-client",
             "enabled": False,
         },
