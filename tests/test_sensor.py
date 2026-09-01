@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.const import PERCENTAGE, UnitOfInformation, UnitOfTemperature
 import pytest
+from homeassistant.const import PERCENTAGE, UnitOfInformation, UnitOfTemperature
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

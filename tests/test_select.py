@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from homeassistant.exceptions import HomeAssistantError
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.unifi_insights.const import (
     CHIME_RINGTONE_DEFAULT,

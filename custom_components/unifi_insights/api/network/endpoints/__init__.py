@@ -10,6 +10,7 @@ from .firewall import FirewallEndpoint
 from .lags import LagsEndpoint
 from .networks import NetworksEndpoint
 from .resources import ResourcesEndpoint
+from .routes import RoutesEndpoint
 from .sites import SitesEndpoint
 from .stacks import StacksEndpoint
 from .traffic import TrafficEndpoint
@@ -25,6 +26,7 @@ __all__ = [
     "LagsEndpoint",
     "NetworksEndpoint",
     "ResourcesEndpoint",
+    "RoutesEndpoint",
     "SitesEndpoint",
     "StacksEndpoint",
     "TrafficEndpoint",

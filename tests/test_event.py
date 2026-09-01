@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from homeassistant.components.event import EventDeviceClass
 import pytest
+from homeassistant.components.event import EventDeviceClass
 
 from custom_components.unifi_insights.event import (
     EVENT_TYPE_DOORBELL_RING,

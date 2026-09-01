@@ -13,6 +13,7 @@ from ..const import (
     NETWORK_API_BASE_URL,
     NETWORK_INTEGRATION_PATH,
     NETWORK_LEGACY_PATH,
+    NETWORK_LEGACY_V2_PATH,
     ConnectionType,
 )
 from .endpoints import (
@@ -24,6 +25,7 @@ from .endpoints import (
     LagsEndpoint,
     NetworksEndpoint,
     ResourcesEndpoint,
+    RoutesEndpoint,
     SitesEndpoint,
     StacksEndpoint,
     TrafficEndpoint,
@@ -137,6 +139,7 @@ class UniFiNetworkClient(BaseUniFiClient):
         self._dns = DNSEndpoint(self)
         self._lags = LagsEndpoint(self)
         self._stacks = StacksEndpoint(self)
+        self._routes = RoutesEndpoint(self)
 
     @property
     def connection_type(self) -> ConnectionType:
@@ -234,6 +237,40 @@ class UniFiNetworkClient(BaseUniFiClient):
         connector_path = NETWORK_LEGACY_PATH.removeprefix("/proxy")
         return f"/v1/connector/consoles/{console_id}{connector_path}{endpoint}"
 
+    def build_legacy_v2_api_path(self, site_name: str, endpoint: str) -> str:
+        """
+        Build the full legacy v2 Network API path based on connection type.
+
+        Used for private v2 controller endpoints such as Policy-Based Routes
+        (``/proxy/network/v2/api/site/{site_name}/trafficroutes``).
+
+        Args:
+            site_name: The UniFi classic site name, for example ``default``.
+            endpoint: The legacy endpoint path after ``/site/{site_name}``, for
+                example ``/trafficroutes``.
+
+        Returns:
+            Full legacy v2 API path with the proper prefix for the connection type.
+
+        """
+        if not site_name:
+            raise ValueError("site_name is required")
+
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
+
+        if self._connection_type == ConnectionType.LOCAL:
+            return f"{NETWORK_LEGACY_V2_PATH}/site/{site_name}{endpoint}"
+
+        console_id = self._require_console_id()
+
+        # The connector adds /proxy/ when forwarding to the console, so strip it.
+        connector_path = NETWORK_LEGACY_V2_PATH.removeprefix("/proxy")
+        return (
+            f"/v1/connector/consoles/{console_id}"
+            f"{connector_path}/site/{site_name}{endpoint}"
+        )
+
     @property
     def devices(self) -> DevicesEndpoint:
         """Access device management endpoints."""
@@ -298,6 +335,11 @@ class UniFiNetworkClient(BaseUniFiClient):
     def stacks(self) -> StacksEndpoint:
         """Access switch stack endpoints."""
         return self._stacks
+
+    @property
+    def routes(self) -> RoutesEndpoint:
+        """Access policy-based routes (traffic routes) endpoints."""
+        return self._routes
 
     async def validate_connection(self) -> bool:
         """

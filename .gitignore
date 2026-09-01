@@ -128,3 +128,6 @@ site/
 .ai-scratch/*
 !.ai-scratch/.gitkeep
 .claude/settings.json
+uv.lock
+
+

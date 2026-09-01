@@ -342,13 +342,13 @@ class DevicesEndpoint:
         def _to_float(value: Any) -> float | None:
             try:
                 return float(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return None
 
         def _to_int(value: Any) -> int | None:
             try:
                 return int(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return None
 
         def _get_port_idx(port: dict[str, Any]) -> int | None:
@@ -368,9 +368,7 @@ class DevicesEndpoint:
             # Only include PoE data for ports with PoE hardware.
             # The legacy API reports "poe_power": "0.00" even on non-PoE
             # ports (e.g. UDM Pro), so we must check the port_poe flag.
-            poe_capable = port.get("port_poe", False) or port.get(
-                "portPoe", False
-            )
+            poe_capable = port.get("port_poe", False) or port.get("portPoe", False)
             if poe_capable:
                 poe_power = port.get("poe_power")
                 if poe_power is None:
