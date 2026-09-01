@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
@@ -212,7 +212,7 @@ async def async_setup_entry(
         if protect_client:
             _LOGGER.debug("Validating Protect API connection")
             try:
-                cameras = await protect_client.cameras.get_all()
+                cameras: Any = await protect_client.cameras.get_all()
                 if cameras is None or not isinstance(cameras, list):
                     _LOGGER.warning(
                         "Protect API returned invalid data, disabling Protect support"
@@ -317,7 +317,7 @@ async def async_setup_entry(
     # console_id embedded in the path, but if the Network API returned sites
     # for this console, prefer the first real site id over the placeholder.
     protect_site_id = "default"
-    if not is_local and network_available and sites:
+    if not is_local and network_available and sites and sites[0].id:
         protect_site_id = sites[0].id
 
     protect_coordinator: UnifiProtectCoordinator | None = None

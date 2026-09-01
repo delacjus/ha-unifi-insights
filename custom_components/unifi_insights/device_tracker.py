@@ -200,7 +200,7 @@ class UnifiClientTracker(CoordinatorEntity[UnifiFacadeCoordinator], ScannerEntit
             return None
         for client_data in clients.values():
             mac = get_field(client_data, "macAddress", "mac_address", "mac", default="")
-            if mac and mac.lower() == self._mac:
+            if mac and mac.lower() == self._mac and isinstance(client_data, dict):
                 return client_data
         return None
 

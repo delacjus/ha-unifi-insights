@@ -313,7 +313,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                         await task
 
     @callback
-    def _on_websocket_message(self, message: dict[str, Any]) -> None:
+    def _on_websocket_message(self, message: Any) -> None:
         """
         Adapt a raw WebSocket "devices" message to `_handle_device_update`.
 
@@ -640,7 +640,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         return normalized
 
     @callback
-    def _on_websocket_event_message(self, message: dict[str, Any]) -> None:
+    def _on_websocket_event_message(self, message: Any) -> None:
         """
         Adapt a raw WebSocket "events" message to `_handle_event_update`.
 
