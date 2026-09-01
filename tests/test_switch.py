@@ -1054,7 +1054,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         }
         return coordinator
 
-    def test_initialization(self, mock_coordinator) -> None:
+    def test_initialization(self, mock_coordinator: MagicMock) -> None:
         """Test policy-based route switch initialization."""
         switch = UnifiPolicyBasedRouteSwitch(
             coordinator=mock_coordinator,
@@ -1067,7 +1067,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert switch._attr_entity_category == EntityCategory.CONFIG
         assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
 
-    def test_is_on(self, mock_coordinator) -> None:
+    def test_is_on(self, mock_coordinator: MagicMock) -> None:
         """Test switch state mirrors route enabled state."""
         switch = UnifiPolicyBasedRouteSwitch(
             coordinator=mock_coordinator,
@@ -1081,7 +1081,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         )
         assert switch.is_on is False
 
-    def test_extra_state_attributes(self, mock_coordinator) -> None:
+    def test_extra_state_attributes(self, mock_coordinator: MagicMock) -> None:
         """Test route metadata attributes."""
         switch = UnifiPolicyBasedRouteSwitch(
             coordinator=mock_coordinator,
@@ -1102,7 +1102,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert attrs["client_macs"] == ["aa:bb:cc:dd:ee:ff"]
         assert attrs["network_ids"] == ["net1"]
 
-    def test_icon_changes_with_state(self, mock_coordinator) -> None:
+    def test_icon_changes_with_state(self, mock_coordinator: MagicMock) -> None:
         """Test route switch icon reflects VPN and enabled state."""
         switch = UnifiPolicyBasedRouteSwitch(
             coordinator=mock_coordinator,
@@ -1124,7 +1124,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert switch2.icon == "mdi:routes"
 
     @pytest.mark.asyncio
-    async def test_turn_on_updates_route(self, mock_coordinator) -> None:
+    async def test_turn_on_updates_route(self, mock_coordinator: MagicMock) -> None:
         """Test enabling a policy-based route."""
         mock_coordinator.data["policy_based_routes"]["site1"]["route1"]["enabled"] = (
             False
@@ -1149,7 +1149,7 @@ class TestUnifiPolicyBasedRouteSwitch:
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_turn_off_updates_route(self, mock_coordinator) -> None:
+    async def test_turn_off_updates_route(self, mock_coordinator: MagicMock) -> None:
         """Test disabling a policy-based route."""
         switch = UnifiPolicyBasedRouteSwitch(
             coordinator=mock_coordinator,
@@ -1170,7 +1170,9 @@ class TestUnifiPolicyBasedRouteSwitch:
         switch.async_write_ha_state.assert_called_once()
         mock_coordinator.async_request_refresh.assert_called_once()
 
-    def test_fallback_device_info_without_gateway(self, mock_coordinator) -> None:
+    def test_fallback_device_info_without_gateway(
+        self, mock_coordinator: MagicMock
+    ) -> None:
         """Test fallback device registry entry when no gateway device is found."""
         mock_coordinator.data["devices"]["site1"] = {}
 
@@ -1186,7 +1188,9 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert switch._attr_device_info["name"] == "Policy-Based Routes (Default)"
 
     @pytest.mark.asyncio
-    async def test_turn_on_error_does_not_write_state(self, mock_coordinator) -> None:
+    async def test_turn_on_error_does_not_write_state(
+        self, mock_coordinator: MagicMock
+    ) -> None:
         """Test route update failures do not write optimistic state."""
         mock_coordinator.network_client.routes.update_route.side_effect = Exception(
             "API error"
@@ -1261,7 +1265,7 @@ class TestAsyncSetupEntryPolicyBasedRoutes:
 
     @pytest.mark.asyncio
     async def test_setup_entry_creates_route_switches(
-        self, hass, mock_coordinator
+        self, hass: HomeAssistant, mock_coordinator: MagicMock
     ) -> None:
         """Test policy-based route switches created during platform setup."""
         mock_entry = MagicMock()

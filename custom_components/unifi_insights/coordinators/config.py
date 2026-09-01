@@ -378,6 +378,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                             len(routes_dict),
                             site_id,
                         )
+                    except UniFiAuthenticationError:
+                        raise
                     except Exception as err:
                         _LOGGER.debug(
                             "Config coordinator: Policy-based routes unavailable "

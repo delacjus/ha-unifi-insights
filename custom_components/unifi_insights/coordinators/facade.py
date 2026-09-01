@@ -322,7 +322,11 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         enabled: bool,
     ) -> None:
         """Enable or disable a policy-based route (traffic route)."""
-        site_name = self._device_coordinator.get_legacy_site_name(site_id) or "default"
+        site_name = self._device_coordinator.get_legacy_site_name(site_id)
+        if not site_name:
+            raise HomeAssistantError(
+                f"Unable to determine site for policy-based route {route_id}"
+            )
         await self._async_execute_api_action(
             f"Unable to update policy-based route {route_id}",
             self.network_client.routes.update_route,

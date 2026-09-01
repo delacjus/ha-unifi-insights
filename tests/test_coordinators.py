@@ -545,6 +545,19 @@ class TestUnifiConfigCoordinator:
         assert coordinator._available is True
 
     @pytest.mark.asyncio
+    async def test_async_update_data_routes_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ):
+        """Test auth error during routes fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_auth_error(
         self, coordinator: UnifiConfigCoordinator
     ):
@@ -3359,6 +3372,22 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.network_client.routes.update_route.assert_called_once_with(
             "default", "route1", enabled=True
         )
+
+    @pytest.mark.asyncio
+    async def test_async_set_policy_based_route_enabled_missing_site_raises(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test async_set_policy_based_route_enabled raises when site name is missing."""
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        with pytest.raises(
+            HomeAssistantError,
+            match="Unable to determine site for policy-based route route1",
+        ):
+            await facade_coordinator.async_set_policy_based_route_enabled(
+                "unknown_site", "route1", enabled=True
+            )
 
     @pytest.mark.asyncio
     async def test_async_update_camera(
