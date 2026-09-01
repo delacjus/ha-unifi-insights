@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import timedelta
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import (
@@ -2543,7 +2543,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback (see `async_start_websocket`)
         updates only the devices stream's health entry.
         """
-        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_devices_connection_state_change(True)
 
         assert coordinator.websocket_health["devices"]["connected"] is True
         assert coordinator.websocket_health["events"]["connected"] is False
@@ -2555,7 +2555,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback updates only the events
         stream's health entry.
         """
-        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_events_connection_state_change(True)
 
         assert coordinator.websocket_health["events"]["connected"] is True
         assert coordinator.websocket_health["devices"]["connected"] is False

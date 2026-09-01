@@ -3,9 +3,9 @@
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-import pytest
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.entity import EntityDescription
+import pytest
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
