@@ -774,9 +774,24 @@ class TestUnifiConfigCoordinator:
 
     def test_get_policy_based_routes_missing_site(
         self, coordinator: UnifiConfigCoordinator
-    ):
+    ) -> None:
         """Test getting policy-based routes for missing site."""
         result = coordinator.get_policy_based_routes("nonexistent")
+        assert result == {}
+
+    def test_get_vpn_clients(self, coordinator: UnifiConfigCoordinator) -> None:
+        """Test getting VPN clients for a site."""
+        coordinator.data["vpn_clients"] = {
+            "default": {"client1": {"_id": "client1", "name": "Privado VPN"}}
+        }
+        result = coordinator.get_vpn_clients("default")
+        assert "client1" in result
+
+    def test_get_vpn_clients_missing_site(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test getting VPN clients for missing site."""
+        result = coordinator.get_vpn_clients("nonexistent")
         assert result == {}
 
     @pytest.mark.asyncio

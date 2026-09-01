@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import aiohttp
 from typing import Any
+
+import aiohttp
 
 from ..auth import ApiKeyAuth, LocalAuth
 from ..base import BaseUniFiClient

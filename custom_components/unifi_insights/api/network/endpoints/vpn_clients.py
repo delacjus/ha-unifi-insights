@@ -101,9 +101,8 @@ class VpnClientsEndpoint:
         items = self._extract_items(response)
         for item in items:
             if (
-                (item.get("_id") == client_id or item.get("id") == client_id)
-                and item.get("purpose") == "vpn-client"
-            ):
+                item.get("_id") == client_id or item.get("id") == client_id
+            ) and item.get("purpose") == "vpn-client":
                 return VpnClient.model_validate(item)
 
         all_clients = await self.list_vpn_clients(site_name)
@@ -147,9 +146,8 @@ class VpnClientsEndpoint:
         current_payload: dict[str, Any] | None = None
         for item in items:
             if (
-                (item.get("_id") == client_id or item.get("id") == client_id)
-                and item.get("purpose") == "vpn-client"
-            ):
+                item.get("_id") == client_id or item.get("id") == client_id
+            ) and item.get("purpose") == "vpn-client":
                 current_payload = item
                 break
 
@@ -161,9 +159,8 @@ class VpnClientsEndpoint:
             list_response = await self._client._get(list_path)
             for item in self._extract_items(list_response):
                 if (
-                    (item.get("_id") == client_id or item.get("id") == client_id)
-                    and item.get("purpose") == "vpn-client"
-                ):
+                    item.get("_id") == client_id or item.get("id") == client_id
+                ) and item.get("purpose") == "vpn-client":
                     current_payload = item
                     break
 

@@ -338,12 +338,6 @@
       },
       "high_fps_mode": {
         "name": "High FPS Mode"
-      },
-      "policy_based_route": {
-        "name": "Policy-Based Route"
-      },
-      "vpn_client": {
-        "name": "VPN Client"
       }
     },
     "select": {

@@ -1267,6 +1267,25 @@ async def test_vpn_clients_endpoint_list_vpn_clients_unwrapped_and_empty() -> No
     assert clients == []
 
 
+async def test_vpn_clients_endpoint_list_vpn_clients_error_envelope_raises() -> None:
+    """Test listing VPN client configurations when response contains error envelope."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "meta": {"rc": "error", "msg": "API error"},
+            "data": [],
+        }
+    )
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.vpn_clients.list_vpn_clients("default")
+    assert exc_info.value.message == "API error"
+    assert exc_info.value.status_code == 200
+
+
 async def test_vpn_clients_endpoint_get_vpn_client() -> None:
     """Test getting a specific VPN client configuration."""
     client: UniFiNetworkClient = UniFiNetworkClient(
