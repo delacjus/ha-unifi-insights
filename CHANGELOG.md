@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.9.0] - 2026-09-02
+
 ### Added
 
 - Added VPN Client switch control (`UnifiInsightsVpnClientSwitch`) to enable or disable VPN client interfaces (e.g., Privado VPN, WireGuard, OpenVPN) directly from Home Assistant (closes #79)
