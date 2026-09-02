@@ -90,9 +90,8 @@ class ClientsEndpoint:
                         all_clients.append(Client.model_validate(item))
                     except Exception as err:
                         _LOGGER.warning(
-                            "Failed to validate client (%s): %s",
-                            item.get("id") or item.get("macAddress") or "unknown",
-                            err,
+                            "Failed to validate client payload (%s)",
+                            err.__class__.__name__,
                         )
 
             total_count = response.get("totalCount")
@@ -129,9 +128,8 @@ class ClientsEndpoint:
                     page_clients.append(Client.model_validate(item))
                 except Exception as err:
                     _LOGGER.warning(
-                        "Failed to validate client (%s): %s",
-                        item.get("id") or item.get("macAddress") or "unknown",
-                        err,
+                        "Failed to validate client payload (%s)",
+                        err.__class__.__name__,
                     )
             return page_clients
         return []
