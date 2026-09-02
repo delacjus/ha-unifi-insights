@@ -355,8 +355,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                         stats["poe_total_w"] = metrics.poe_total_w
             except Exception as err:
                 _LOGGER.debug(
-                    "Legacy PoE wattage fetch failed for %s: %s",
-                    device_mac or device_id,
+                    "Legacy PoE wattage fetch failed: %s",
                     err,
                 )
 
