@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ...exceptions import UniFiValidationError
 from ..models import (
     Device,
     LegacyOutletMetrics,
@@ -526,27 +527,24 @@ class DevicesEndpoint:
                 it OFF (relay open).
             cycle_enabled: Optional boolean to enable or disable power
                 cycling on internet loss.
-            current_device: Already-fetched device data (outlet_overrides /
-                outlet_table) to source the read side from, avoiding a GET
-                against the singular ``rest/device/{id}`` route, which is
-                write-only on UniFi OS controllers and 404s on GET.
+            current_device: Required device snapshot (outlet_overrides /
+                outlet_table) to source the read side from. The singular
+                ``rest/device/{id}`` route is write-only on UniFi OS
+                controllers and 404s on GET, so the caller must supply the
+                snapshot from cached ``/stat/device`` data.
 
         Returns:
             True if successful.
 
+        Raises:
+            UniFiValidationError: If ``current_device`` carries neither an
+                existing ``outlet_overrides`` array nor an ``outlet_table`` to
+                seed one from. The controller treats ``outlet_overrides`` as
+                the complete desired state, so writing a partial array would
+                reset every sibling outlet on the device.
+
         """
         device_dict: dict[str, Any] = current_device or {}
-        if not device_dict:
-            path = self._client.build_legacy_api_path(
-                site_name, f"/rest/device/{device_id}"
-            )
-            response = await self._client._get(path)
-            if isinstance(response, dict):
-                data = response.get("data", response)
-                if isinstance(data, list) and data and isinstance(data[0], dict):
-                    device_dict = data[0]
-                elif isinstance(data, dict):
-                    device_dict = data
 
         target_id = device_dict.get("_id", device_id)
         raw_overrides = device_dict.get("outlet_overrides")
@@ -558,6 +556,15 @@ class DevicesEndpoint:
 
         if not outlet_overrides:
             outlet_overrides = _seed_outlet_overrides(device_dict)
+
+        if not outlet_overrides:
+            msg = (
+                f"Refusing to write outlet {outlet_index} on device {device_id}: "
+                "no outlet_overrides or outlet_table available to seed the full "
+                "override array from. Writing a partial array would reset the "
+                "device's other outlets."
+            )
+            raise UniFiValidationError(msg)
 
         found = False
         for override in outlet_overrides:

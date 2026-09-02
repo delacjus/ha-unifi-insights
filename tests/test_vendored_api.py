@@ -10,7 +10,10 @@ import pytest
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
 from custom_components.unifi_insights.api.const import ENDPOINT_TRAFFIC_ROUTES
-from custom_components.unifi_insights.api.exceptions import UniFiResponseError
+from custom_components.unifi_insights.api.exceptions import (
+    UniFiResponseError,
+    UniFiValidationError,
+)
 from custom_components.unifi_insights.api.network import (
     PolicyBasedRoute,
     UniFiNetworkClient,
@@ -492,32 +495,34 @@ async def test_set_outlet_state_existing_override() -> None:
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
     )
-    client._get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "_id": "60a1b2c3d4e5f67890123456",
-                    "outlet_overrides": [
-                        {
-                            "index": 1,
-                            "relay_state": True,
-                            "cycle_enabled": True,
-                        },
-                        {
-                            "index": 2,
-                            "relay_state": False,
-                        },
-                    ],
-                }
-            ]
-        }
-    )
+    client._get = AsyncMock()
     client._put = AsyncMock(return_value={"data": []})
 
     result = await client.devices.set_outlet_state(
-        "default", "60a1b2c3d4e5f67890123456", 1, state=False, cycle_enabled=False
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        1,
+        state=False,
+        cycle_enabled=False,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [
+                {
+                    "index": 1,
+                    "relay_state": True,
+                    "cycle_enabled": True,
+                },
+                {
+                    "index": 2,
+                    "relay_state": False,
+                },
+            ],
+        },
     )
     assert result is True
+
+    # The singular rest/device route is write-only on UniFi OS: never GET it.
+    client._get.assert_not_awaited()
     client._put.assert_awaited_once_with(
         "/proxy/network/api/s/default/rest/device/60a1b2c3d4e5f67890123456",
         json_data={
@@ -543,30 +548,32 @@ async def test_set_outlet_state_new_override() -> None:
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
     )
-    client._get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "_id": "60a1b2c3d4e5f67890123456",
-                    "outlet_overrides": [],
-                }
-            ]
-        }
-    )
     client._put = AsyncMock(return_value={"data": []})
 
     result = await client.devices.set_outlet_state(
-        "default", "60a1b2c3d4e5f67890123456", 3, state=True
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        3,
+        state=True,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [
+                {"index": 1, "relay_state": True},
+                {"index": 2, "relay_state": False},
+            ],
+        },
     )
     assert result is True
     client._put.assert_awaited_once_with(
         "/proxy/network/api/s/default/rest/device/60a1b2c3d4e5f67890123456",
         json_data={
             "outlet_overrides": [
+                {"index": 1, "relay_state": True},
+                {"index": 2, "relay_state": False},
                 {
                     "index": 3,
                     "relay_state": True,
-                }
+                },
             ]
         },
     )
@@ -584,40 +591,37 @@ async def test_set_outlet_state_seeds_overrides_from_outlet_table() -> None:
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
     )
-    client._get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "_id": "60a1b2c3d4e5f67890123456",
-                    "outlet_overrides": [],
-                    "outlet_table": [
-                        {
-                            "index": 1,
-                            "name": "Router",
-                            "relay_state": True,
-                            "cycle_enabled": False,
-                        },
-                        {
-                            "index": 2,
-                            "name": "NAS",
-                            "relay_state": True,
-                            "cycle_enabled": False,
-                        },
-                        {
-                            "index": 3,
-                            "name": "Spare",
-                            "relay_state": False,
-                            "cycle_enabled": False,
-                        },
-                    ],
-                }
-            ]
-        }
-    )
     client._put = AsyncMock(return_value={"data": []})
 
     result = await client.devices.set_outlet_state(
-        "default", "60a1b2c3d4e5f67890123456", 2, state=False
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        2,
+        state=False,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [],
+            "outlet_table": [
+                {
+                    "index": 1,
+                    "name": "Router",
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                },
+                {
+                    "index": 2,
+                    "name": "NAS",
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                },
+                {
+                    "index": 3,
+                    "name": "Spare",
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                },
+            ],
+        },
     )
     assert result is True
 
@@ -634,26 +638,52 @@ async def test_set_outlet_state_seeds_overrides_from_outlet_table() -> None:
     assert by_index[1]["name"] == "Router"
 
 
-async def test_set_outlet_state_no_outlet_table_appends_single_override() -> None:
-    """Test set_outlet_state still appends when no outlet_table is available."""
+async def test_set_outlet_state_rejects_unseedable_write() -> None:
+    """Test set_outlet_state refuses to write a partial override array.
+
+    Without existing overrides or an outlet_table to seed from, the sibling
+    outlet states are unknown. The controller treats outlet_overrides as the
+    complete desired state, so a single-entry write would reset every other
+    outlet on the device. Refuse the write instead.
+    """
     client = UniFiNetworkClient(
         auth=ApiKeyAuth(api_key="test-key"),
         base_url="https://192.168.1.1",
         connection_type=ConnectionType.LOCAL,
     )
-    client._get = AsyncMock(
-        return_value={"data": [{"_id": "60a1b2c3d4e5f67890123456"}]}
-    )
+    client._get = AsyncMock()
     client._put = AsyncMock(return_value={"data": []})
 
-    result = await client.devices.set_outlet_state(
-        "default", "60a1b2c3d4e5f67890123456", 4, state=True
+    with pytest.raises(UniFiValidationError):
+        await client.devices.set_outlet_state(
+            "default",
+            "60a1b2c3d4e5f67890123456",
+            4,
+            state=True,
+            current_device={"_id": "60a1b2c3d4e5f67890123456"},
+        )
+
+    client._put.assert_not_awaited()
+    client._get.assert_not_awaited()
+
+
+async def test_set_outlet_state_rejects_missing_snapshot() -> None:
+    """Test set_outlet_state refuses to write without a device snapshot."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
     )
-    assert result is True
-    client._put.assert_awaited_once_with(
-        "/proxy/network/api/s/default/rest/device/60a1b2c3d4e5f67890123456",
-        json_data={"outlet_overrides": [{"index": 4, "relay_state": True}]},
-    )
+    client._get = AsyncMock()
+    client._put = AsyncMock(return_value={"data": []})
+
+    with pytest.raises(UniFiValidationError):
+        await client.devices.set_outlet_state(
+            "default", "60a1b2c3d4e5f67890123456", 4, state=True
+        )
+
+    client._put.assert_not_awaited()
+    client._get.assert_not_awaited()
 
 
 async def test_wifi_update_uses_put_with_existing_payload() -> None:

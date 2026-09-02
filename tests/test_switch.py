@@ -3039,6 +3039,7 @@ class TestUnifiOutletSwitch:
         )
         coordinator.async_set_outlet_state = AsyncMock(return_value=True)
         coordinator.async_request_refresh = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         return coordinator
 
     @pytest.mark.asyncio
@@ -3158,7 +3159,11 @@ class TestUnifiOutletSwitch:
 
         set_outlet = mock_coordinator.network_client.devices.set_outlet_state
         set_outlet.assert_awaited_once_with(
-            "default", "pdu1", 2, state=True
+            "default",
+            "pdu1",
+            2,
+            state=True,
+            current_device=mock_coordinator.data["devices"]["site1"]["pdu1"],
         )
 
     def test_outlet_switch_unavailable_when_device_offline(
@@ -3222,6 +3227,7 @@ class TestUnifiOutletCycleSwitch:
         )
         coordinator.async_set_outlet_state = AsyncMock(return_value=True)
         coordinator.async_request_refresh = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
         return coordinator
 
     def test_cycle_switch_properties(self, mock_coordinator) -> None:
@@ -3311,7 +3317,40 @@ class TestUnifiOutletCycleSwitch:
 
         set_outlet = mock_coordinator.network_client.devices.set_outlet_state
         set_outlet.assert_awaited_once_with(
-            "default", "pdu1", 1, state=True, cycle_enabled=False
+            "default",
+            "pdu1",
+            1,
+            state=True,
+            cycle_enabled=False,
+            current_device=mock_coordinator.data["devices"]["site1"]["pdu1"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_does_not_default_relay_on(
+        self, mock_coordinator
+    ) -> None:
+        """Test toggling power cycling never energizes an unknown relay.
+
+        set_outlet_state always writes relay_state into the override, so an
+        outlet whose reported data carries no relay_state must be treated as
+        OFF. Defaulting to ON would switch on a load the user did not ask for.
+        """
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"] = [
+            {"index": 1, "name": "Main Server", "cycle_enabled": False}
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"index": 1, "cycle_enabled": False},
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=False, cycle_enabled=True
         )
 
     def test_outlet_switch_edge_cases(self, mock_coordinator) -> None:

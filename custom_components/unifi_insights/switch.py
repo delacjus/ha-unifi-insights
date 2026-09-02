@@ -1390,14 +1390,19 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
             identifiers={(DOMAIN, f"{site_id}_{device_id}")},
         )
 
-    def _get_outlet_data(self) -> dict[str, Any] | None:
-        """Get current outlet data from coordinator."""
+    def _get_device_data(self) -> dict[str, Any]:
+        """Return the coordinator's cached snapshot for this PDU device."""
         device_data = (
             self.coordinator.data.get("devices", {})
             .get(self._site_id, {})
             .get(self._device_id, {})
         )
-        if not isinstance(device_data, dict):
+        return device_data if isinstance(device_data, dict) else {}
+
+    def _get_outlet_data(self) -> dict[str, Any] | None:
+        """Get current outlet data from coordinator."""
+        device_data = self._get_device_data()
+        if not device_data:
             return None
         outlets = device_data.get("outlet_table", [])
         if not isinstance(outlets, list):
@@ -1451,11 +1456,7 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
         """Return True if switch is available."""
         if not self.coordinator.available:
             return False
-        device_data = (
-            self.coordinator.data.get("devices", {})
-            .get(self._site_id, {})
-            .get(self._device_id, {})
-        )
+        device_data = self._get_device_data()
         if not device_data or not is_device_online(device_data):
             return False
         return self._get_outlet_data() is not None
@@ -1488,14 +1489,8 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
         return attrs
 
     def _get_legacy_site_name(self) -> str:
-        """Resolve legacy site name from device coordinator if available."""
-        if hasattr(self.coordinator, "_device_coordinator"):
-            dev_coord = self.coordinator._device_coordinator
-            if hasattr(dev_coord, "get_legacy_site_name"):
-                val = dev_coord.get_legacy_site_name(self._site_id)
-                if isinstance(val, str) and val:
-                    return val
-        return "default"
+        """Resolve the legacy site name via the facade coordinator."""
+        return self.coordinator.resolve_legacy_site_name(self._site_id)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on the outlet."""
@@ -1525,6 +1520,7 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
                     self._device_id,
                     self._outlet_index,
                     state=True,
+                    current_device=self._get_device_data(),
                 )
             ),
         )
@@ -1560,6 +1556,7 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
                     self._device_id,
                     self._outlet_index,
                     state=False,
+                    current_device=self._get_device_data(),
                 )
             ),
         )
@@ -1603,14 +1600,19 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
             identifiers={(DOMAIN, f"{site_id}_{device_id}")},
         )
 
-    def _get_outlet_data(self) -> dict[str, Any] | None:
-        """Get current outlet data from coordinator."""
+    def _get_device_data(self) -> dict[str, Any]:
+        """Return the coordinator's cached snapshot for this PDU device."""
         device_data = (
             self.coordinator.data.get("devices", {})
             .get(self._site_id, {})
             .get(self._device_id, {})
         )
-        if not isinstance(device_data, dict):
+        return device_data if isinstance(device_data, dict) else {}
+
+    def _get_outlet_data(self) -> dict[str, Any] | None:
+        """Get current outlet data from coordinator."""
+        device_data = self._get_device_data()
+        if not device_data:
             return None
         outlets = device_data.get("outlet_table", [])
         if not isinstance(outlets, list):
@@ -1660,14 +1662,15 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
         """Return True if switch is available."""
         if not self.coordinator.available:
             return False
-        device_data = (
-            self.coordinator.data.get("devices", {})
-            .get(self._site_id, {})
-            .get(self._device_id, {})
-        )
+        device_data = self._get_device_data()
         if not device_data or not is_device_online(device_data):
             return False
         return self._get_outlet_data() is not None
+
+    def _get_current_relay_state(self) -> bool:
+        """Return the outlet's reported relay state, defaulting to OFF."""
+        outlet = self._get_outlet_data() or self._initial_outlet_data
+        return bool(outlet.get("relay_state", False))
 
     @property
     def is_on(self) -> bool:
@@ -1678,14 +1681,8 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
         return bool(outlet.get("cycle_enabled", False))
 
     def _get_legacy_site_name(self) -> str:
-        """Resolve legacy site name from device coordinator if available."""
-        if hasattr(self.coordinator, "_device_coordinator"):
-            dev_coord = self.coordinator._device_coordinator
-            if hasattr(dev_coord, "get_legacy_site_name"):
-                val = dev_coord.get_legacy_site_name(self._site_id)
-                if isinstance(val, str) and val:
-                    return val
-        return "default"
+        """Resolve the legacy site name via the facade coordinator."""
+        return self.coordinator.resolve_legacy_site_name(self._site_id)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable power cycling on the outlet."""
@@ -1696,8 +1693,7 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
             self._device_id,
             self._site_id,
         )
-        outlet = self._get_outlet_data() or self._initial_outlet_data
-        current_relay = bool(outlet.get("relay_state", True))
+        current_relay = self._get_current_relay_state()
         site_name = self._get_legacy_site_name()
 
         await async_call_coordinator_action(
@@ -1719,6 +1715,7 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
                     self._outlet_index,
                     state=current_relay,
                     cycle_enabled=True,
+                    current_device=self._get_device_data(),
                 )
             ),
         )
@@ -1735,8 +1732,7 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
             self._device_id,
             self._site_id,
         )
-        outlet = self._get_outlet_data() or self._initial_outlet_data
-        current_relay = bool(outlet.get("relay_state", True))
+        current_relay = self._get_current_relay_state()
         site_name = self._get_legacy_site_name()
 
         await async_call_coordinator_action(
@@ -1758,6 +1754,7 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
                     self._outlet_index,
                     state=current_relay,
                     cycle_enabled=False,
+                    current_device=self._get_device_data(),
                 )
             ),
         )

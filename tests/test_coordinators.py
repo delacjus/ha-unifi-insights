@@ -3663,6 +3663,7 @@ class TestUnifiFacadeCoordinator:
         result = await facade_coordinator.async_set_outlet_state(
             "site1", "device1", 1, state=True, cycle_enabled=False
         )
+        assert result is True
         set_outlet = facade_coordinator.network_client.devices.set_outlet_state
         set_outlet.assert_called_once_with(
             "branch",
