@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -1083,6 +1084,93 @@ def test_policy_based_route_model() -> None:
 
     route4: PolicyBasedRoute = PolicyBasedRoute.model_validate({"_id": "r4"})
     assert route4.display_name == "Route r4"
+
+
+# Live payloads captured from a UniFi Dream Machine SE (UniFi OS 5.1.31,
+# Network 10.6.101) via GET /proxy/network/v2/api/site/default/trafficroutes.
+# The controller returns a bare JSON array, and route fields differ from what
+# the maintainer's model previously assumed (see routes.py for details).
+LIVE_ROUTE_INTERNET: dict[str, Any] = {
+    "_id": "67678b976c1d8157c66f44a2",
+    "description": "Nord Route",
+    "domains": [],
+    "enabled": True,
+    "ip_addresses": [],
+    "ip_ranges": [],
+    "kill_switch_enabled": True,
+    "matching_target": "INTERNET",
+    "network_id": "67678a746c1d8157c66f444e",
+    "next_hop": "",
+    "regions": [],
+    "target_devices": [{"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}],
+}
+
+LIVE_ROUTE_DOMAIN: dict[str, Any] = {
+    "_id": "6a96d1fb745ac3cf4de10e79",
+    "description": "HA PBR Test",
+    "domains": [{"domain": "pbr-test.example.com", "port_ranges": [], "ports": []}],
+    "enabled": True,
+    "ip_addresses": [],
+    "ip_ranges": [],
+    "kill_switch_enabled": True,
+    "matching_target": "DOMAIN",
+    "network_id": "67678a746c1d8157c66f444e",
+    "next_hop": "",
+    "regions": [],
+    "target_devices": [{"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}],
+}
+
+
+def test_policy_based_route_model_parses_live_internet_route() -> None:
+    """Test the live INTERNET-target route payload validates cleanly."""
+    route = PolicyBasedRoute.model_validate(LIVE_ROUTE_INTERNET)
+    assert route.id == "67678b976c1d8157c66f44a2"
+    assert route.kill_switch_enabled is True
+    assert route.network_id == "67678a746c1d8157c66f444e"
+    assert route.next_hop == ""
+    assert route.regions == []
+    assert route.ip_ranges == []
+    assert route.target_devices[0].type == "NETWORK"
+    assert route.target_devices[0].network_id == "67678b326c1d8157c66f4466"
+
+
+def test_policy_based_route_model_parses_live_domain_route() -> None:
+    """Test the live DOMAIN-target route payload validates cleanly.
+
+    This is the payload that previously raised
+    ``ValidationError: domains.0 Input should be a valid string`` because
+    ``domains`` was typed as ``list[str]`` while the controller sends a list
+    of domain objects.
+    """
+    route = PolicyBasedRoute.model_validate(LIVE_ROUTE_DOMAIN)
+    assert route.kill_switch_enabled is True
+    assert route.domains[0]["domain"] == "pbr-test.example.com"
+    assert route.target_devices[0].type == "NETWORK"
+    assert route.target_devices[0].network_id == "67678b326c1d8157c66f4466"
+
+
+async def test_routes_endpoint_list_routes_returns_both_live_routes() -> None:
+    """Test list_routes over the real bare-array response returns both routes.
+
+    Before the model fix, the DOMAIN route failed pydantic validation and
+    was silently skipped by list_routes' per-item try/except, so this
+    returned 1 route instead of 2.
+    """
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[LIVE_ROUTE_INTERNET, LIVE_ROUTE_DOMAIN],
+    )
+
+    routes: list[PolicyBasedRoute] = await client.routes.list_routes("default")
+    assert len(routes) == 2
+    assert {r.id for r in routes} == {
+        "67678b976c1d8157c66f44a2",
+        "6a96d1fb745ac3cf4de10e79",
+    }
 
 
 async def test_routes_endpoint_list_routes() -> None:

@@ -14,9 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `VpnClientsEndpoint` and `VpnClient` model in the vendored Network API client targeting `/proxy/network/api/s/{site}/rest/networkconf` with strict `purpose == "vpn-client"` filtering and error envelope propagation
 - Added `RoutesEndpoint` and `PolicyBasedRoute` model in the vendored Network API client targeting `/proxy/network/v2/api/site/{site}/trafficroutes`
 - Added `get_vpn_clients` and `get_policy_based_routes` caching and retrieval in `UnifiConfigCoordinator` and action delegation in `UnifiFacadeCoordinator`
-- Exposed route metadata attributes (`matching_target`, `interface`, `vpn_client_id`, `kill_switch`, `domains`, `ip_addresses`, `client_macs`, `network_ids`) on route switch entities
+- Exposed route metadata attributes (`matching_target`, `interface`, `vpn_client_id`, `kill_switch_enabled`, `domains`, `ip_addresses`, `client_macs`, `network_ids`, `target_devices`, `network_id`, `next_hop`, `regions`, `ip_ranges`) on route switch entities
 - Exposed VPN client metadata attributes (`client_id`, `purpose`, `vpn_type`, `ip_subnet`, `openvpn_id`, `wireguard_id`, `remote_host`) on VPN client switch entities
 - Added automatic gateway device grouping for VPN clients and policy-based routes, with fallback site-level grouping
+
+### Fixed
+
+- Fixed `PolicyBasedRoute` parsing failure for domain-based traffic routes on UniFi Network 10.6+ where `domains` contains object dictionaries (`[{"domain": "...", ...}]`) rather than simple strings
+- Fixed `kill_switch_enabled` attribute parsing from live controller payload shape and added warning when disabling a route with an active kill switch
+- Fixed site name resolution on multi-site controllers via `resolve_legacy_site_name` on `UnifiFacadeCoordinator`
+
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for live-hardware testing on UniFi Dream Machine SE (Network 10.6), domain route model alignment, kill switch hardening, and multi-site resolution in PR #105
 
 ## [2026.8.4] - 2026-08-30
 

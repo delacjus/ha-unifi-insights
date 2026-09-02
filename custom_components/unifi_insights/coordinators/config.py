@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from http import HTTPStatus
+import logging
 from typing import TYPE_CHECKING, Any
 
 from custom_components.unifi_insights.api import (

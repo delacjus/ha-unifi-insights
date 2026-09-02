@@ -26,7 +26,11 @@ from .const import (
     VIDEO_MODE_DEFAULT,
     VIDEO_MODE_HIGH_FPS,
 )
-from .entity import UnifiProtectEntity, async_call_coordinator_action
+from .entity import (
+    UnifiProtectEntity,
+    async_call_coordinator_action,
+    get_field,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -513,18 +517,36 @@ class UnifiInsightsPolicyBasedRouteSwitch(
         return "mdi:routes" if self.is_on else "mdi:routes-clock"
 
     @property
+    def _kill_switch_enabled(self) -> bool | None:
+        """
+        Return the route's kill switch state, if known.
+
+        Prefers the controller's own field names (``kill_switch_enabled`` /
+        ``killSwitchEnabled``), falling back to the maintainer's original
+        ``kill_switch`` / ``killSwitch`` names so both payload shapes work.
+        """
+        route_data = self._get_route_data()
+        for key in (
+            "kill_switch_enabled",
+            "killSwitchEnabled",
+            "killSwitch",
+            "kill_switch",
+        ):
+            val = route_data.get(key)
+            if val is not None:
+                return bool(val)
+        return None
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return route metadata useful in automations and debugging."""
         route_data = self._get_route_data()
-        kill_switch = (
-            route_data.get("killSwitch")
-            if "killSwitch" in route_data
-            else route_data.get("kill_switch")
-        )
-        fall_back = (
-            route_data.get("fallBackToDefaultWAN")
-            if "fallBackToDefaultWAN" in route_data
-            else route_data.get("fall_back_to_default_wan")
+        kill_switch = self._kill_switch_enabled
+        fall_back = get_field(
+            route_data,
+            "fallBackToDefaultWAN",
+            "fall_back_to_default_wan",
+            default=None,
         )
         return {
             "route_id": self._route_id,
@@ -535,7 +557,7 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             "interface": route_data.get("interface"),
             "vpn_client_id": route_data.get("vpnClientId")
             or route_data.get("vpn_client_id"),
-            "kill_switch": kill_switch,
+            "kill_switch_enabled": kill_switch,
             "fall_back_to_default_wan": fall_back,
             "domains": route_data.get("domains", []),
             "ip_addresses": route_data.get("ipAddresses")
@@ -545,6 +567,12 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             or route_data.get("client_macs", []),
             "network_ids": route_data.get("networkIds")
             or route_data.get("network_ids", []),
+            "network_id": route_data.get("networkId") or route_data.get("network_id"),
+            "next_hop": route_data.get("nextHop") or route_data.get("next_hop"),
+            "regions": route_data.get("regions", []),
+            "ip_ranges": route_data.get("ipRanges") or route_data.get("ip_ranges", []),
+            "target_devices": route_data.get("targetDevices")
+            or route_data.get("target_devices", []),
         }
 
     async def _async_set_enabled(self, *, enabled: bool) -> None:
@@ -557,6 +585,15 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             self._site_id,
         )
 
+        if not enabled and self._kill_switch_enabled:
+            _LOGGER.warning(
+                "Disabling policy-based route %s in site %s while its kill switch "
+                "is enabled; matched traffic will keep being dropped instead of "
+                "falling back to the default route",
+                self._route_id,
+                self._site_id,
+            )
+
         await async_call_coordinator_action(
             self.coordinator,
             "async_set_policy_based_route_enabled",
@@ -566,7 +603,7 @@ class UnifiInsightsPolicyBasedRouteSwitch(
             enabled=enabled,
             fallback_factory=lambda: (
                 self.coordinator.network_client.routes.update_route(
-                    "default",
+                    self.coordinator.resolve_legacy_site_name(self._site_id),
                     self._route_id,
                     enabled=enabled,
                 )
@@ -696,7 +733,7 @@ class UnifiInsightsVpnClientSwitch(
             enabled=enabled,
             fallback_factory=lambda: (
                 self.coordinator.network_client.vpn_clients.update_vpn_client(
-                    "default",
+                    self.coordinator.resolve_legacy_site_name(self._site_id),
                     self._client_id,
                     enabled=enabled,
                 )
