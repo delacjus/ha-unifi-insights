@@ -31,6 +31,71 @@ SAMPLE_CLIENT = {
     "site": "default",
 }
 
+SAMPLE_PDU_DEVICE = {
+    "id": "pdu_device_1",
+    "mac": "00:11:22:33:44:55",
+    "model": "USP-PDU-Pro",
+    "name": "Server Room PDU",
+    "status": "online",
+    "state": "ONLINE",
+    "adopted": True,
+    "firmware_version": "6.6.65",
+    "site": "default",
+    "site_id": "default",
+}
+
+SAMPLE_PDU_LEGACY_DEVICE = {
+    "_id": "60a1b2c3d4e5f67890123456",
+    "mac": "00:11:22:33:44:55",
+    "model": "USP-PDU-Pro",
+    "name": "Server Room PDU",
+    "outlet_ac_power_consumption": "245.50",
+    "outlet_ac_power_budget": "1800.00",
+    "outlet_table": [
+        {
+            "index": 1,
+            "name": "Main Server",
+            "relay_state": True,
+            "cycle_enabled": True,
+            "outlet_caps": 3,
+            "outlet_voltage": "120.2",
+            "outlet_current": "1.25",
+            "outlet_power": "150.0",
+            "outlet_power_factor": "0.98",
+        },
+        {
+            "index": 2,
+            "name": "Backup Server",
+            "relay_state": False,
+            "cycle_enabled": False,
+            "outlet_caps": 3,
+            "outlet_voltage": "120.1",
+            "outlet_current": "0.00",
+            "outlet_power": "0.0",
+            "outlet_power_factor": "0.00",
+        },
+        {
+            "index": 3,
+            "name": "Unmetered Switch",
+            "relay_state": True,
+            "cycle_enabled": None,
+            "outlet_caps": 1,
+            "outlet_voltage": None,
+            "outlet_current": None,
+            "outlet_power": None,
+            "outlet_power_factor": None,
+        },
+    ],
+    "outlet_overrides": [
+        {
+            "index": 1,
+            "name": "Main Server",
+            "relay_state": True,
+            "cycle_enabled": True,
+        },
+    ],
+}
+
 # Protect API responses
 SAMPLE_PROTECT_CAMERA = {
     "id": "test_camera_1",
