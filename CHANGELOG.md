@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Switch entity names now resolve through the entity translation system instead of
+  hardcoded `_attr_name` values, satisfying the `entity-translations` quality scale
+  rule. Covers the firewall rule, policy-based route, VPN client, client allow and
+  WiFi switches. Displayed names and entity IDs are unchanged.
+
 ## [2026.9.0] - 2026-09-02
 
 ### Added
