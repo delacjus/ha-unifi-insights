@@ -9,8 +9,10 @@ binary_sensor entities specifically - see
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
+from string import Formatter
 
 from custom_components.unifi_insights.binary_sensor import BINARY_SENSOR_TYPES
 
@@ -58,3 +60,78 @@ def test_en_json_camera_and_sensor_names_match_strings_json() -> None:
         if key.startswith(("camera_", "sensor_")):
             assert key in en_binary_sensor, f"{key} missing from translations/en.json"
             assert en_binary_sensor[key] == value
+
+
+def _switch_translation_keys() -> set[str]:
+    """Collect every `_attr_translation_key` string literal in switch.py."""
+    tree = ast.parse((_INTEGRATION_DIR / "switch.py").read_text())
+    return {
+        node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == "_attr_translation_key"
+    }
+
+
+def _switch_supplied_placeholders() -> set[str]:
+    """Collect every key passed to `_attr_translation_placeholders` in switch.py."""
+    tree = ast.parse((_INTEGRATION_DIR / "switch.py").read_text())
+    return {
+        key.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+        for target in node.targets
+        if isinstance(target, ast.Attribute)
+        and target.attr == "_attr_translation_placeholders"
+        for key in node.value.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+
+
+def test_switch_translation_keys_resolve_in_both_files() -> None:
+    """Every translation_key used in switch.py must resolve in both files.
+
+    Regression guard for the naming change that moved the dynamically named
+    switches (firewall rule, policy-based route, VPN client, client allow,
+    WiFi) off `_attr_name` and onto translation keys. Those entities set
+    `_attr_has_entity_name = True` and have no `entity_description`, so a
+    missing key makes `Entity._name_internal` return `UNDEFINED` and the
+    friendly name silently collapses to the *device* name - every switch on
+    a gateway then renders identically and collides on entity_id, exactly
+    the failure documented above for the Protect binary sensors.
+    """
+    en_switch = json.loads(_EN_JSON.read_text())["entity"]["switch"]
+    strings_switch = json.loads(_STRINGS_JSON.read_text())["entity"]["switch"]
+
+    for key in sorted(_switch_translation_keys()):
+        assert key in strings_switch, f"{key} missing from strings.json"
+        assert key in en_switch, f"{key} missing from translations/en.json"
+        assert en_switch[key] == strings_switch[key], (
+            f"{key} differs between strings.json and translations/en.json"
+        )
+
+
+def test_switch_translation_placeholders_are_supplied() -> None:
+    """Placeholders required by a switch name must be supplied by the code.
+
+    `Entity._substitute_name_placeholders` raises `HomeAssistantError` on a
+    missing placeholder outside the stable release channel, so a typo here
+    breaks the entity rather than degrading it.
+    """
+    strings_switch = json.loads(_STRINGS_JSON.read_text())["entity"]["switch"]
+    supplied = _switch_supplied_placeholders()
+
+    for key in sorted(_switch_translation_keys()):
+        required = {
+            field
+            for _, field, _, _ in Formatter().parse(strings_switch[key]["name"])
+            if field
+        }
+        missing = required - supplied
+        assert missing == set(), (
+            f"switch.{key} name needs placeholders {sorted(missing)} "
+            "which switch.py never supplies"
+        )

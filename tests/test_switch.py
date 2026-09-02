@@ -6,9 +6,9 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
+import pytest
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -592,7 +592,8 @@ class TestUnifiWifiSwitch:
             wifi_data=wifi_data,
         )
 
-        assert switch._attr_name == "WiFi Home Network"
+        assert switch._attr_translation_key == "wifi"
+        assert switch._attr_translation_placeholders == {"wifi_name": "Home Network"}
 
     def test_switch_device_info(self, mock_coordinator) -> None:
         """Test switch device info is set correctly."""
@@ -786,7 +787,8 @@ class TestUnifiFirewallRuleSwitch:
         )
 
         assert switch._attr_unique_id == "site1_rule1_firewall_rule"
-        assert switch._attr_name == "Block Instagram"
+        assert switch._attr_translation_key == "firewall_rule"
+        assert switch._attr_translation_placeholders == {"rule_name": "Block Instagram"}
         assert switch._attr_entity_category == EntityCategory.CONFIG
         assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
 
@@ -1074,7 +1076,10 @@ class TestUnifiPolicyBasedRouteSwitch:
         )
 
         assert switch._attr_unique_id == "site1_route1_policy_based_route"
-        assert switch._attr_name == "Route via Privado VPN"
+        assert switch._attr_translation_key == "policy_based_route"
+        assert switch._attr_translation_placeholders == {
+            "route_name": "Route via Privado VPN"
+        }
         assert switch._attr_entity_category == EntityCategory.CONFIG
         assert switch._attr_device_info["identifiers"] == {(DOMAIN, "site1_gateway1")}
 

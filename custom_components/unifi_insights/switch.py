@@ -326,7 +326,8 @@ class UnifiFirewallRuleSwitch(
         rule_name = rule_data.get("name") or rule_id
 
         self._attr_unique_id = f"{site_id}_{rule_id}_firewall_rule"
-        self._attr_name = str(rule_name)
+        self._attr_translation_key = "firewall_rule"
+        self._attr_translation_placeholders = {"rule_name": str(rule_name)}
         self._attr_device_info = self._build_device_info()
 
     def _get_rule_data(self) -> dict[str, Any]:
@@ -454,14 +455,15 @@ class UnifiInsightsPolicyBasedRouteSwitch(
         self._route_id = route_id
 
         route_data = self._get_route_data()
-        route_name = (
-            route_data.get("description")
-            or route_data.get("name")
-            or f"Route {route_id}"
-        )
+        route_name = route_data.get("description") or route_data.get("name")
 
         self._attr_unique_id = f"{site_id}_{route_id}_policy_based_route"
-        self._attr_name = str(route_name)
+        if route_name:
+            self._attr_translation_key = "policy_based_route"
+            self._attr_translation_placeholders = {"route_name": str(route_name)}
+        else:
+            self._attr_translation_key = "policy_based_route_unnamed"
+            self._attr_translation_placeholders = {"route_id": route_id}
         self._attr_device_info = self._build_device_info()
 
     def _get_route_data(self) -> dict[str, Any]:
@@ -645,9 +647,14 @@ class UnifiInsightsVpnClientSwitch(
         self._attr_unique_id = f"{site_id}_{client_id}_vpn_client"
 
         vpn_client_data = self._get_vpn_client_data()
-        vpn_client_name = vpn_client_data.get("name") or "VPN Client"
-        self._attr_translation_key = "vpn_client"
-        self._attr_translation_placeholders = {"vpn_client_name": vpn_client_name}
+        vpn_client_name = vpn_client_data.get("name")
+        if vpn_client_name:
+            self._attr_translation_key = "vpn_client"
+            self._attr_translation_placeholders = {
+                "vpn_client_name": str(vpn_client_name)
+            }
+        else:
+            self._attr_translation_key = "vpn_client_unnamed"
 
         self._attr_device_info = self._build_device_info()
 
@@ -1110,7 +1117,8 @@ class UnifiClientBlockSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
         )
 
         self._attr_unique_id = f"{site_id}_{client_id}_block_switch"
-        self._attr_name = f"{client_name} Allow"
+        self._attr_translation_key = "client_allow"
+        self._attr_translation_placeholders = {"client_name": str(client_name)}
 
         # Device info - associate with the connected network device (switch/AP)
         # This groups client entities under their uplink device for a cleaner UI
@@ -1217,7 +1225,8 @@ class UnifiWifiSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntity)
         wifi_name = wifi_data.get("name") or wifi_data.get("ssid", wifi_id)
 
         self._attr_unique_id = f"{site_id}_{wifi_id}_wifi_switch"
-        self._attr_name = f"WiFi {wifi_name}"
+        self._attr_translation_key = "wifi"
+        self._attr_translation_placeholders = {"wifi_name": str(wifi_name)}
 
         # Create device info for WiFi network
         # Note: We don't use via_device since site_id is not a registered device
