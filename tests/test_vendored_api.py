@@ -582,6 +582,58 @@ async def test_clients_get_all_explicit_limit_no_pagination() -> None:
     assert client._get.await_count == 1
 
 
+async def test_clients_get_all_redacts_sensitive_validation_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Validation warning logs should not include client IDs or MAC addresses."""
+    client = _network_client()
+    sensitive_mac = "aa:bb:cc:dd:ee:ff"
+    sensitive_id = "client-123"
+    invalid_item = {"id": sensitive_id, "macAddress": sensitive_mac, "type": object()}
+    client._get = AsyncMock(
+        return_value={
+            "offset": 0,
+            "limit": 100,
+            "count": 1,
+            "totalCount": 1,
+            "data": [invalid_item],
+        }
+    )
+    caplog.set_level(
+        "WARNING",
+        logger="custom_components.unifi_insights.api.network.endpoints.clients",
+    )
+
+    result = await client.clients.get_all("site-1")
+
+    assert result == []
+    assert "Failed to validate client payload (" in caplog.text
+    assert sensitive_id not in caplog.text
+    assert sensitive_mac not in caplog.text
+
+
+async def test_clients_get_all_manual_pagination_redacts_sensitive_validation_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Manual pagination path should avoid logging sensitive client values."""
+    client = _network_client()
+    sensitive_mac = "11:22:33:44:55:66"
+    sensitive_id = "client-456"
+    invalid_item = {"id": sensitive_id, "macAddress": sensitive_mac, "type": object()}
+    client._get = AsyncMock(return_value={"data": [invalid_item]})
+    caplog.set_level(
+        "WARNING",
+        logger="custom_components.unifi_insights.api.network.endpoints.clients",
+    )
+
+    result = await client.clients.get_all("site-1", limit=1)
+
+    assert result == []
+    assert "Failed to validate client payload (" in caplog.text
+    assert sensitive_id not in caplog.text
+    assert sensitive_mac not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Network v10.4.57 - LAGs, MC-LAG domains, switch stacks
 # ---------------------------------------------------------------------------
