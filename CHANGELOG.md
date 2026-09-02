@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `UnifiInsightsVpnClientSwitch` entity naming to use translation key and placeholder instead of hardcoded `_attr_name`
+
 ## [2026.9.0] - 2026-09-02
 
 ### Added
