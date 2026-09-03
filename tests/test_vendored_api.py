@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -684,6 +685,67 @@ async def test_set_outlet_state_rejects_missing_snapshot() -> None:
 
     client._put.assert_not_awaited()
     client._get.assert_not_awaited()
+
+
+async def test_set_outlet_state_concurrent_writes_are_serialized() -> None:
+    """Test concurrent set_outlet_state writes on the same device preserve both updates."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    put_calls: list[dict[str, Any]] = []
+
+    async def mock_put(
+        path: str, json_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        await asyncio.sleep(0.01)
+        if json_data:
+            put_calls.append(json_data)
+        return {"data": []}
+
+    client._put = AsyncMock(side_effect=mock_put)
+
+    current_device = {
+        "_id": "60a1b2c3d4e5f67890123456",
+        "outlet_overrides": [
+            {"index": 1, "relay_state": True},
+            {"index": 2, "relay_state": True},
+        ],
+    }
+
+    results = await asyncio.gather(
+        client.devices.set_outlet_state(
+            "default",
+            "60a1b2c3d4e5f67890123456",
+            1,
+            state=False,
+            current_device=current_device,
+        ),
+        client.devices.set_outlet_state(
+            "default",
+            "60a1b2c3d4e5f67890123456",
+            2,
+            state=False,
+            current_device=current_device,
+        ),
+    )
+
+    assert results == [True, True]
+    assert len(put_calls) == 2
+
+    # The final PUT call must have both outlet 1 and outlet 2 turned off
+    final_overrides = put_calls[-1]["outlet_overrides"]
+    final_by_index = {item["index"]: item["relay_state"] for item in final_overrides}
+    assert final_by_index[1] is False
+    assert final_by_index[2] is False
+
+    # The cached device snapshot must also reflect both updates
+    cached_overrides = current_device["outlet_overrides"]
+    cached_by_index = {item["index"]: item["relay_state"] for item in cached_overrides}
+    assert cached_by_index[1] is False
+    assert cached_by_index[2] is False
 
 
 async def test_wifi_update_uses_put_with_existing_payload() -> None:

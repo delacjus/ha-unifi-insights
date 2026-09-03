@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -72,6 +73,13 @@ class DevicesEndpoint:
 
         """
         self._client = client
+        self._outlet_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_outlet_lock(self, lock_key: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for serializing device outlet writes."""
+        if lock_key not in self._outlet_locks:
+            self._outlet_locks[lock_key] = asyncio.Lock()
+        return self._outlet_locks[lock_key]
 
     async def get_all(
         self,
@@ -547,55 +555,60 @@ class DevicesEndpoint:
         device_dict: dict[str, Any] = current_device or {}
 
         target_id = device_dict.get("_id", device_id)
-        raw_overrides = device_dict.get("outlet_overrides")
-        outlet_overrides: list[dict[str, Any]] = []
-        if isinstance(raw_overrides, list):
-            outlet_overrides = [
-                dict(item) for item in raw_overrides if isinstance(item, dict)
-            ]
+        lock = self._get_outlet_lock(f"{site_name}:{target_id}")
 
-        if not outlet_overrides:
-            outlet_overrides = _seed_outlet_overrides(device_dict)
+        async with lock:
+            raw_overrides = device_dict.get("outlet_overrides")
+            outlet_overrides: list[dict[str, Any]] = []
+            if isinstance(raw_overrides, list):
+                outlet_overrides = [
+                    dict(item) for item in raw_overrides if isinstance(item, dict)
+                ]
 
-        if not outlet_overrides:
-            msg = (
-                f"Refusing to write outlet {outlet_index} on device {device_id}: "
-                "no outlet_overrides or outlet_table available to seed the full "
-                "override array from. Writing a partial array would reset the "
-                "device's other outlets."
-            )
-            raise UniFiValidationError(msg)
+            if not outlet_overrides:
+                outlet_overrides = _seed_outlet_overrides(device_dict)
 
-        found = False
-        for override in outlet_overrides:
-            idx = override.get("index")
-            if idx is None:
-                idx = override.get("outlet_idx")
-            try:
-                idx_int = int(idx)  # type: ignore[arg-type]
-            except TypeError, ValueError:
-                continue
+            if not outlet_overrides:
+                msg: str = (
+                    f"Refusing to write outlet {outlet_index} on device {device_id}: "
+                    "no outlet_overrides or outlet_table available to seed the full "
+                    "override array from. Writing a partial array would reset the "
+                    "device's other outlets."
+                )
+                raise UniFiValidationError(msg)
 
-            if idx_int == outlet_index:
-                override["relay_state"] = state
+            found = False
+            for override in outlet_overrides:
+                idx = override.get("index")
+                if idx is None:
+                    idx = override.get("outlet_idx")
+                try:
+                    idx_int = int(idx)  # type: ignore[arg-type]
+                except TypeError, ValueError:
+                    continue
+
+                if idx_int == outlet_index:
+                    override["relay_state"] = state
+                    if cycle_enabled is not None:
+                        override["cycle_enabled"] = cycle_enabled
+                    found = True
+                    break
+
+            if not found:
+                new_override: dict[str, Any] = {
+                    "index": outlet_index,
+                    "relay_state": state,
+                }
                 if cycle_enabled is not None:
-                    override["cycle_enabled"] = cycle_enabled
-                found = True
-                break
+                    new_override["cycle_enabled"] = cycle_enabled
+                outlet_overrides.append(new_override)
 
-        if not found:
-            new_override: dict[str, Any] = {
-                "index": outlet_index,
-                "relay_state": state,
-            }
-            if cycle_enabled is not None:
-                new_override["cycle_enabled"] = cycle_enabled
-            outlet_overrides.append(new_override)
-
-        put_path = self._client.build_legacy_api_path(
-            site_name, f"/rest/device/{target_id}"
-        )
-        await self._client._put(
-            put_path, json_data={"outlet_overrides": outlet_overrides}
-        )
-        return True
+            put_path = self._client.build_legacy_api_path(
+                site_name, f"/rest/device/{target_id}"
+            )
+            await self._client._put(
+                put_path, json_data={"outlet_overrides": outlet_overrides}
+            )
+            if current_device is not None:
+                current_device["outlet_overrides"] = outlet_overrides
+            return True
