@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.9.1] - 2026-09-03
+
 ### Added
 
 - Added support for UniFi Power Distribution Units (PDUs) and SmartPower strips (e.g. USP-PDU-Pro, USP-Strip):
@@ -21,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardcoded `_attr_name` values, satisfying the `entity-translations` quality scale
   rule. Covers the firewall rule, policy-based route, VPN client, client allow and
   WiFi switches. Displayed names and entity IDs are unchanged.
+
+Thanks @delacjus
 
 ## [2026.9.0] - 2026-09-02
 
