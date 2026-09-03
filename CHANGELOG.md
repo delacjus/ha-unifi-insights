@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI & Testing
+
+- Added GitHub Actions workflow (`.github/workflows/test.yml`) to run pytest with branch coverage and upload reports to Codecov (`codecov/codecov-action@v5`).
+- Added `codecov.yml` configuration defining 90% project and patch coverage targets with detailed PR coverage comments.
+- Untracked `coverage.xml` build artifact from git tracking.
+- Added Codecov coverage status badge to `README.md`.
+
 ### Documentation
 
 - Updated the pull request template and developer guidance (`CONTRIBUTING.md`, `AGENTS.md`, Copilot instructions) to reference the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, latest developer capabilities, and coding agent context.
