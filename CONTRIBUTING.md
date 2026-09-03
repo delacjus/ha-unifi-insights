@@ -101,16 +101,17 @@ This integration follows Home Assistant's [integration quality standards](https:
 When submitting a pull request:
 
 1. Create a descriptive feature/bugfix branch from `main`.
-2. Follow the checklist provided in the [Pull Request Template](.github/pull_request_template.md).
-3. Ensure all automated validation steps pass:
+2. Check the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, specifications, and latest capabilities offered to developers.
+3. Follow the checklist provided in the [Pull Request Template](.github/pull_request_template.md).
+4. Ensure all automated validation steps pass:
    ```bash
    script/lint                               # Linting & code formatting
    mypy custom_components/unifi_insights     # Strict type checking
    bandit -r custom_components/unifi_insights # Security scanning
    pytest                                    # Unit tests (90% minimum coverage)
    ```
-4. Verify your changes against a live Home Assistant instance (`./script/develop`).
-5. Update `CHANGELOG.md` under `[Unreleased]` with a clear, user-facing summary of your changes.
+5. Verify your changes against a live Home Assistant instance (`./script/develop`).
+6. Update `CHANGELOG.md` under `[Unreleased]` with a clear, user-facing summary of your changes.
 
 ## License
 
