@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
-import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import (
@@ -928,6 +928,93 @@ class TestUnifiDeviceCoordinator:
         assert device_data["generalTemperature"] == 47.5
         assert device_data["hasTemperature"] is True
         assert device_data["temperatures"][0]["name"] == "CPU"
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_merges_legacy_outlets(
+        self, coordinator: UnifiDeviceCoordinator
+    ):
+        """Test merge of legacy outlet table and power totals into device data."""
+        coordinator.network_client.devices.get_legacy_site_devices = AsyncMock(
+            return_value=[
+                {
+                    "_id": "60a1b2c3d4e5f67890123456",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                    "outlet_ac_power_consumption": "245.50",
+                    "outlet_ac_power_budget": "1800.00",
+                    "outlet_table": [
+                        {
+                            "index": 1,
+                            "name": "Outlet 1",
+                            "relay_state": True,
+                            "cycle_enabled": True,
+                            "outlet_caps": 3,
+                            "outlet_voltage": "120.2",
+                            "outlet_current": "1.25",
+                            "outlet_power": "150.0",
+                            "outlet_power_factor": "0.98",
+                        }
+                    ],
+                    "outlet_overrides": [
+                        {
+                            "index": 1,
+                            "relay_state": True,
+                            "cycle_enabled": True,
+                        }
+                    ],
+                }
+            ]
+        )
+
+        result = await coordinator._async_update_data()
+
+        device_data = result["devices"]["default"]["device1"]
+        assert device_data["_id"] == "60a1b2c3d4e5f67890123456"
+        assert device_data["ac_power_consumption"] == 245.5
+        assert device_data["ac_power_budget"] == 1800.0
+        assert len(device_data["outlet_table"]) == 1
+        assert device_data["outlet_table"][0]["name"] == "Outlet 1"
+        assert device_data["outlet_table"][0]["relay_state"] is True
+        assert device_data["outlet_table"][0]["cycle_enabled"] is True
+        assert device_data["outlet_table"][0]["outlet_power"] == 150.0
+        assert len(device_data["outlet_overrides"]) == 1
+
+    def test_merge_legacy_outlet_data_edge_cases(
+        self, coordinator: UnifiDeviceCoordinator
+    ):
+        """Test _merge_legacy_outlet_data edge cases."""
+        # 1. Missing MAC in device_dict
+        dev: dict[str, Any] = {"name": "No MAC"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_table": [{"index": 1}]}}
+        )
+        assert "outlet_table" not in dev
+
+        # 2. Legacy device not in legacy_devices_by_mac
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(dev, {})
+        assert "outlet_table" not in dev
+
+        # 3. Legacy device has no outlets and no power totals
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"name": "Empty"}}
+        )
+        assert "outlet_table" not in dev
+
+        # 4. Legacy device has only ac_power_consumption
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_ac_power_consumption": "50.5"}}
+        )
+        assert dev["ac_power_consumption"] == 50.5
+        assert "outlet_table" not in dev
+
+        # 5. Legacy device has only ac_power_budget
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_ac_power_budget": "100.0"}}
+        )
+        assert dev["ac_power_budget"] == 100.0
 
     @pytest.mark.asyncio
     async def test_async_update_data_legacy_temperature_failure_is_ignored(
@@ -3552,6 +3639,43 @@ class TestUnifiFacadeCoordinator:
         await facade_coordinator.async_block_client("site1", "client1")
         facade_coordinator.network_client.clients.block.assert_called_once_with(
             "branch", "AA:BB:CC:DD:EE:FF"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_outlet_state(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test async_set_outlet_state resolves site and targets legacy _id."""
+        facade_coordinator.data["devices"] = {
+            "site1": {
+                "device1": {
+                    "id": "device1",
+                    "_id": "60a1b2c3d4e5f67890123456",
+                    "macAddress": "AA:BB:CC:DD:EE:FF",
+                }
+            }
+        }
+        facade_coordinator._device_coordinator._legacy_site_names = {"site1": "branch"}
+        facade_coordinator.network_client.devices.set_outlet_state = AsyncMock(
+            return_value=True
+        )
+
+        result = await facade_coordinator.async_set_outlet_state(
+            "site1", "device1", 1, state=True, cycle_enabled=False
+        )
+        assert result is True
+        set_outlet = facade_coordinator.network_client.devices.set_outlet_state
+        set_outlet.assert_called_once_with(
+            "branch",
+            "60a1b2c3d4e5f67890123456",
+            1,
+            True,
+            cycle_enabled=False,
+            current_device={
+                "id": "device1",
+                "_id": "60a1b2c3d4e5f67890123456",
+                "macAddress": "AA:BB:CC:DD:EE:FF",
+            },
         )
 
     @pytest.mark.asyncio

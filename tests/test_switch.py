@@ -33,6 +33,8 @@ from custom_components.unifi_insights.switch import (
     PARALLEL_UPDATES,
     UnifiClientBlockSwitch,
     UnifiFirewallRuleSwitch,
+    UnifiOutletCycleSwitch,
+    UnifiOutletSwitch,
     UnifiPolicyBasedRouteSwitch,
     UnifiProtectHighFPSSwitch,
     UnifiProtectMicrophoneSwitch,
@@ -2980,3 +2982,437 @@ class TestUnifiWifiSwitchEdgeCases:
 
         wifi_data = switch._get_wifi_data()
         assert wifi_data == initial_wifi_data
+
+
+class TestUnifiOutletSwitch:
+    """Tests for UnifiOutletSwitch platform entity."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with PDU device data."""
+        coordinator = MagicMock()
+        coordinator.available = True
+        coordinator.data = {
+            "devices": {
+                "site1": {
+                    "pdu1": {
+                        "id": "pdu1",
+                        "_id": "60a1b2c3d4e5f67890123456",
+                        "name": "Smart PDU",
+                        "status": "online",
+                        "state": "ONLINE",
+                        "outlet_table": [
+                            {
+                                "index": 1,
+                                "name": "Main Server",
+                                "relay_state": True,
+                                "cycle_enabled": True,
+                                "outlet_caps": 3,
+                                "outlet_voltage": 120.2,
+                                "outlet_current": 1.25,
+                                "outlet_power": 150.0,
+                                "outlet_power_factor": 0.98,
+                            },
+                            {
+                                "index": 2,
+                                "name": "Backup Server",
+                                "relay_state": False,
+                                "cycle_enabled": False,
+                                "outlet_caps": 3,
+                                "outlet_voltage": 120.1,
+                                "outlet_current": 0.0,
+                                "outlet_power": 0.0,
+                                "outlet_power_factor": 0.0,
+                            },
+                            {
+                                "index": 3,
+                                "name": "Modem",
+                                "relay_state": True,
+                                "cycle_enabled": None,
+                                "outlet_caps": 1,
+                            },
+                        ],
+                    }
+                }
+            },
+            "protect": {"cameras": {}, "lights": {}},
+            "wifi": {},
+            "firewall_rules": {},
+            "clients": {},
+        }
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.devices = MagicMock()
+        coordinator.network_client.devices.set_outlet_state = AsyncMock(
+            return_value=True
+        )
+        coordinator.async_set_outlet_state = AsyncMock(return_value=True)
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_creates_outlet_switches(
+        self, mock_coordinator
+    ) -> None:
+        mock_entry = MagicMock()
+        mock_entry.runtime_data.coordinator = mock_coordinator
+        entities = []
+
+        def async_add_entities(new_entities):
+            entities.extend(new_entities)
+
+        await async_setup_entry(
+            MagicMock(),
+            mock_entry,
+            async_add_entities,
+        )
+
+        outlet_switches = [e for e in entities if isinstance(e, UnifiOutletSwitch)]
+        cycle_switches = [e for e in entities if isinstance(e, UnifiOutletCycleSwitch)]
+
+        assert len(outlet_switches) == 3
+        # Outlets 1 and 2 have cycle_enabled not None; outlet 3 has cycle_enabled None
+        assert len(cycle_switches) == 2
+
+    def test_outlet_switch_properties(self, mock_coordinator) -> None:
+        """Test UnifiOutletSwitch properties and unique_id literal."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+
+        assert switch.unique_id == "site1_pdu1_outlet_1"
+        assert switch.translation_key == "outlet"
+        assert switch.translation_placeholders == {"outlet_name": "Main Server"}
+        assert switch.is_on is True
+        assert switch.available is True
+        assert switch.icon == "mdi:power-socket-us"
+
+        attrs = switch.extra_state_attributes
+        assert attrs["index"] == 1
+        assert attrs["name"] == "Main Server"
+        assert attrs["relay_state"] is True
+        assert attrs["cycle_enabled"] is True
+        assert attrs["outlet_power"] == 150.0
+
+    @pytest.mark.asyncio
+    async def test_outlet_switch_turn_on(self, mock_coordinator) -> None:
+        """Test turning on the outlet switch."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            1
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=2,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 2, state=True
+        )
+        mock_coordinator.async_request_refresh.assert_awaited_once()
+        assert switch.is_on is True
+
+    @pytest.mark.asyncio
+    async def test_outlet_switch_turn_off(self, mock_coordinator) -> None:
+        """Test turning off the outlet switch."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=False
+        )
+        mock_coordinator.async_request_refresh.assert_awaited_once()
+        assert switch.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_outlet_switch_turn_on_fallback(self, mock_coordinator) -> None:
+        """Test turning on uses fallback when coordinator method is not present."""
+        del mock_coordinator.async_set_outlet_state
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            1
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=2,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        set_outlet = mock_coordinator.network_client.devices.set_outlet_state
+        set_outlet.assert_awaited_once_with(
+            "default",
+            "pdu1",
+            2,
+            state=True,
+            current_device=mock_coordinator.data["devices"]["site1"]["pdu1"],
+        )
+
+    def test_outlet_switch_unavailable_when_device_offline(
+        self, mock_coordinator
+    ) -> None:
+        """Test switch availability when device is offline."""
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["state"] = "OFFLINE"
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["status"] = "offline"
+
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+        )
+
+        assert switch.available is False
+
+
+class TestUnifiOutletCycleSwitch:
+    """Tests for UnifiOutletCycleSwitch entity."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with PDU device data."""
+        coordinator = MagicMock()
+        coordinator.available = True
+        coordinator.data = {
+            "devices": {
+                "site1": {
+                    "pdu1": {
+                        "id": "pdu1",
+                        "_id": "60a1b2c3d4e5f67890123456",
+                        "name": "Smart PDU",
+                        "status": "online",
+                        "state": "ONLINE",
+                        "outlet_table": [
+                            {
+                                "index": 1,
+                                "name": "Main Server",
+                                "relay_state": True,
+                                "cycle_enabled": True,
+                                "outlet_caps": 3,
+                            },
+                            {
+                                "index": 2,
+                                "name": "Backup Server",
+                                "relay_state": False,
+                                "cycle_enabled": False,
+                                "outlet_caps": 3,
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+        coordinator.network_client = MagicMock()
+        coordinator.network_client.devices = MagicMock()
+        coordinator.network_client.devices.set_outlet_state = AsyncMock(
+            return_value=True
+        )
+        coordinator.async_set_outlet_state = AsyncMock(return_value=True)
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.resolve_legacy_site_name = MagicMock(return_value="default")
+        return coordinator
+
+    def test_cycle_switch_properties(self, mock_coordinator) -> None:
+        """Test UnifiOutletCycleSwitch properties and unique_id literal."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+
+        assert switch.unique_id == "site1_pdu1_outlet_1_cycle_enabled"
+        assert switch.translation_key == "outlet_cycle_enabled"
+        assert switch.translation_placeholders == {"outlet_name": "Main Server"}
+        assert switch.entity_category == EntityCategory.CONFIG
+        assert switch.entity_registry_enabled_default is False
+        assert switch.is_on is True
+        assert switch.available is True
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_turn_on(self, mock_coordinator) -> None:
+        """Test turning on the power cycle switch."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            1
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=2,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 2, state=False, cycle_enabled=True
+        )
+        mock_coordinator.async_request_refresh.assert_awaited_once()
+        assert switch.is_on is True
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_turn_off(self, mock_coordinator) -> None:
+        """Test turning off the power cycle switch."""
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=True, cycle_enabled=False
+        )
+        mock_coordinator.async_request_refresh.assert_awaited_once()
+        assert switch.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_fallback(self, mock_coordinator) -> None:
+        """Test fallback when coordinator action is absent."""
+        del mock_coordinator.async_set_outlet_state
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        set_outlet = mock_coordinator.network_client.devices.set_outlet_state
+        set_outlet.assert_awaited_once_with(
+            "default",
+            "pdu1",
+            1,
+            state=True,
+            cycle_enabled=False,
+            current_device=mock_coordinator.data["devices"]["site1"]["pdu1"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_does_not_default_relay_on(
+        self, mock_coordinator
+    ) -> None:
+        """Test toggling power cycling never energizes an unknown relay.
+
+        set_outlet_state always writes relay_state into the override, so an
+        outlet whose reported data carries no relay_state must be treated as
+        OFF. Defaulting to ON would switch on a load the user did not ask for.
+        """
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"] = [
+            {"index": 1, "name": "Main Server", "cycle_enabled": False}
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"index": 1, "cycle_enabled": False},
+        )
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=False, cycle_enabled=True
+        )
+
+    def test_outlet_switch_edge_cases(self, mock_coordinator) -> None:
+        """Test outlet switch edge cases for complete branch coverage."""
+        # 1. Device data missing or not dict
+        mock_coordinator.data["devices"] = {}
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"relay_state": True},
+        )
+        assert switch._get_outlet_data() is None
+        assert switch.is_on is True
+        assert switch.available is False
+
+        # 2. Outlet table with invalid entries
+        mock_coordinator.data["devices"] = {
+            "site1": {
+                "pdu1": {
+                    "outlet_table": [
+                        "not_a_dict",
+                        {"index": "invalid"},
+                        {"outlet_idx": 2},
+                    ],
+                    "state": "ONLINE",
+                    "status": "online",
+                }
+            }
+        }
+        assert switch._get_outlet_data() is None
+        switch._update_local_state(relay_state=False)
+
+        # 3. Cycle switch with missing/offline data
+        cycle_switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"cycle_enabled": True},
+        )
+        assert cycle_switch._get_outlet_data() is None
+        assert cycle_switch.is_on is True
+        assert cycle_switch.available is False
+
+        # 4. Cycle switch update local state
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"] = [
+            {"index": 1, "cycle_enabled": False}
+        ]
+        cycle_switch._update_local_state(cycle_enabled=True)
+        assert (
+            mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][0][
+                "cycle_enabled"
+            ]
+            is True
+        )

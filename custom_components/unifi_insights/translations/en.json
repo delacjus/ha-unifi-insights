@@ -231,6 +231,24 @@
       },
       "site_wireless_clients": {
         "name": "Wireless Clients"
+      },
+      "ac_power_consumption": {
+        "name": "AC Power Consumption"
+      },
+      "ac_power_budget": {
+        "name": "AC Power Budget"
+      },
+      "outlet_power": {
+        "name": "{outlet_name} Power"
+      },
+      "outlet_voltage": {
+        "name": "{outlet_name} Voltage"
+      },
+      "outlet_current": {
+        "name": "{outlet_name} Current"
+      },
+      "outlet_power_factor": {
+        "name": "{outlet_name} Power Factor"
       }
     },
     "binary_sensor": {
@@ -326,6 +344,12 @@
       },
       "firewall_rule": {
         "name": "{rule_name}"
+      },
+      "outlet": {
+        "name": "{outlet_name}"
+      },
+      "outlet_cycle_enabled": {
+        "name": "{outlet_name} Power Cycle"
       },
       "policy_based_route": {
         "name": "{route_name}"

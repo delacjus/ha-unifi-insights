@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added support for UniFi Power Distribution Units (PDUs) and SmartPower strips (e.g. USP-PDU-Pro, USP-Strip):
+  - Per-outlet relay switches (`UnifiOutletSwitch`) to toggle power state on individual outlets
+  - Config switches (`UnifiOutletCycleSwitch`) for outlets supporting automatic modem power cycling
+  - Per-outlet metering sensors for metered outlets (power in W, voltage in V, current in A, and power factor)
+  - Device-level power total sensors for AC power consumption and AC power budget
+
 ### Changed
 
 - Switch entity names now resolve through the entity translation system instead of
