@@ -23,6 +23,7 @@ This integration vendors the upstream `unifi-official-api` project under `custom
 - NEVER create a custom HTTP client — reuse or extend the vendored package
 - Reuse `network_client` and `protect_client` methods
 - Never duplicate API endpoint paths — reference `const.py`
+- Always consult the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, endpoint specifications, and latest developer features
 
 ## Client Setup
 

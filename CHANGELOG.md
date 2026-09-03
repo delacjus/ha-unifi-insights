@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Updated the pull request template and developer guidance (`CONTRIBUTING.md`, `AGENTS.md`, Copilot instructions) to reference the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, latest developer capabilities, and coding agent context.
+
 ## [2026.9.1] - 2026-09-03
 
 ### Added

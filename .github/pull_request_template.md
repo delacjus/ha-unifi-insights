@@ -1,11 +1,15 @@
 <!--
   Thank you for contributing to UniFi Insights!
   Please fill out this template to help reviewers understand your changes.
+
+  Note for contributors and coding agents:
+  Consult https://developer.ui.com/ for the latest official information,
+  API references, and capabilities offered to UniFi developers.
 -->
 
 ## Description
 
-<!-- Provide a clear and concise description of what this pull request does. -->
+<!-- Provide a clear and concise description of what this pull request does. If this PR adds or updates API endpoints, models, or features, ensure you have checked https://developer.ui.com/ for latest specifications. -->
 
 Closes # <!-- Link any related issues, e.g. Closes #123 -->
 
@@ -25,6 +29,7 @@ Closes # <!-- Link any related issues, e.g. Closes #123 -->
 
 <!-- Mark all items that apply to your changes -->
 
+- [ ] **UniFi Developer Portal**: Checked [developer.ui.com](https://developer.ui.com/) for the latest official UniFi API documentation, endpoints, and schema capabilities to ensure alignment with what UniFi offers to developers.
 - [ ] **Data Flow**: Entities read solely from `coordinator.data` (no direct HTTP/network calls in entity properties).
 - [ ] **API Encapsulation**: Actions and endpoints route through coordinator methods or vendored API clients (`custom_components/unifi_insights/api/`).
 - [ ] **Base Entities**: Inherits from `UnifiInsightsEntity` or `UnifiProtectEntity` with `_attr_has_entity_name = True`.
@@ -53,4 +58,4 @@ Closes # <!-- Link any related issues, e.g. Closes #123 -->
 
 ## Additional Context
 
-<!-- Add any other context, screenshots, or logs about the pull request here. -->
+<!-- Add any other context, screenshots, or logs about the pull request here. Reference relevant documentation or endpoints from https://developer.ui.com/ where applicable. -->

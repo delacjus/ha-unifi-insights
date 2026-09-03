@@ -16,3 +16,4 @@
 - Dev server: `./script/develop` boots Home Assistant using ./config with `PYTHONPATH` set to custom_components; ensure dependencies are installed via `./script/setup/bootstrap`.
 - Conventions: `PARALLEL_UPDATES` set to 0 for coordinator-driven entities, 1 for action-based Protect entities; prefer camelCase tolerance via `get_field`; keep service schemas in sync with `services.yaml`; avoid duplicating API paths or constants.
 - Vendored API package: [../custom_components/unifi_insights/api](../custom_components/unifi_insights/api) contains the local copy of the upstream UniFi API client; reuse its client methods (network_client/protect_client) rather than manual HTTP calls.
+- UniFi Developer Portal: Consult https://developer.ui.com/ for the latest official UniFi API documentation, endpoint specifications, and developer capabilities.
