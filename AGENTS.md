@@ -451,6 +451,7 @@ See `.github/instructions/tests.instructions.md` for comprehensive testing patte
 
 ## UniFi-Specific Considerations
 
+- **UniFi Developer Portal:** Consult [developer.ui.com](https://developer.ui.com/) for official UniFi API documentation, endpoint specifications, and latest developer capabilities
 - **API Rate Limiting:** Be mindful of UniFi controller API rate limits when setting polling intervals
 - **Device Discovery:** Handle dynamic device discovery as UniFi networks can change
 - **Connection Resilience:** UniFi controllers may restart or become temporarily unavailable
@@ -479,6 +480,7 @@ See `.github/instructions/tests.instructions.md` for comprehensive testing patte
 
 ## Additional Resources
 
+- [UniFi Developer Portal](https://developer.ui.com/) — Official UniFi API documentation and developer resources
 - [Home Assistant Developer Docs](https://developers.home-assistant.io/) — Primary reference
 - [Integration Quality Scale Rules](https://developers.home-assistant.io/docs/core/integration-quality-scale/rules)
 - [Architecture Docs](https://developers.home-assistant.io/docs/architecture_index)

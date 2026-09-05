@@ -16,6 +16,7 @@ from custom_components.unifi_insights.api import (
     UniFiResponseError,
     UniFiTimeoutError,
 )
+from custom_components.unifi_insights.api.network.models import parse_outlet_metrics
 from custom_components.unifi_insights.const import DOMAIN, SCAN_INTERVAL_DEVICE
 
 from .base import UnifiBaseCoordinator
@@ -237,6 +238,51 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
         if ports:
             device_dict["ports"] = ports
 
+    @classmethod
+    def _merge_legacy_outlet_data(
+        cls,
+        device_dict: dict[str, Any],
+        legacy_devices_by_mac: dict[str, dict[str, Any]],
+    ) -> None:
+        """Merge outlet_table and power totals from legacy data into the device."""
+        mac_address = cls._normalize_mac(
+            device_dict.get("macAddress") or device_dict.get("mac")
+        )
+        if mac_address is None:
+            return
+
+        legacy_device = legacy_devices_by_mac.get(mac_address)
+        if legacy_device is None:
+            return
+
+        outlet_metrics = parse_outlet_metrics(legacy_device)
+        if (
+            not outlet_metrics.outlets
+            and outlet_metrics.ac_power_consumption is None
+            and outlet_metrics.ac_power_budget is None
+        ):
+            return
+
+        if "_id" in legacy_device:
+            device_dict["_id"] = legacy_device["_id"]
+
+        if outlet_metrics.outlets:
+            device_dict["outlet_table"] = [
+                outlet.model_dump() for outlet in outlet_metrics.outlets
+            ]
+            if "outlet_overrides" in legacy_device:
+                device_dict["outlet_overrides"] = legacy_device["outlet_overrides"]
+
+        if outlet_metrics.ac_power_consumption is not None:
+            device_dict["outlet_ac_power_consumption"] = (
+                outlet_metrics.ac_power_consumption
+            )
+            device_dict["ac_power_consumption"] = outlet_metrics.ac_power_consumption
+
+        if outlet_metrics.ac_power_budget is not None:
+            device_dict["outlet_ac_power_budget"] = outlet_metrics.ac_power_budget
+            device_dict["ac_power_budget"] = outlet_metrics.ac_power_budget
+
     def _map_legacy_site_names(
         self,
         site_ids: list[str],
@@ -329,8 +375,13 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                                     or site_obj.get("internal_reference")
                                     or site_name
                                 )
-                    except Exception:
-                        pass
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "Device coordinator: Unable to resolve internal "
+                            "site reference for %s: %s",
+                            site_id,
+                            err,
+                        )
 
                 if device_mac and site_name:
                     metrics = await self.network_client.devices.get_port_metrics(
@@ -350,8 +401,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                         stats["poe_total_w"] = metrics.poe_total_w
             except Exception as err:
                 _LOGGER.debug(
-                    "Legacy PoE wattage fetch failed for %s: %s",
-                    device_mac or device_id,
+                    "Legacy PoE wattage fetch failed: %s",
                     err,
                 )
 
@@ -433,6 +483,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                 for device in devices:
                     self._merge_legacy_temperature_data(device, legacy_devices_by_mac)
                     self._merge_legacy_port_data(device, legacy_devices_by_mac)
+                    self._merge_legacy_outlet_data(device, legacy_devices_by_mac)
 
             _LOGGER.debug(
                 "Device coordinator: Site %s - Found %d devices and %d clients",

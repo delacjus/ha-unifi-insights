@@ -122,6 +122,22 @@ def _create_mock_network_client() -> MagicMock:
     )
     client.firewall.update_rule = AsyncMock()
 
+    # Routes namespace
+    client.routes = MagicMock()
+    client.routes.list_routes = AsyncMock(
+        return_value=[
+            _create_mock_model(
+                {
+                    "id": "route1",
+                    "description": "Route via VPN",
+                    "enabled": True,
+                    "interface": "vpn",
+                }
+            )
+        ]
+    )
+    client.routes.update_route = AsyncMock()
+
     # Devices namespace
     client.devices = MagicMock()
     client.devices.get_all = AsyncMock(
@@ -460,6 +476,7 @@ class TestUnifiConfigCoordinator:
         assert "sites" in coordinator.data
         assert "wifi" in coordinator.data
         assert "firewall_rules" in coordinator.data
+        assert "policy_based_routes" in coordinator.data
         assert "network_info" in coordinator.data
 
     @pytest.mark.asyncio
@@ -473,6 +490,8 @@ class TestUnifiConfigCoordinator:
         assert "wifi" in result
         assert "firewall_rules" in result
         assert "rule1" in result["firewall_rules"]["default"]
+        assert "policy_based_routes" in result
+        assert "route1" in result["policy_based_routes"]["default"]
         assert coordinator._available is True
 
     @pytest.mark.asyncio
@@ -510,6 +529,64 @@ class TestUnifiConfigCoordinator:
         assert coordinator._available is True
 
     @pytest.mark.asyncio
+    async def test_async_update_data_routes_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test policy-based routes are optional when the endpoint is unavailable."""
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=Exception("Routes endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["policy_based_routes"]["default"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_routes_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test auth error during routes fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.routes.list_routes = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test VPN clients are optional when the endpoint is unavailable."""
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=Exception("VPN clients endpoint unavailable")
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert "sites" in result
+        assert "default" in result["sites"]
+        assert result["vpn_clients"]["default"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_vpn_clients_auth_error(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test auth error during VPN clients fetch triggers reauth."""
+        coordinator.protect_client = None
+        coordinator.network_client.vpn_clients.list_vpn_clients = AsyncMock(
+            side_effect=UniFiAuthenticationError("Invalid API key")
+        )
+
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
     async def test_async_update_data_auth_error(
         self, coordinator: UnifiConfigCoordinator
     ):
@@ -536,6 +613,62 @@ class TestUnifiConfigCoordinator:
         assert result["wifi"] == {}
         assert result["firewall_rules"] == {}
         assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_protect_only_console_non_json_sites(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test fetch succeeds when the sites endpoint returns 200 and no JSON."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        result = await coordinator._async_update_data()
+        assert result["sites"] == {}
+        assert result["wifi"] == {}
+        assert result["firewall_rules"] == {}
+        assert coordinator._available is True
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_non_json_sites_without_protect(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test a non-JSON sites response still fails when Protect is absent."""
+        coordinator.protect_client = None
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError(
+                "API returned non-JSON response (status 200)", status_code=200
+            )
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_redirect_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test only a 200 is tolerated, so a 3xx is not swallowed."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Redirected", status_code=302)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_server_error_sites_still_fails(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test a >=400 response is not swallowed by the non-JSON tolerance."""
+        coordinator.network_client.sites.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Server error", status_code=500)
+        )
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_connection_error(
@@ -629,6 +762,36 @@ class TestUnifiConfigCoordinator:
     def test_get_firewall_rules_missing_site(self, coordinator: UnifiConfigCoordinator):
         """Test getting firewall rules for missing site."""
         result = coordinator.get_firewall_rules("nonexistent")
+        assert result == {}
+
+    def test_get_policy_based_routes(self, coordinator: UnifiConfigCoordinator):
+        """Test getting policy-based routes for a site."""
+        coordinator.data["policy_based_routes"] = {
+            "default": {"route1": {"id": "route1", "description": "Route to VPN"}}
+        }
+        result = coordinator.get_policy_based_routes("default")
+        assert "route1" in result
+
+    def test_get_policy_based_routes_missing_site(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test getting policy-based routes for missing site."""
+        result = coordinator.get_policy_based_routes("nonexistent")
+        assert result == {}
+
+    def test_get_vpn_clients(self, coordinator: UnifiConfigCoordinator) -> None:
+        """Test getting VPN clients for a site."""
+        coordinator.data["vpn_clients"] = {
+            "default": {"client1": {"_id": "client1", "name": "Privado VPN"}}
+        }
+        result = coordinator.get_vpn_clients("default")
+        assert "client1" in result
+
+    def test_get_vpn_clients_missing_site(
+        self, coordinator: UnifiConfigCoordinator
+    ) -> None:
+        """Test getting VPN clients for missing site."""
+        result = coordinator.get_vpn_clients("nonexistent")
         assert result == {}
 
     @pytest.mark.asyncio
@@ -765,6 +928,93 @@ class TestUnifiDeviceCoordinator:
         assert device_data["generalTemperature"] == 47.5
         assert device_data["hasTemperature"] is True
         assert device_data["temperatures"][0]["name"] == "CPU"
+
+    @pytest.mark.asyncio
+    async def test_async_update_data_merges_legacy_outlets(
+        self, coordinator: UnifiDeviceCoordinator
+    ):
+        """Test merge of legacy outlet table and power totals into device data."""
+        coordinator.network_client.devices.get_legacy_site_devices = AsyncMock(
+            return_value=[
+                {
+                    "_id": "60a1b2c3d4e5f67890123456",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                    "outlet_ac_power_consumption": "245.50",
+                    "outlet_ac_power_budget": "1800.00",
+                    "outlet_table": [
+                        {
+                            "index": 1,
+                            "name": "Outlet 1",
+                            "relay_state": True,
+                            "cycle_enabled": True,
+                            "outlet_caps": 3,
+                            "outlet_voltage": "120.2",
+                            "outlet_current": "1.25",
+                            "outlet_power": "150.0",
+                            "outlet_power_factor": "0.98",
+                        }
+                    ],
+                    "outlet_overrides": [
+                        {
+                            "index": 1,
+                            "relay_state": True,
+                            "cycle_enabled": True,
+                        }
+                    ],
+                }
+            ]
+        )
+
+        result = await coordinator._async_update_data()
+
+        device_data = result["devices"]["default"]["device1"]
+        assert device_data["_id"] == "60a1b2c3d4e5f67890123456"
+        assert device_data["ac_power_consumption"] == 245.5
+        assert device_data["ac_power_budget"] == 1800.0
+        assert len(device_data["outlet_table"]) == 1
+        assert device_data["outlet_table"][0]["name"] == "Outlet 1"
+        assert device_data["outlet_table"][0]["relay_state"] is True
+        assert device_data["outlet_table"][0]["cycle_enabled"] is True
+        assert device_data["outlet_table"][0]["outlet_power"] == 150.0
+        assert len(device_data["outlet_overrides"]) == 1
+
+    def test_merge_legacy_outlet_data_edge_cases(
+        self, coordinator: UnifiDeviceCoordinator
+    ):
+        """Test _merge_legacy_outlet_data edge cases."""
+        # 1. Missing MAC in device_dict
+        dev: dict[str, Any] = {"name": "No MAC"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_table": [{"index": 1}]}}
+        )
+        assert "outlet_table" not in dev
+
+        # 2. Legacy device not in legacy_devices_by_mac
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(dev, {})
+        assert "outlet_table" not in dev
+
+        # 3. Legacy device has no outlets and no power totals
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"name": "Empty"}}
+        )
+        assert "outlet_table" not in dev
+
+        # 4. Legacy device has only ac_power_consumption
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_ac_power_consumption": "50.5"}}
+        )
+        assert dev["ac_power_consumption"] == 50.5
+        assert "outlet_table" not in dev
+
+        # 5. Legacy device has only ac_power_budget
+        dev = {"mac": "AA:BB:CC:DD:EE:FF"}
+        coordinator._merge_legacy_outlet_data(
+            dev, {"aa:bb:cc:dd:ee:ff": {"outlet_ac_power_budget": "100.0"}}
+        )
+        assert dev["ac_power_budget"] == 100.0
 
     @pytest.mark.asyncio
     async def test_async_update_data_legacy_temperature_failure_is_ignored(
@@ -2010,6 +2260,61 @@ class TestUnifiProtectCoordinator:
         assert warning_records == []
         assert any("event33" in r.getMessage() for r in debug_records)
 
+    def test_on_websocket_event_message_error_frame_warns_once_then_debug(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test a console error frame is reported as an error, not as a
+        parse failure, and is capped the same warn-once way.
+        """
+        frame: dict[str, Any] = {
+            "error": "Too many requests",
+            "name": "TOO_MANY_REQUESTS_ERROR",
+            "windowMs": 1000,
+            "limit": 10,
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(dict(frame))
+            first: list[logging.LogRecord] = [
+                r for r in caplog.records if r.levelno == logging.WARNING
+            ]
+            assert any("reported an error" in r.getMessage() for r in first)
+            assert not any("missing event type" in r.getMessage() for r in first)
+            caplog.clear()
+            coordinator._on_websocket_event_message(dict(frame))
+
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+        assert any(
+            "reported an error" in r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+        )
+
+    def test_on_websocket_event_message_error_frame_keeps_parse_warning(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test an error frame does not spend the unparseable-frame warning.
+
+        The two share a stream but not a cause, so a genuinely malformed
+        frame must still reach WARNING after an error frame has arrived.
+        """
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(
+                {
+                    "error": "Too many requests",
+                    "name": "TOO_MANY_REQUESTS_ERROR",
+                    "windowMs": 1000,
+                    "limit": 10,
+                }
+            )
+            caplog.clear()
+            coordinator._on_websocket_event_message({"id": "event41"})
+
+        warnings: list[logging.LogRecord] = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("missing event type" in r.getMessage() for r in warnings)
+
     def test_on_websocket_event_message_missing_id_is_dropped(
         self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
     ):
@@ -2249,9 +2554,7 @@ class TestUnifiProtectCoordinator:
         still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(
-                "devices", connected=True
-            )
+            coordinator._on_websocket_connection_state_change("devices", connected=True)
 
         mock_reconcile.assert_called_once()
 
@@ -2342,7 +2645,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback (see `async_start_websocket`)
         updates only the devices stream's health entry.
         """
-        coordinator._on_devices_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_devices_connection_state_change(True)
 
         assert coordinator.websocket_health["devices"]["connected"] is True
         assert coordinator.websocket_health["events"]["connected"] is False
@@ -2354,7 +2657,7 @@ class TestUnifiProtectCoordinator:
         `on_connection_state_change` callback updates only the events
         stream's health entry.
         """
-        coordinator._on_events_connection_state_change(True)  # noqa: FBT003
+        coordinator._on_events_connection_state_change(True)
 
         assert coordinator.websocket_health["events"]["connected"] is True
         assert coordinator.websocket_health["devices"]["connected"] is False
@@ -3186,6 +3489,68 @@ class TestUnifiFacadeCoordinator:
         )
 
     @pytest.mark.asyncio
+    async def test_async_set_policy_based_route_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_policy_based_route_enabled delegates correctly."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value="default"
+        )
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "site1", "route1", enabled=True
+        )
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_policy_based_route_enabled_fallback(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_policy_based_route_enabled falls back to default."""
+        facade_coordinator.network_client.routes.update_route = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        await facade_coordinator.async_set_policy_based_route_enabled(
+            "unknown_site", "route1", enabled=True
+        )
+        facade_coordinator.network_client.routes.update_route.assert_called_once_with(
+            "default", "route1", enabled=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled delegates correctly."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value="default"
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "site1", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
+
+    @pytest.mark.asyncio
+    async def test_async_set_vpn_client_enabled_fallback(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Test async_set_vpn_client_enabled falls back to default site."""
+        facade_coordinator.network_client.vpn_clients.update_vpn_client = AsyncMock()
+        facade_coordinator._device_coordinator.get_legacy_site_name = MagicMock(
+            return_value=None
+        )
+        await facade_coordinator.async_set_vpn_client_enabled(
+            "unknown_site", "vpn1", enabled=True
+        )
+        mock_update = facade_coordinator.network_client.vpn_clients.update_vpn_client
+        mock_update.assert_called_once_with("default", "vpn1", enabled=True)
+
+    @pytest.mark.asyncio
     async def test_async_update_camera(
         self, facade_coordinator: UnifiFacadeCoordinator
     ):
@@ -3274,6 +3639,43 @@ class TestUnifiFacadeCoordinator:
         await facade_coordinator.async_block_client("site1", "client1")
         facade_coordinator.network_client.clients.block.assert_called_once_with(
             "branch", "AA:BB:CC:DD:EE:FF"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_outlet_state(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test async_set_outlet_state resolves site and targets legacy _id."""
+        facade_coordinator.data["devices"] = {
+            "site1": {
+                "device1": {
+                    "id": "device1",
+                    "_id": "60a1b2c3d4e5f67890123456",
+                    "macAddress": "AA:BB:CC:DD:EE:FF",
+                }
+            }
+        }
+        facade_coordinator._device_coordinator._legacy_site_names = {"site1": "branch"}
+        facade_coordinator.network_client.devices.set_outlet_state = AsyncMock(
+            return_value=True
+        )
+
+        result = await facade_coordinator.async_set_outlet_state(
+            "site1", "device1", 1, state=True, cycle_enabled=False
+        )
+        assert result is True
+        set_outlet = facade_coordinator.network_client.devices.set_outlet_state
+        set_outlet.assert_called_once_with(
+            "branch",
+            "60a1b2c3d4e5f67890123456",
+            1,
+            True,
+            cycle_enabled=False,
+            current_device={
+                "id": "device1",
+                "_id": "60a1b2c3d4e5f67890123456",
+                "macAddress": "AA:BB:CC:DD:EE:FF",
+            },
         )
 
     @pytest.mark.asyncio

@@ -785,3 +785,29 @@ class TestUnifiClientTrackerEdgeCases:
         tracker._handle_coordinator_update()
 
         tracker.async_write_ha_state.assert_called_once()
+
+    def test_get_client_data_with_invalid_non_dict_entry(
+        self, mock_coordinator
+    ) -> None:
+        """Test _get_client_data skips non-dictionary entries gracefully."""
+        mock_coordinator.data["clients"]["site1"] = {
+            "invalid_client": None,
+            "invalid_client_str": "not-a-dict",
+            "valid_client": {
+                "id": "valid_client",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "name": "Valid Client",
+                "connected": True,
+            },
+        }
+
+        tracker = UnifiClientTracker(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            mac="AA:BB:CC:DD:EE:FF",
+        )
+
+        client_data = tracker._get_client_data()
+        assert client_data is not None
+        assert client_data["id"] == "valid_client"
+        assert tracker.is_connected is True

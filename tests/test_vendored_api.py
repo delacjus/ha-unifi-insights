@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
-from custom_components.unifi_insights.api.exceptions import UniFiResponseError
-from custom_components.unifi_insights.api.network import UniFiNetworkClient
+from custom_components.unifi_insights.api.const import ENDPOINT_TRAFFIC_ROUTES
+from custom_components.unifi_insights.api.exceptions import (
+    UniFiResponseError,
+    UniFiValidationError,
+)
+from custom_components.unifi_insights.api.network import (
+    PolicyBasedRoute,
+    UniFiNetworkClient,
+    VpnClient,
+    parse_outlet_metrics,
+)
 from custom_components.unifi_insights.api.protect import UniFiProtectClient
 
 
@@ -83,6 +93,49 @@ def test_build_legacy_global_api_path_remote() -> None:
         client.build_legacy_global_api_path("/self/sites")
         == "/v1/connector/consoles/console-id/network/api/self/sites"
     )
+
+
+def test_build_legacy_v2_api_path_local() -> None:
+    """Test building legacy v2 API paths for local connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    assert (
+        client.build_legacy_v2_api_path("default", f"/{ENDPOINT_TRAFFIC_ROUTES}")
+        == f"/proxy/network/v2/api/site/default/{ENDPOINT_TRAFFIC_ROUTES}"
+    )
+
+
+def test_build_legacy_v2_api_path_remote() -> None:
+    """Test building legacy v2 API paths for remote connections."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        connection_type=ConnectionType.REMOTE,
+        console_id="console-id",
+    )
+
+    expected = (
+        f"/v1/connector/consoles/console-id/network/v2/api/site/default/"
+        f"{ENDPOINT_TRAFFIC_ROUTES}"
+    )
+    assert (
+        client.build_legacy_v2_api_path("default", ENDPOINT_TRAFFIC_ROUTES) == expected
+    )
+
+
+def test_build_legacy_v2_api_path_empty_site_raises() -> None:
+    """Test building legacy v2 API path with empty site raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    with pytest.raises(ValueError, match="site_name is required"):
+        client.build_legacy_v2_api_path("", f"/{ENDPOINT_TRAFFIC_ROUTES}")
 
 
 async def test_get_hosts_remote_without_console_id() -> None:
@@ -346,6 +399,291 @@ async def test_get_port_metrics_returns_defaults_for_empty_payload() -> None:
     assert metrics.poe_total_w is None
     assert metrics.poe_ports == {}
     assert metrics.port_bytes == {}
+
+
+async def test_parse_outlet_metrics() -> None:
+    """Test parse_outlet_metrics correctly parses outlet table and power totals."""
+    raw = {
+        "outlet_ac_power_consumption": "125.5",
+        "outlet_ac_power_budget": "1800",
+        "outlet_table": [
+            {
+                "index": 1,
+                "name": "Outlet 1",
+                "relay_state": True,
+                "cycle_enabled": True,
+                "outlet_caps": 3,
+                "outlet_voltage": "120.5",
+                "outlet_current": "1.04",
+                "outlet_power": "125.5",
+                "outlet_power_factor": "0.99",
+            },
+            {
+                "index": 2,
+                "name": "Outlet 2",
+                "relay_state": False,
+                "cycle_enabled": False,
+                "outlet_caps": 1,
+                "outlet_voltage": None,
+                "outlet_current": None,
+                "outlet_power": None,
+                "outlet_power_factor": None,
+            },
+        ],
+    }
+    metrics = parse_outlet_metrics(raw)
+    assert metrics.ac_power_consumption == 125.5
+    assert metrics.ac_power_budget == 1800.0
+    assert len(metrics.outlets) == 2
+    assert metrics.outlets[0].index == 1
+    assert metrics.outlets[0].name == "Outlet 1"
+    assert metrics.outlets[0].relay_state is True
+    assert metrics.outlets[0].cycle_enabled is True
+    assert metrics.outlets[0].outlet_caps == 3
+    assert metrics.outlets[0].outlet_voltage == 120.5
+    assert metrics.outlets[0].outlet_current == 1.04
+    assert metrics.outlets[0].outlet_power == 125.5
+    assert metrics.outlets[0].outlet_power_factor == 0.99
+
+    assert metrics.outlets[1].index == 2
+    assert metrics.outlets[1].relay_state is False
+    assert metrics.outlets[1].cycle_enabled is False
+    assert metrics.outlets[1].outlet_power is None
+
+
+async def test_parse_outlet_metrics_empty() -> None:
+    """Test parse_outlet_metrics returns empty model for empty or non-dict input."""
+    assert parse_outlet_metrics({}).outlets == []
+    assert parse_outlet_metrics(None).outlets == []  # type: ignore[arg-type]
+
+
+async def test_get_outlet_metrics() -> None:
+    """Test get_outlet_metrics fetches legacy stats and parses outlet metrics."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "outlet_ac_power_consumption": "50.0",
+                    "outlet_table": [
+                        {
+                            "index": 1,
+                            "name": "Port A",
+                            "relay_state": True,
+                            "outlet_power": "50.0",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    metrics = await client.devices.get_outlet_metrics("default", "00:11:22:33:44:55")
+    assert metrics.ac_power_consumption == 50.0
+    assert len(metrics.outlets) == 1
+    assert metrics.outlets[0].name == "Port A"
+    assert metrics.outlets[0].relay_state is True
+
+
+async def test_set_outlet_state_existing_override() -> None:
+    """Test set_outlet_state updates an existing override."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock()
+    client._put = AsyncMock(return_value={"data": []})
+
+    result = await client.devices.set_outlet_state(
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        1,
+        state=False,
+        cycle_enabled=False,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [
+                {
+                    "index": 1,
+                    "relay_state": True,
+                    "cycle_enabled": True,
+                },
+                {
+                    "index": 2,
+                    "relay_state": False,
+                },
+            ],
+        },
+    )
+    assert result is True
+
+    # The singular rest/device route is write-only on UniFi OS: never GET it.
+    client._get.assert_not_awaited()
+    client._put.assert_awaited_once_with(
+        "/proxy/network/api/s/default/rest/device/60a1b2c3d4e5f67890123456",
+        json_data={
+            "outlet_overrides": [
+                {
+                    "index": 1,
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                },
+                {
+                    "index": 2,
+                    "relay_state": False,
+                },
+            ]
+        },
+    )
+
+
+async def test_set_outlet_state_new_override() -> None:
+    """Test set_outlet_state appends a new override when none exists for index."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._put = AsyncMock(return_value={"data": []})
+
+    result = await client.devices.set_outlet_state(
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        3,
+        state=True,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [
+                {"index": 1, "relay_state": True},
+                {"index": 2, "relay_state": False},
+            ],
+        },
+    )
+    assert result is True
+    client._put.assert_awaited_once_with(
+        "/proxy/network/api/s/default/rest/device/60a1b2c3d4e5f67890123456",
+        json_data={
+            "outlet_overrides": [
+                {"index": 1, "relay_state": True},
+                {"index": 2, "relay_state": False},
+                {
+                    "index": 3,
+                    "relay_state": True,
+                },
+            ]
+        },
+    )
+
+
+async def test_set_outlet_state_seeds_overrides_from_outlet_table() -> None:
+    """Test set_outlet_state seeds a full override array from outlet_table.
+
+    A factory-fresh PDU reports an empty outlet_overrides array. Because the
+    controller treats that array as the complete desired state, writing only the
+    changed outlet would reset every other outlet to its default.
+    """
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._put = AsyncMock(return_value={"data": []})
+
+    result = await client.devices.set_outlet_state(
+        "default",
+        "60a1b2c3d4e5f67890123456",
+        2,
+        state=False,
+        current_device={
+            "_id": "60a1b2c3d4e5f67890123456",
+            "outlet_overrides": [],
+            "outlet_table": [
+                {
+                    "index": 1,
+                    "name": "Router",
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                },
+                {
+                    "index": 2,
+                    "name": "NAS",
+                    "relay_state": True,
+                    "cycle_enabled": False,
+                },
+                {
+                    "index": 3,
+                    "name": "Spare",
+                    "relay_state": False,
+                    "cycle_enabled": False,
+                },
+            ],
+        },
+    )
+    assert result is True
+
+    payload = client._put.await_args.kwargs["json_data"]["outlet_overrides"]
+
+    # Every outlet survives the write, not just the one that changed.
+    assert [entry["index"] for entry in payload] == [1, 2, 3]
+
+    # Only the target outlet flipped; siblings keep their sensed state.
+    by_index = {entry["index"]: entry for entry in payload}
+    assert by_index[2]["relay_state"] is False
+    assert by_index[1]["relay_state"] is True
+    assert by_index[3]["relay_state"] is False
+    assert by_index[1]["name"] == "Router"
+
+
+async def test_set_outlet_state_rejects_unseedable_write() -> None:
+    """Test set_outlet_state refuses to write a partial override array.
+
+    Without existing overrides or an outlet_table to seed from, the sibling
+    outlet states are unknown. The controller treats outlet_overrides as the
+    complete desired state, so a single-entry write would reset every other
+    outlet on the device. Refuse the write instead.
+    """
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock()
+    client._put = AsyncMock(return_value={"data": []})
+
+    with pytest.raises(UniFiValidationError):
+        await client.devices.set_outlet_state(
+            "default",
+            "60a1b2c3d4e5f67890123456",
+            4,
+            state=True,
+            current_device={"_id": "60a1b2c3d4e5f67890123456"},
+        )
+
+    client._put.assert_not_awaited()
+    client._get.assert_not_awaited()
+
+
+async def test_set_outlet_state_rejects_missing_snapshot() -> None:
+    """Test set_outlet_state refuses to write without a device snapshot."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock()
+    client._put = AsyncMock(return_value={"data": []})
+
+    with pytest.raises(UniFiValidationError):
+        await client.devices.set_outlet_state(
+            "default", "60a1b2c3d4e5f67890123456", 4, state=True
+        )
+
+    client._put.assert_not_awaited()
+    client._get.assert_not_awaited()
 
 
 async def test_wifi_update_uses_put_with_existing_payload() -> None:
@@ -616,6 +954,58 @@ async def test_handle_response_valid_json_returns_data() -> None:
     result = await client._handle_response(response)
 
     assert result == {"ok": True}
+
+
+async def test_clients_get_all_redacts_sensitive_validation_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Validation warning logs should not include client IDs or MAC addresses."""
+    client = _network_client()
+    sensitive_mac = "aa:bb:cc:dd:ee:ff"
+    sensitive_id = "client-123"
+    invalid_item = {"id": sensitive_id, "macAddress": sensitive_mac, "type": object()}
+    client._get = AsyncMock(
+        return_value={
+            "offset": 0,
+            "limit": 100,
+            "count": 1,
+            "totalCount": 1,
+            "data": [invalid_item],
+        }
+    )
+    caplog.set_level(
+        "WARNING",
+        logger="custom_components.unifi_insights.api.network.endpoints.clients",
+    )
+
+    result = await client.clients.get_all("site-1")
+
+    assert result == []
+    assert "Failed to validate client payload (" in caplog.text
+    assert sensitive_id not in caplog.text
+    assert sensitive_mac not in caplog.text
+
+
+async def test_clients_get_all_manual_pagination_redacts_sensitive_validation_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Manual pagination path should avoid logging sensitive client values."""
+    client = _network_client()
+    sensitive_mac = "11:22:33:44:55:66"
+    sensitive_id = "client-456"
+    invalid_item = {"id": sensitive_id, "macAddress": sensitive_mac, "type": object()}
+    client._get = AsyncMock(return_value={"data": [invalid_item]})
+    caplog.set_level(
+        "WARNING",
+        logger="custom_components.unifi_insights.api.network.endpoints.clients",
+    )
+
+    result = await client.clients.get_all("site-1", limit=1)
+
+    assert result == []
+    assert "Failed to validate client payload (" in caplog.text
+    assert sensitive_id not in caplog.text
+    assert sensitive_mac not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +1343,8 @@ async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
 
     assert len(result) == 1
     assert result[0].id == "pend-1"
+
+
 def _make_response(*, status: int = 200, text: str = "", json_side_effect=None):
     """Build a fake aiohttp.ClientResponse for _handle_response tests."""
     response = MagicMock()
@@ -1019,3 +1411,490 @@ async def test_handle_response_valid_json_returns_data() -> None:
     result = await client._handle_response(response)
 
     assert result == {"ok": True}
+
+
+def test_policy_based_route_model() -> None:
+    """Test PolicyBasedRoute model validation and display name."""
+    # Test with _id alias
+    route: PolicyBasedRoute = PolicyBasedRoute.model_validate(
+        {
+            "_id": "route123",
+            "description": "Route via VPN",
+            "enabled": True,
+            "matchingTarget": "DOMAIN",
+            "interface": "vpn",
+            "vpnClientId": "vpn123",
+            "killSwitch": True,
+            "domains": ["example.com"],
+            "ipAddresses": ["1.1.1.1"],
+            "clientMacs": ["aa:bb:cc:dd:ee:ff"],
+            "networkIds": ["net123"],
+        }
+    )
+    assert route.id == "route123"
+    assert route.description == "Route via VPN"
+    assert route.enabled is True
+    assert route.matching_target == "DOMAIN"
+    assert route.interface == "vpn"
+    assert route.vpn_client_id == "vpn123"
+    assert route.kill_switch is True
+    assert route.domains == ["example.com"]
+    assert route.ip_addresses == ["1.1.1.1"]
+    assert route.client_macs == ["aa:bb:cc:dd:ee:ff"]
+    assert route.network_ids == ["net123"]
+    assert route.display_name == "Route via VPN"
+
+    # Test display name fallbacks
+    route2: PolicyBasedRoute = PolicyBasedRoute.model_validate(
+        {"_id": "r2", "name": "Named Route"}
+    )
+    assert route2.display_name == "Named Route"
+
+    route3: PolicyBasedRoute = PolicyBasedRoute.model_validate(
+        {"_id": "r3", "matchingTarget": "INTERNET", "interface": "WAN2"}
+    )
+    assert route3.display_name == "Route INTERNET to WAN2"
+
+    route4: PolicyBasedRoute = PolicyBasedRoute.model_validate({"_id": "r4"})
+    assert route4.display_name == "Route r4"
+
+
+# Live payloads captured from a UniFi Dream Machine SE (UniFi OS 5.1.31,
+# Network 10.6.101) via GET /proxy/network/v2/api/site/default/trafficroutes.
+# The controller returns a bare JSON array, and route fields differ from what
+# the maintainer's model previously assumed (see routes.py for details).
+LIVE_ROUTE_INTERNET: dict[str, Any] = {
+    "_id": "67678b976c1d8157c66f44a2",
+    "description": "Nord Route",
+    "domains": [],
+    "enabled": True,
+    "ip_addresses": [],
+    "ip_ranges": [],
+    "kill_switch_enabled": True,
+    "matching_target": "INTERNET",
+    "network_id": "67678a746c1d8157c66f444e",
+    "next_hop": "",
+    "regions": [],
+    "target_devices": [{"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}],
+}
+
+LIVE_ROUTE_DOMAIN: dict[str, Any] = {
+    "_id": "6a96d1fb745ac3cf4de10e79",
+    "description": "HA PBR Test",
+    "domains": [{"domain": "pbr-test.example.com", "port_ranges": [], "ports": []}],
+    "enabled": True,
+    "ip_addresses": [],
+    "ip_ranges": [],
+    "kill_switch_enabled": True,
+    "matching_target": "DOMAIN",
+    "network_id": "67678a746c1d8157c66f444e",
+    "next_hop": "",
+    "regions": [],
+    "target_devices": [{"network_id": "67678b326c1d8157c66f4466", "type": "NETWORK"}],
+}
+
+
+def test_policy_based_route_model_parses_live_internet_route() -> None:
+    """Test the live INTERNET-target route payload validates cleanly."""
+    route = PolicyBasedRoute.model_validate(LIVE_ROUTE_INTERNET)
+    assert route.id == "67678b976c1d8157c66f44a2"
+    assert route.kill_switch_enabled is True
+    assert route.network_id == "67678a746c1d8157c66f444e"
+    assert route.next_hop == ""
+    assert route.regions == []
+    assert route.ip_ranges == []
+    assert route.target_devices[0].type == "NETWORK"
+    assert route.target_devices[0].network_id == "67678b326c1d8157c66f4466"
+
+
+def test_policy_based_route_model_parses_live_domain_route() -> None:
+    """Test the live DOMAIN-target route payload validates cleanly.
+
+    This is the payload that previously raised
+    ``ValidationError: domains.0 Input should be a valid string`` because
+    ``domains`` was typed as ``list[str]`` while the controller sends a list
+    of domain objects.
+    """
+    route = PolicyBasedRoute.model_validate(LIVE_ROUTE_DOMAIN)
+    assert route.kill_switch_enabled is True
+    assert route.domains[0]["domain"] == "pbr-test.example.com"
+    assert route.target_devices[0].type == "NETWORK"
+    assert route.target_devices[0].network_id == "67678b326c1d8157c66f4466"
+
+
+async def test_routes_endpoint_list_routes_returns_both_live_routes() -> None:
+    """Test list_routes over the real bare-array response returns both routes.
+
+    Before the model fix, the DOMAIN route failed pydantic validation and
+    was silently skipped by list_routes' per-item try/except, so this
+    returned 1 route instead of 2.
+    """
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[LIVE_ROUTE_INTERNET, LIVE_ROUTE_DOMAIN],
+    )
+
+    routes: list[PolicyBasedRoute] = await client.routes.list_routes("default")
+    assert len(routes) == 2
+    assert {r.id for r in routes} == {
+        "67678b976c1d8157c66f44a2",
+        "6a96d1fb745ac3cf4de10e79",
+    }
+
+
+async def test_routes_endpoint_list_routes() -> None:
+    """Test listing policy-based routes."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[
+            {"_id": "route1", "description": "Route 1", "enabled": True},
+            {"_id": "route2", "description": "Route 2", "enabled": False},
+        ]
+    )
+
+    routes: list[PolicyBasedRoute] = await client.routes.list_routes("default")
+    assert len(routes) == 2
+    assert routes[0].id == "route1"
+    assert routes[0].enabled is True
+    assert routes[1].id == "route2"
+    assert routes[1].enabled is False
+    client._get.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes"
+    )
+
+
+async def test_routes_endpoint_list_routes_wrapped_and_empty() -> None:
+    """Test listing policy-based routes with wrapped dict and empty response."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Wrapped dict with data key
+    client._get = AsyncMock(
+        return_value={"data": [{"_id": "route1", "description": "Route 1"}]}
+    )
+    routes = await client.routes.list_routes("default")
+    assert len(routes) == 1
+    assert routes[0].id == "route1"
+
+    # None / empty response
+    client._get = AsyncMock(return_value=None)
+    routes = await client.routes.list_routes("default")
+    assert routes == []
+
+
+async def test_routes_endpoint_get_route() -> None:
+    """Test getting a specific policy-based route."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Found via direct GET
+    client._get = AsyncMock(
+        return_value={"_id": "route1", "description": "Route 1", "enabled": True}
+    )
+    route = await client.routes.get_route("default", "route1")
+    assert route.id == "route1"
+    assert route.enabled is True
+
+    # Fallback to searching list_routes when direct GET returns empty
+    client._get = AsyncMock(
+        side_effect=[
+            [],  # direct GET /trafficroutes/route2 returns empty
+            [
+                {"_id": "route2", "description": "Route 2", "enabled": False}
+            ],  # list_routes returns it
+        ]
+    )
+    route2 = await client.routes.get_route("default", "route2")
+    assert route2.id == "route2"
+
+
+async def test_routes_endpoint_get_route_not_found_raises() -> None:
+    """Test getting a missing policy-based route raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(return_value=[])
+    with pytest.raises(ValueError, match="Policy-Based Route missing not found"):
+        await client.routes.get_route("default", "missing")
+
+
+async def test_routes_endpoint_update_route() -> None:
+    """Test updating a policy-based route via PUT."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value=[{"_id": "route1", "description": "Route 1", "enabled": True}]
+    )
+    client._put = AsyncMock(
+        return_value=[{"_id": "route1", "description": "Route 1", "enabled": False}]
+    )
+
+    updated = await client.routes.update_route("default", "route1", enabled=False)
+    assert updated.id == "route1"
+    assert updated.enabled is False
+
+    client._put.assert_awaited_once_with(
+        "/proxy/network/v2/api/site/default/trafficroutes/route1",
+        json_data={"_id": "route1", "description": "Route 1", "enabled": False},
+    )
+
+
+async def test_routes_endpoint_update_route_not_found_raises() -> None:
+    """Test updating a non-existent policy-based route raises ValueError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(return_value=[])
+
+    with pytest.raises(ValueError, match="Policy-Based Route missing not found"):
+        await client.routes.update_route("default", "missing", enabled=False)
+
+
+async def test_routes_endpoint_soft_error_raises() -> None:
+    """Test that meta.rc == 'error' envelope raises UniFiResponseError."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={"meta": {"rc": "error", "msg": "API error message"}}
+    )
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.routes.list_routes("default")
+    assert exc_info.value.message == "API error message"
+    assert exc_info.value.status_code == 200
+
+
+def test_vpn_client_model() -> None:
+    """Test VpnClient model validation and fields."""
+    client: VpnClient = VpnClient.model_validate(
+        {
+            "_id": "vpn1",
+            "name": "Privado VPN",
+            "purpose": "vpn-client",
+            "vpn_type": "openvpn-client",
+            "enabled": True,
+            "ip_subnet": "172.21.25.217/32",
+            "openvpn_id": 1,
+            "remote_host": "syd-012.vpn.privado.io",
+        }
+    )
+    assert client.id == "vpn1"
+    assert client.name == "Privado VPN"
+    assert client.purpose == "vpn-client"
+    assert client.vpn_type == "openvpn-client"
+    assert client.enabled is True
+    assert client.ip_subnet == "172.21.25.217/32"
+    assert client.openvpn_id == 1
+    assert client.remote_host == "syd-012.vpn.privado.io"
+
+
+async def test_vpn_clients_endpoint_list_vpn_clients() -> None:
+    """Test listing VPN client configurations."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "meta": {"rc": "ok"},
+            "data": [
+                {
+                    "_id": "vpn1",
+                    "name": "Privado VPN",
+                    "purpose": "vpn-client",
+                    "vpn_type": "openvpn-client",
+                    "enabled": True,
+                },
+                {
+                    "_id": "lan1",
+                    "name": "LAN",
+                    "purpose": "corporate",
+                    "enabled": True,
+                },
+            ],
+        }
+    )
+
+    clients: list[VpnClient] = await client.vpn_clients.list_vpn_clients("default")
+    assert len(clients) == 1
+    assert clients[0].id == "vpn1"
+    assert clients[0].name == "Privado VPN"
+    assert clients[0].enabled is True
+    client._get.assert_awaited_once_with(
+        "/proxy/network/api/s/default/rest/networkconf"
+    )
+
+
+async def test_vpn_clients_endpoint_list_vpn_clients_unwrapped_and_empty() -> None:
+    """Test listing VPN client configurations with bare list and None responses."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+
+    # Bare list
+    client._get = AsyncMock(
+        return_value=[
+            {
+                "_id": "vpn1",
+                "name": "Privado VPN",
+                "purpose": "vpn-client",
+                "vpn_type": "openvpn-client",
+                "enabled": True,
+            }
+        ]
+    )
+    clients: list[VpnClient] = await client.vpn_clients.list_vpn_clients("default")
+    assert len(clients) == 1
+    assert clients[0].id == "vpn1"
+
+    # None / empty response
+    client._get = AsyncMock(return_value=None)
+    clients = await client.vpn_clients.list_vpn_clients("default")
+    assert clients == []
+
+
+async def test_vpn_clients_endpoint_list_vpn_clients_error_envelope_raises() -> None:
+    """Test listing VPN client configurations when response contains error envelope."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "meta": {"rc": "error", "msg": "API error"},
+            "data": [],
+        }
+    )
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.vpn_clients.list_vpn_clients("default")
+    assert exc_info.value.message == "API error"
+    assert exc_info.value.status_code == 200
+
+
+async def test_vpn_clients_endpoint_get_vpn_client() -> None:
+    """Test getting a specific VPN client configuration."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "meta": {"rc": "ok"},
+            "data": [
+                {
+                    "_id": "vpn1",
+                    "name": "Privado VPN",
+                    "purpose": "vpn-client",
+                    "enabled": True,
+                }
+            ],
+        }
+    )
+
+    vpn_client: VpnClient = await client.vpn_clients.get_vpn_client("default", "vpn1")
+    assert vpn_client.id == "vpn1"
+    assert vpn_client.name == "Privado VPN"
+
+
+async def test_vpn_clients_endpoint_get_vpn_client_not_found_raises() -> None:
+    """Test getting a missing VPN client raises ValueError."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(return_value={"meta": {"rc": "ok"}, "data": []})
+    with pytest.raises(ValueError, match="VPN Client missing not found"):
+        await client.vpn_clients.get_vpn_client("default", "missing")
+
+
+async def test_vpn_clients_endpoint_update_vpn_client() -> None:
+    """Test updating a VPN client configuration via PUT."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(
+        return_value={
+            "meta": {"rc": "ok"},
+            "data": [
+                {
+                    "_id": "vpn1",
+                    "name": "Privado VPN",
+                    "purpose": "vpn-client",
+                    "enabled": True,
+                }
+            ],
+        }
+    )
+    client._put = AsyncMock(
+        return_value={
+            "meta": {"rc": "ok"},
+            "data": [
+                {
+                    "_id": "vpn1",
+                    "name": "Privado VPN",
+                    "purpose": "vpn-client",
+                    "enabled": False,
+                }
+            ],
+        }
+    )
+
+    updated: VpnClient = await client.vpn_clients.update_vpn_client(
+        "default", "vpn1", enabled=False
+    )
+    assert updated.id == "vpn1"
+    assert updated.enabled is False
+    client._put.assert_awaited_once_with(
+        "/proxy/network/api/s/default/rest/networkconf/vpn1",
+        json_data={
+            "_id": "vpn1",
+            "name": "Privado VPN",
+            "purpose": "vpn-client",
+            "enabled": False,
+        },
+    )
+
+
+async def test_vpn_clients_endpoint_update_not_found_raises() -> None:
+    """Test updating a missing VPN client raises ValueError."""
+    client: UniFiNetworkClient = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    client._get = AsyncMock(return_value={"meta": {"rc": "ok"}, "data": []})
+
+    with pytest.raises(ValueError, match="VPN Client missing not found"):
+        await client.vpn_clients.update_vpn_client("default", "missing", enabled=False)

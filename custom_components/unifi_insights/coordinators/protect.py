@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.core import callback
@@ -176,6 +176,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # different failure classes.
         self._ws_parse_warned = False
         self._ws_event_parse_warned = False
+        self._ws_event_error_warned: bool = False
 
         # WebSocket health signal (task 5, hardened by review finding 1):
         # there was previously no way to tell "connected and delivering"
@@ -312,7 +313,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                         await task
 
     @callback
-    def _on_websocket_message(self, message: dict[str, Any]) -> None:
+    def _on_websocket_message(self, message: Any) -> None:
         """
         Adapt a raw WebSocket "devices" message to `_handle_device_update`.
 
@@ -423,7 +424,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         self._recompute_ws_health_rollup()
 
     @callback
-    def _on_devices_connection_state_change(self, connected: bool) -> None:  # noqa: FBT001
+    def _on_devices_connection_state_change(self, connected: bool) -> None:
         """
         Adapt the devices subscription's connect/disconnect callback.
 
@@ -435,7 +436,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         self._on_websocket_connection_state_change("devices", connected=connected)
 
     @callback
-    def _on_events_connection_state_change(self, connected: bool) -> None:  # noqa: FBT001
+    def _on_events_connection_state_change(self, connected: bool) -> None:
         """
         Adapt the events subscription's connect/disconnect callback.
 
@@ -639,7 +640,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         return normalized
 
     @callback
-    def _on_websocket_event_message(self, message: dict[str, Any]) -> None:
+    def _on_websocket_event_message(self, message: Any) -> None:
         """
         Adapt a raw WebSocket "events" message to `_handle_event_update`.
 
@@ -679,6 +680,25 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         containers = [c for c in (payload, item, action) if isinstance(c, dict)]
         if not containers:
             containers = [message]
+
+        # The console reports its own faults on this stream as a frame with
+        # an "error" field and no event fields, a rate-limit notice being the
+        # common one. That is not a parse failure, and letting it fall through
+        # to the unparseable path spends the one-time WARNING that exists to
+        # surface a genuinely wrong frame shape, leaving a real problem to be
+        # logged at DEBUG afterwards. Reported on its own warned-once flag.
+        error: Any = _pick_field(containers, "error")
+        if error:
+            level: int = (
+                logging.DEBUG if self._ws_event_error_warned else logging.WARNING
+            )
+            _LOGGER.log(
+                level,
+                "Protect coordinator: events stream reported an error: %s",
+                message,
+            )
+            self._ws_event_error_warned = True
+            return
 
         event_type = _pick_field(containers, "type", "eventType", "event_type")
         if not event_type:

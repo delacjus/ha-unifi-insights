@@ -320,7 +320,7 @@ async def async_setup_entry(
     # console_id embedded in the path, but if the Network API returned sites
     # for this console, prefer the first real site id over the placeholder.
     protect_site_id = "default"
-    if not is_local and not network_sites_empty and sites:
+    if not is_local and not network_sites_empty and sites and sites[0].id:
         protect_site_id = sites[0].id
 
     protect_coordinator: UnifiProtectCoordinator | None = None

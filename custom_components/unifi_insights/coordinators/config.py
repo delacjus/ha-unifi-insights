@@ -36,6 +36,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
     - Sites configuration
     - WiFi networks configuration
     - Firewall policy configuration
+    - Policy-based routes (traffic routes) configuration
     - Network info
     """
 
@@ -59,6 +60,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             "sites": {},
             "wifi": {},
             "firewall_rules": {},
+            "policy_based_routes": {},
+            "vpn_clients": {},
             "network_info": {},
         }
 
@@ -220,24 +223,23 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 else:
                     raise
             except UniFiResponseError as err:
-                # A console with no Network application (e.g. a standalone
-                # Protect-only NVR) serves a 2xx response with a non-JSON body
-                # here - api/base.py raises for that instead of silently
-                # returning None, which is correct in general, but this
-                # specific console/endpoint combination is a permanent,
-                # expected condition (see the matching tolerance in
-                # __init__.py's setup validation), not a transient failure.
-                # Without this, first refresh treats it as UpdateFailed ->
-                # ConfigEntryNotReady and setup can never complete for this
-                # console. A genuine >=400 error must still fail normally.
-                # NOTE: UniFiNotFoundError is a UniFiResponseError subclass -
-                # this except clause MUST stay below the tuple above so the
-                # more specific Protect-only tolerance takes priority.
-                if err.status_code >= HTTPStatus.BAD_REQUEST:
+                # A console with no Network application answers this endpoint
+                # with 200 and an HTML body. api/base.py raises for a 2xx
+                # non-JSON response rather than returning None, which is right
+                # in general, but here it is a permanent property of the
+                # hardware rather than a transient fault, and setup validation
+                # in __init__.py already tolerates it. Left unhandled, the
+                # first refresh raises UpdateFailed, then ConfigEntryNotReady,
+                # and the entry never loads. Only a 200 is tolerated, so a
+                # redirect or any other sub-400 status still fails.
+                # UniFiNotFoundError subclasses UniFiResponseError, so this
+                # clause has to stay below the tuple above.
+                if self.protect_client is None or err.status_code != HTTPStatus.OK:
                     raise
                 _LOGGER.debug(
-                    "Config coordinator: Network API returned a non-JSON "
-                    "response - console likely has no Network application"
+                    "Config coordinator: sites endpoint returned a non-JSON "
+                    "body (status %s) - console has no Network application",
+                    err.status_code,
                 )
 
             sites = [self._model_to_dict(s) for s in sites_models]
@@ -253,6 +255,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             if not self.data["sites"]:
                 self.data["wifi"] = {}
                 self.data["firewall_rules"] = {}
+                self.data["policy_based_routes"] = {}
+                self.data["vpn_clients"] = {}
                 self.data["network_info"] = {}
                 self._available = True
                 self.data["last_update"] = datetime.now(tz=UTC)
@@ -356,13 +360,97 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     )
                     self.data["firewall_rules"][site_id] = {}
 
+                # Fetch policy-based routes (traffic routes) via legacy v2 endpoint
+                legacy_name = legacy_site_names.get(site_id)
+                if legacy_name:
+                    try:
+                        _LOGGER.debug(
+                            "Config coordinator: Fetching policy-based routes "
+                            "for site %s (%s)",
+                            site_id,
+                            legacy_name,
+                        )
+                        route_models = await self.network_client.routes.list_routes(
+                            legacy_name
+                        )
+                        routes_dict: dict[str, Any] = {}
+                        for route_model in route_models:
+                            route = self._model_to_dict(route_model)
+                            route_id = route.get("id") or route.get("_id")
+                            if route_id:
+                                routes_dict[route_id] = route
+                        self.data["policy_based_routes"][site_id] = routes_dict
+                        _LOGGER.debug(
+                            "Config coordinator: Successfully fetched %d "
+                            "policy-based routes for site %s",
+                            len(routes_dict),
+                            site_id,
+                        )
+                    except UniFiAuthenticationError:
+                        raise
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "Config coordinator: Policy-based routes unavailable "
+                            "for site %s: %s",
+                            site_id,
+                            err,
+                        )
+                        self.data["policy_based_routes"][site_id] = {}
+                else:
+                    self.data["policy_based_routes"][site_id] = {}
+
+                # Fetch VPN clients via classic networkconf endpoint
+                if legacy_name:
+                    try:
+                        _LOGGER.debug(
+                            "Config coordinator: Fetching VPN clients for site %s (%s)",
+                            site_id,
+                            legacy_name,
+                        )
+                        vpn_client_models = (
+                            await self.network_client.vpn_clients.list_vpn_clients(
+                                legacy_name
+                            )
+                        )
+                        vpn_clients_dict: dict[str, Any] = {}
+                        for vpn_client_model in vpn_client_models:
+                            vpn_client = self._model_to_dict(vpn_client_model)
+                            vpn_client_id = vpn_client.get("id") or vpn_client.get(
+                                "_id"
+                            )
+                            if vpn_client_id:
+                                vpn_clients_dict[vpn_client_id] = vpn_client
+                        self.data["vpn_clients"][site_id] = vpn_clients_dict
+                        _LOGGER.debug(
+                            "Config coordinator: Successfully fetched %d "
+                            "VPN clients for site %s",
+                            len(vpn_clients_dict),
+                            site_id,
+                        )
+                    except UniFiAuthenticationError:
+                        raise
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "Config coordinator: VPN clients unavailable "
+                            "for site %s: %s",
+                            site_id,
+                            err,
+                        )
+                        self.data["vpn_clients"][site_id] = {}
+                else:
+                    self.data["vpn_clients"][site_id] = {}
+
             self._available = True
             _LOGGER.debug(
                 "Config coordinator: Update complete - %d sites, %d WiFi configs, "
-                "%d firewall rules",
+                "%d firewall rules, %d policy-based routes, %d VPN clients",
                 len(self.data["sites"]),
                 sum(len(w) for w in self.data["wifi"].values()),
                 sum(len(rules) for rules in self.data["firewall_rules"].values()),
+                sum(
+                    len(routes) for routes in self.data["policy_based_routes"].values()
+                ),
+                sum(len(clients) for clients in self.data["vpn_clients"].values()),
             )
 
             return self.data
@@ -399,4 +487,16 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
     def get_firewall_rules(self, site_id: str) -> dict[str, Any]:
         """Get firewall rules for a site."""
         result: dict[str, Any] = self.data.get("firewall_rules", {}).get(site_id, {})
+        return result
+
+    def get_policy_based_routes(self, site_id: str) -> dict[str, Any]:
+        """Get policy-based routes for a site."""
+        result: dict[str, Any] = self.data.get("policy_based_routes", {}).get(
+            site_id, {}
+        )
+        return result
+
+    def get_vpn_clients(self, site_id: str) -> dict[str, Any]:
+        """Get VPN clients for a site."""
+        result: dict[str, Any] = self.data.get("vpn_clients", {}).get(site_id, {})
         return result

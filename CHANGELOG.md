@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI & Testing
+
+- Added GitHub Actions workflow (`.github/workflows/test.yml`) to run pytest with branch coverage and upload reports to Codecov (`codecov/codecov-action@v5`).
+- Added `codecov.yml` configuration defining 90% project and patch coverage targets with detailed PR coverage comments.
+- Untracked `coverage.xml` build artifact from git tracking.
+- Added Codecov coverage status badge to `README.md`.
+
+### Documentation
+
+- Updated the pull request template and developer guidance (`CONTRIBUTING.md`, `AGENTS.md`, Copilot instructions) to reference the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, latest developer capabilities, and coding agent context.
+
+## [2026.9.1] - 2026-09-03
+
+### Added
+
+- Added support for UniFi Power Distribution Units (PDUs) and SmartPower strips (e.g. USP-PDU-Pro, USP-Strip):
+  - Per-outlet relay switches (`UnifiOutletSwitch`) to toggle power state on individual outlets
+  - Config switches (`UnifiOutletCycleSwitch`) for outlets supporting automatic modem power cycling
+  - Per-outlet metering sensors for metered outlets (power in W, voltage in V, current in A, and power factor)
+  - Device-level power total sensors for AC power consumption and AC power budget
+
+### Changed
+
+- Switch entity names now resolve through the entity translation system instead of
+  hardcoded `_attr_name` values, satisfying the `entity-translations` quality scale
+  rule. Covers the firewall rule, policy-based route, VPN client, client allow and
+  WiFi switches. Displayed names and entity IDs are unchanged.
+
+Thanks @delacjus
+
+## [2026.9.0] - 2026-09-02
+
+### Added
+
+- Added VPN Client switch control (`UnifiInsightsVpnClientSwitch`) to enable or disable VPN client interfaces (e.g., Privado VPN, WireGuard, OpenVPN) directly from Home Assistant (closes #79)
+- Added Policy-Based Routes (Traffic Routes) switch control (`UnifiInsightsPolicyBasedRouteSwitch`) to enable or disable traffic and VPN client routing rules dynamically from Home Assistant (closes #79)
+- Added `VpnClientsEndpoint` and `VpnClient` model in the vendored Network API client targeting `/proxy/network/api/s/{site}/rest/networkconf` with strict `purpose == "vpn-client"` filtering and error envelope propagation
+- Added `RoutesEndpoint` and `PolicyBasedRoute` model in the vendored Network API client targeting `/proxy/network/v2/api/site/{site}/trafficroutes`
+- Added `get_vpn_clients` and `get_policy_based_routes` caching and retrieval in `UnifiConfigCoordinator` and action delegation in `UnifiFacadeCoordinator`
+- Exposed route metadata attributes (`matching_target`, `interface`, `vpn_client_id`, `kill_switch_enabled`, `domains`, `ip_addresses`, `client_macs`, `network_ids`, `target_devices`, `network_id`, `next_hop`, `regions`, `ip_ranges`) on route switch entities
+- Exposed VPN client metadata attributes (`client_id`, `purpose`, `vpn_type`, `ip_subnet`, `openvpn_id`, `wireguard_id`, `remote_host`) on VPN client switch entities
+- Added automatic gateway device grouping for VPN clients and policy-based routes, with fallback site-level grouping
+
+### Fixed
+
+- Fixed `PolicyBasedRoute` parsing failure for domain-based traffic routes on UniFi Network 10.6+ where `domains` contains object dictionaries (`[{"domain": "...", ...}]`) rather than simple strings
+- Fixed `kill_switch_enabled` attribute parsing from live controller payload shape and added warning when disabling a route with an active kill switch
+- Fixed site name resolution on multi-site controllers via `resolve_legacy_site_name` on `UnifiFacadeCoordinator`
+
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for live-hardware testing on UniFi Dream Machine SE (Network 10.6), domain route model alignment, kill switch hardening, and multi-site resolution in PR #105
+
+## [2026.8.4] - 2026-08-30
+
+### Fixed
+
+- Fixed setup retries on Protect-only consoles (for example UNVR/UNVR-Pro) when the Network `sites` endpoint returns HTTP 200 with a non-JSON HTML body; the config coordinator now tolerates this specific response only when Protect is configured, while still failing for non-200 statuses and non-Protect scenarios (closes #102)
+- Fixed Protect WebSocket events stream error frames (for example rate-limit notices with an `error` field) being misclassified as parse failures; these frames are now handled explicitly and logged with a dedicated warned-once path so real parse-shape issues remain visible (closes #102)
+
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for the regression fix and WebSocket stream hardening in PR #102
+
+## [2026.8.3] - 2026-08-30
+
+### Added
+
+- Added 5-minute event auto-off timeout (`STALE_EVENT_TIMEOUT`) and reconciliation logic during REST polls and WebSocket reconnections to prevent latched motion or ring states if an "end" frame is missed (closes #101)
+- Added granular per-subscription WebSocket health tracking (`devices` and `events`) to integration diagnostics (closes #101)
+
+### Fixed
+
+- Fixed camera motion, doorbell ring, and smart detection binary sensors remaining permanently `off` by subscribing to the UniFi Protect WebSocket "events" stream and dispatching real-time detection events (closes #101)
+- Fixed UniFi Protect entities only updating during periodic REST polling by connecting and driving the live Protect WebSocket "devices" stream with tolerant update envelope parsing and lifecycle management on setup and unload (closes #100)
+- Fixed `UnifiInsightsEntity` and `UnifiProtectEntity` reporting `available = True` and serving stale cached device states when their backing coordinator fails — both base entities now gate availability and state updates on `self.coordinator.available` (closes #98)
+- Fixed listener leak in `UnifiFacadeCoordinator` by storing unsubscribe callbacks returned by `async_add_listener()` and releasing them idempotently in `async_shutdown()` on config entry unload or reload (closes #99)
+- Fixed `UnifiFacadeCoordinator.async_request_refresh()` to concurrently execute `async_refresh()` across all sub-coordinators instead of debounced requests, ensuring immediate state propagation after service calls and user actions (closes #99)
+- Fixed missing camera and sensor binary sensor translation keys in `translations/en.json` that caused naming collisions falling back to generic names (closes #101)
+- Added `heartbeat=30` to WebSocket connections to detect half-open sockets and trigger bounded reconnection (closes #101)
+
+### Thanks
+
+- Special thanks to [@delacjus](https://github.com/delacjus) for contributing the fixes and enhancements in PRs #98, #99, #100, and #101 (as well as #97 in 2026.8.2), bringing real-time Protect WebSocket device and event streaming, coordinator freshness gating, and lifecycle fixes!
+
 ## [2026.8.2] - 2026-08-29
 
 ### Fixed
@@ -315,7 +400,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Number entities for camera/light settings
 - Select entities for recording modes and video modes
 
-[Unreleased]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.1...HEAD
+[Unreleased]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.2...HEAD
+[2026.8.2]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.1...v2026.8.2
 [2026.8.1]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.8.0...v2026.8.1
 [2026.8.0]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.6.4...v2026.8.0
 [2026.6.4]: https://github.com/ruaan-deysel/ha-unifi-insights/compare/v2026.6.3...v2026.6.4

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from custom_components.unifi_insights.sensor import (
     NVR_SENSOR_TYPES,
+    OUTLET_SENSOR_TYPES,
     PARALLEL_UPDATES,
     PORT_SENSOR_TYPES,
     PROTECT_SENSOR_TYPES,
@@ -18,6 +19,7 @@ from custom_components.unifi_insights.sensor import (
     SFP_SENSOR_TYPES,
     SITE_CLIENT_SENSOR_TYPES,
     UnifiInsightsSensor,
+    UnifiOutletSensor,
     UnifiPortSensor,
     UnifiProtectNVRSensor,
     UnifiProtectSensor,
@@ -32,6 +34,7 @@ from custom_components.unifi_insights.sensor import (
     _has_protect_stat,
     _has_storage_info,
     _migrate_sensor_units,
+    _outlet_has_metering,
     async_setup_entry,
     bytes_to_bits,
     bytes_to_megabits,
@@ -2799,3 +2802,317 @@ class TestProtectSensorCapabilityFiltering:
         assert "temperature" not in sensor_keys
         assert "humidity" not in sensor_keys
         assert "light" not in sensor_keys
+
+
+class TestUnifiOutletSensor:
+    """Tests for UnifiOutletSensor platform entity."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with PDU device data."""
+        coordinator = MagicMock()
+        coordinator.available = True
+        coordinator.last_update_success = True
+        coordinator.protect_client = None
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {
+                "site1": {
+                    "pdu1": {
+                        "id": "pdu1",
+                        "_id": "60a1b2c3d4e5f67890123456",
+                        "name": "Server Room PDU",
+                        "status": "online",
+                        "state": "ONLINE",
+                        "ac_power_consumption": 245.5,
+                        "ac_power_budget": 1800.0,
+                        "features": [],
+                        "outlet_table": [
+                            {
+                                "index": 1,
+                                "name": "Main Server",
+                                "relay_state": True,
+                                "cycle_enabled": True,
+                                "outlet_caps": 3,
+                                "outlet_voltage": 120.2,
+                                "outlet_current": 1.25,
+                                "outlet_power": 150.0,
+                                "outlet_power_factor": 0.98,
+                            },
+                            {
+                                "index": 2,
+                                "name": "Backup Server",
+                                "relay_state": False,
+                                "cycle_enabled": False,
+                                "outlet_caps": 3,
+                                "outlet_voltage": 120.1,
+                                "outlet_current": 0.0,
+                                "outlet_power": 0.0,
+                                "outlet_power_factor": 0.0,
+                            },
+                            {
+                                "index": 3,
+                                "name": "Unmetered Outlet",
+                                "relay_state": True,
+                                "cycle_enabled": None,
+                                "outlet_caps": 1,
+                                "outlet_voltage": None,
+                                "outlet_current": None,
+                                "outlet_power": None,
+                                "outlet_power_factor": None,
+                            },
+                        ],
+                    }
+                }
+            },
+            "stats": {"site1": {"pdu1": {}}},
+            "clients": {},
+            "wifi": {},
+        }
+        coordinator.get_site = MagicMock(
+            return_value=coordinator.data["sites"]["site1"]
+        )
+        return coordinator
+
+    async def test_setup_creates_outlet_metering_sensors(
+        self, hass: HomeAssistant, mock_coordinator, mock_config_entry
+    ) -> None:
+        """Test async_setup_entry creates UnifiOutletSensor instances only for
+        metered outlets."""
+        mock_config_entry.runtime_data.coordinator = mock_coordinator
+        added_entities: list = []
+
+        def add_entities(new_entities, **kwargs):
+            added_entities.extend(new_entities)
+
+        await async_setup_entry(hass, mock_config_entry, add_entities)
+
+        outlet_sensors = [e for e in added_entities if isinstance(e, UnifiOutletSensor)]
+        # Outlets 1 & 2 are metered (4 sensors each = 8);
+        # outlet 3 is unmetered (0 sensors)
+        assert len(outlet_sensors) == 8
+
+        unique_ids = {e.unique_id for e in outlet_sensors}
+        assert "site1_pdu1_outlet_1_power" in unique_ids
+        assert "site1_pdu1_outlet_1_voltage" in unique_ids
+        assert "site1_pdu1_outlet_1_current" in unique_ids
+        assert "site1_pdu1_outlet_1_power_factor" in unique_ids
+
+        assert "site1_pdu1_outlet_2_power" in unique_ids
+        assert "site1_pdu1_outlet_2_voltage" in unique_ids
+        assert "site1_pdu1_outlet_2_current" in unique_ids
+        assert "site1_pdu1_outlet_2_power_factor" in unique_ids
+
+        # Outlet 3 should not have any sensors
+        assert "site1_pdu1_outlet_3_power" not in unique_ids
+
+    def test_outlet_metering_sensor_properties_and_values(
+        self, mock_coordinator
+    ) -> None:
+        """Test UnifiOutletSensor properties, unique_id, native values, and state."""
+        desc_map = {d.key: d for d in OUTLET_SENSOR_TYPES}
+
+        sensor_power = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["power"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_name="Main Server",
+        )
+        assert sensor_power.unique_id == "site1_pdu1_outlet_1_power"
+        assert sensor_power.native_value == 150.0
+        assert sensor_power.available is True
+        assert sensor_power.extra_state_attributes == {
+            "index": 1,
+            "name": "Main Server",
+            "relay_state": True,
+        }
+
+        sensor_voltage = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["voltage"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_name="Main Server",
+        )
+        assert sensor_voltage.unique_id == "site1_pdu1_outlet_1_voltage"
+        assert sensor_voltage.native_value == 120.2
+
+        sensor_current = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["current"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_name="Main Server",
+        )
+        assert sensor_current.unique_id == "site1_pdu1_outlet_1_current"
+        assert sensor_current.native_value == 1.25
+
+        sensor_pf = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["power_factor"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_name="Main Server",
+        )
+        assert sensor_pf.unique_id == "site1_pdu1_outlet_1_power_factor"
+        assert sensor_pf.native_value == 0.98
+
+    def test_outlet_sensor_unavailable_when_outlet_missing(
+        self, mock_coordinator
+    ) -> None:
+        """Test UnifiOutletSensor unavailable when outlet is missing from data."""
+        desc_map = {d.key: d for d in OUTLET_SENSOR_TYPES}
+        sensor = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["power"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=99,
+        )
+        assert sensor.available is False
+        assert sensor.native_value is None
+
+    def test_outlet_has_metering_helper(self) -> None:
+        """Test _outlet_has_metering helper detects caps bitmask and values."""
+        assert _outlet_has_metering({"outlet_caps": 3}) is True
+        assert _outlet_has_metering({"outlet_caps": 2}) is True
+        assert _outlet_has_metering({"outlet_caps": 1}) is False
+        assert _outlet_has_metering({"outlet_power": 10.0}) is True
+        assert _outlet_has_metering({"power": 10.0}) is True
+        assert _outlet_has_metering({"outlet_voltage": 120.0}) is True
+        assert _outlet_has_metering({"outlet_current": 1.0}) is True
+        assert _outlet_has_metering({"outlet_power_factor": 0.9}) is True
+        assert _outlet_has_metering({}) is False
+
+
+class TestUnifiAcPowerSensors:
+    """Tests for device-level AC power consumption and budget sensors."""
+
+    @pytest.fixture
+    def mock_coordinator(self) -> MagicMock:
+        """Create mock coordinator with PDU device data."""
+        coordinator = MagicMock()
+        coordinator.available = True
+        coordinator.last_update_success = True
+        coordinator.protect_client = None
+        coordinator.data = {
+            "sites": {"site1": {"id": "site1", "name": "Default"}},
+            "devices": {
+                "site1": {
+                    "pdu1": {
+                        "id": "pdu1",
+                        "name": "Server Room PDU",
+                        "status": "online",
+                        "state": "ONLINE",
+                        "ac_power_consumption": 245.5,
+                        "ac_power_budget": 1800.0,
+                        "features": [],
+                        "outlet_table": [],
+                    },
+                    "switch1": {
+                        "id": "switch1",
+                        "name": "Standard Switch",
+                        "status": "online",
+                        "state": "ONLINE",
+                        "features": ["switching"],
+                        "ports": [],
+                    },
+                }
+            },
+            "stats": {"site1": {"pdu1": {}, "switch1": {}}},
+            "clients": {},
+            "wifi": {},
+        }
+        coordinator.get_site = MagicMock(
+            return_value=coordinator.data["sites"]["site1"]
+        )
+        return coordinator
+
+    async def test_setup_creates_ac_power_sensors_only_when_data_present(
+        self, hass: HomeAssistant, mock_coordinator, mock_config_entry
+    ) -> None:
+        """Test AC power sensors created for PDU but skipped for switch."""
+        mock_config_entry.runtime_data.coordinator = mock_coordinator
+        added_entities: list = []
+
+        def add_entities(new_entities, **kwargs):
+            added_entities.extend(new_entities)
+
+        await async_setup_entry(hass, mock_config_entry, add_entities)
+
+        pdu_sensors = [
+            e
+            for e in added_entities
+            if isinstance(e, UnifiInsightsSensor) and e._device_id == "pdu1"
+        ]
+        pdu_keys = {e.entity_description.key for e in pdu_sensors}
+        assert "ac_power_consumption" in pdu_keys
+        assert "ac_power_budget" in pdu_keys
+
+        switch_sensors = [
+            e
+            for e in added_entities
+            if isinstance(e, UnifiInsightsSensor) and e._device_id == "switch1"
+        ]
+        switch_keys = {e.entity_description.key for e in switch_sensors}
+        assert "ac_power_consumption" not in switch_keys
+        assert "ac_power_budget" not in switch_keys
+
+    def test_ac_power_sensor_unique_ids_and_values(self, mock_coordinator) -> None:
+        """Test literal unique_ids and values for AC power sensors."""
+        desc_map = {d.key: d for d in SENSOR_TYPES}
+
+        sensor_consumption = UnifiInsightsSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["ac_power_consumption"],
+            site_id="site1",
+            device_id="pdu1",
+        )
+        assert sensor_consumption.unique_id == "site1_pdu1_ac_power_consumption"
+        assert sensor_consumption.native_value == 245.5
+
+        sensor_budget = UnifiInsightsSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["ac_power_budget"],
+            site_id="site1",
+            device_id="pdu1",
+        )
+        assert sensor_budget.unique_id == "site1_pdu1_ac_power_budget"
+        assert sensor_budget.native_value == 1800.0
+
+    def test_outlet_sensor_edge_cases(self, mock_coordinator) -> None:
+        """Test UnifiOutletSensor _find_outlet_data edge cases."""
+        desc_map = {d.key: d for d in OUTLET_SENSOR_TYPES}
+        sensor = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_map["power"],
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+        )
+
+        # 1. Device missing
+        mock_coordinator.data["devices"] = {}
+        assert sensor._find_outlet_data() is None
+        assert sensor.extra_state_attributes is None
+
+        # 2. Outlet table with invalid entries and matching outlet_idx
+        mock_coordinator.data["devices"] = {
+            "site1": {
+                "pdu1": {
+                    "outlet_table": [
+                        "not_a_dict",
+                        {"index": "invalid"},
+                        {"outlet_idx": 1, "name": None, "relay_state": None},
+                    ]
+                }
+            }
+        }
+        outlet = sensor._find_outlet_data()
+        assert outlet is not None
+        assert sensor.extra_state_attributes == {"index": 1}

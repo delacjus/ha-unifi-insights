@@ -96,11 +96,22 @@ This integration follows Home Assistant's [integration quality standards](https:
 - Multi-coordinator architecture for efficient data fetching
 - 90% minimum test coverage
 
-## Test your code modification
+## Pull Request Process
 
-This project comes with a complete development environment in a container, easy to launch if you use Visual Studio Code. With this container you will have a standalone Home Assistant instance running and already configured.
+When submitting a pull request:
 
-You can also run tests using `pytest` to ensure your changes don't break existing functionality.
+1. Create a descriptive feature/bugfix branch from `main`.
+2. Check the [UniFi Developer Portal](https://developer.ui.com/) for official API documentation, specifications, and latest capabilities offered to developers.
+3. Follow the checklist provided in the [Pull Request Template](.github/pull_request_template.md).
+4. Ensure all automated validation steps pass:
+   ```bash
+   script/lint                               # Linting & code formatting
+   mypy custom_components/unifi_insights     # Strict type checking
+   bandit -r custom_components/unifi_insights # Security scanning
+   pytest                                    # Unit tests (90% minimum coverage)
+   ```
+5. Verify your changes against a live Home Assistant instance (`./script/develop`).
+6. Update `CHANGELOG.md` under `[Unreleased]` with a clear, user-facing summary of your changes.
 
 ## License
 

@@ -26,8 +26,11 @@ from .device import (
     DeviceSwitchingFeature,
     DeviceType,
     DeviceUplink,
+    LegacyOutletMetrics,
     LegacyPortMetrics,
+    Outlet,
     PortBytesMetrics,
+    parse_outlet_metrics,
 )
 from .dns import DNSPolicy, DNSPolicyMetadata, DNSRecordType
 from .firewall import (
@@ -57,6 +60,7 @@ from .resources import (
     WANInterface,
     WANStatus,
 )
+from .routes import PolicyBasedRoute
 from .site import Site, SiteHealth
 from .stack import SwitchStack, SwitchStackLag, SwitchStackMember
 from .traffic import (
@@ -67,6 +71,7 @@ from .traffic import (
     TrafficMatchingType,
 )
 from .voucher import Voucher, VoucherCreateRequest
+from .vpn_client import VpnClient
 from .wifi import WifiNetwork, WifiSecurity
 
 __all__ = [
@@ -96,8 +101,11 @@ __all__ = [
     "DeviceSwitchingFeature",
     "DeviceType",
     "DeviceUplink",
+    "LegacyOutletMetrics",
     "LegacyPortMetrics",
+    "Outlet",
     "PortBytesMetrics",
+    "parse_outlet_metrics",
     # DNS
     "DNSPolicy",
     "DNSPolicyMetadata",
@@ -132,6 +140,8 @@ __all__ = [
     "VPNTunnelStatus",
     "WANInterface",
     "WANStatus",
+    # Routes
+    "PolicyBasedRoute",
     # Site
     "Site",
     "SiteHealth",
@@ -144,6 +154,8 @@ __all__ = [
     # Voucher
     "Voucher",
     "VoucherCreateRequest",
+    # VPN Client
+    "VpnClient",
     # WiFi
     "WifiNetwork",
     "WifiSecurity",
