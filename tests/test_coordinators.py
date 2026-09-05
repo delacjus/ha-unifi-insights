@@ -2833,6 +2833,60 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["sensors"] == {}
 
     @pytest.mark.asyncio
+    async def test_fetch_sensors_clears_cache_after_max_consecutive_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test persistent sensor error clears cache after threshold."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=Exception("500 Internal Server Error")
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+            assert "sensor1" in coordinator.data["sensors"]
+
+        await coordinator._fetch_sensors()
+        assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_nvr_missing_id_clears_cache_after_max_consecutive(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test NVR response without id is treated as empty."""
+        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
+        coordinator.data["nvrs"] = cached
+        mock_model = MagicMock()
+        coordinator._model_to_dict = MagicMock(return_value={"name": "No ID"})
+        coordinator.protect_client.nvr.get = AsyncMock(return_value=mock_model)
+
+        for _ in range(3):
+            await coordinator._fetch_nvr()
+            assert "nvr1" in coordinator.data["nvrs"]
+
+        await coordinator._fetch_nvr()
+        assert coordinator.data["nvrs"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_nvr_clears_cache_after_max_consecutive_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test persistent NVR error clears cache after threshold."""
+        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
+        coordinator.data["nvrs"] = cached
+        coordinator.protect_client.nvr.get = AsyncMock(
+            side_effect=Exception("500 Internal Server Error")
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_nvr()
+            assert "nvr1" in coordinator.data["nvrs"]
+
+        await coordinator._fetch_nvr()
+        assert coordinator.data["nvrs"] == {}
+
+    @pytest.mark.asyncio
     async def test_fetch_cameras_preserves_cache_on_transient_empty(
         self, coordinator: UnifiProtectCoordinator
     ):
