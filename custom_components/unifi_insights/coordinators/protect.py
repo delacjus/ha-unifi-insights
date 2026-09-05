@@ -14,6 +14,7 @@ from homeassistant.helpers import device_registry as dr
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
     UniFiConnectionError,
+    UniFiNotFoundError,
     UniFiResponseError,
     UniFiTimeoutError,
 )
@@ -59,6 +60,8 @@ _LOGGER = logging.getLogger(__name__)
 # -digit minutes rather than staying wrong for hours. It is deliberately not
 # tied to any one event type - see `_reconcile_stale_events`.
 STALE_EVENT_TIMEOUT: Final = timedelta(minutes=5)
+MAX_CONSECUTIVE_EMPTY_FETCHES: Final = 3
+MAX_CONSECUTIVE_FETCH_ERRORS: Final = 3
 
 # Envelope-only keys that must never leak from the raw top-level WebSocket
 # frame into a merged device/event dict - see `_pick_field` and the
@@ -138,6 +141,22 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": set(),
             "viewers": set(),
             "chimes": set(),
+        }
+        self._consecutive_empty_fetches: dict[str, int] = {
+            "cameras": 0,
+            "lights": 0,
+            "sensors": 0,
+            "nvrs": 0,
+            "viewers": 0,
+            "chimes": 0,
+        }
+        self._consecutive_fetch_errors: dict[str, int] = {
+            "cameras": 0,
+            "lights": 0,
+            "sensors": 0,
+            "nvrs": 0,
+            "viewers": 0,
+            "chimes": 0,
         }
         self.data: dict[str, Any] = {
             "cameras": {},
@@ -583,6 +602,31 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # entities relying on last_update_success don't stay unavailable
         # while WebSocket data is flowing, and the 30s poll fallback re-arms
         # from the last WebSocket message rather than firing needlessly.
+        #
+        # Neither is safe while a REST collection is failing, and they have to
+        # be given up separately.
+        #
+        # Availability: a frame for an unrelated device says nothing about the
+        # failing endpoint, but async_set_updated_data sets
+        # last_update_success = True regardless - flipping those entities back
+        # to available off stale cache, which is the unavailable -> off edge
+        # this branch exists to stop. Past the bound, don't claim recovery.
+        if self.fetch_degraded:
+            self.async_update_listeners()
+            return
+
+        # Retry scheduling: async_set_updated_data cancels the armed refresh and
+        # schedules a new one a full interval out. A WebSocket stream arriving
+        # faster than SCAN_INTERVAL_PROTECT would postpone the REST retry
+        # indefinitely, so a failing collection would never accumulate the
+        # attempts needed to reach its bound. Below the bound a frame may still
+        # mark the coordinator available, but it has to leave the already-armed
+        # poll deadline alone.
+        if self.fetch_erroring:
+            self.last_update_success = True
+            self.async_update_listeners()
+            return
+
         self.async_set_updated_data(self.data)
 
     def _normalize_camera_data(self, camera: dict[str, Any]) -> dict[str, Any]:
@@ -935,7 +979,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch Protect data from API."""
-
         if not self.protect_client:
             _LOGGER.debug("Protect coordinator: No Protect client available")
             return self.data
@@ -1005,29 +1048,190 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # Should never reach here due to raises above
         return self.data  # pragma: no cover
 
+    def _update_device_collection(
+        self,
+        collection_key: str,
+        new_items: dict[str, Any],
+        *,
+        is_404: bool = False,
+    ) -> None:
+        """
+        Update a device collection with bounded cache preservation.
+
+        Preserves existing cached items across up to MAX_CONSECUTIVE_EMPTY_FETCHES
+        transient empty responses or 404 errors. If empty/404 persists beyond the
+        threshold, the collection is cleared so genuinely removed or unadopted devices
+        are cleaned up from the device registry.
+
+        Only called for responses the API actually returned. Fetch *errors* never
+        reach here and never clear a collection - see `_record_fetch_error`.
+        """
+        existing = self.data.get(collection_key)
+        if not isinstance(existing, dict):
+            existing = {}
+            self.data[collection_key] = existing
+
+        if new_items:
+            # Authoritative: real devices came back, so both streaks are over.
+            #
+            # known gap: The bounded cache guard operates on wholesale empty responses.
+            # A partial response (e.g. 3 of 5 devices returned during partial recovery)
+            # is treated as truthy and replaces the collection, resetting the counter.
+            self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
+            self.data[collection_key] = new_items
+            return
+
+        # Response is empty or 404
+        if not existing:
+            # Nothing cached to protect, so an empty/404 here is the steady state
+            # for a console with none of this device type rather than a
+            # suspicious response - it can clear a degraded streak.
+            self.data[collection_key] = {}
+            self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
+            if is_404:
+                _LOGGER.debug(
+                    (
+                        "Protect coordinator: %s endpoint returned 404;"
+                        " no devices configured"
+                    ),
+                    collection_key,
+                )
+            return
+
+        # Collection had items; handle transient vs persistent outage
+        count = self._consecutive_empty_fetches.get(collection_key, 0) + 1
+        self._consecutive_empty_fetches[collection_key] = count
+        status_desc = "404" if is_404 else "empty response"
+
+        if count <= MAX_CONSECUTIVE_EMPTY_FETCHES:
+            # Deliberately does NOT clear the error streak. An empty/404 is the
+            # response class this branch already treats as untrustworthy - that
+            # is why the cache is being preserved - so it cannot certify that a
+            # degraded collection recovered. Only a real payload, or an
+            # uninterrupted run long enough to be believed below, can do that.
+            _LOGGER.debug(
+                "Protect coordinator: %s fetch returned %s (poll %d/%d); "
+                "preserving %d cached devices",
+                collection_key,
+                status_desc,
+                count,
+                MAX_CONSECUTIVE_EMPTY_FETCHES,
+                len(existing),
+            )
+        else:
+            _LOGGER.warning(
+                "Protect coordinator: %s fetch returned %s for %d consecutive polls; "
+                "clearing cached devices",
+                collection_key,
+                status_desc,
+                count,
+            )
+            # An uninterrupted run this long is believed: the devices really
+            # are gone, which is an authoritative answer about the collection.
+            self.data[collection_key] = {}
+            self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
+
+    @property
+    def fetch_erroring(self) -> bool:
+        """True while any collection has a non-zero REST error streak."""
+        return any(self._consecutive_fetch_errors.values())
+
+    @property
+    def fetch_degraded(self) -> bool:
+        """
+        True while a collection keeps failing past MAX_CONSECUTIVE_FETCH_ERRORS.
+
+        Tracked separately from `last_update_success` because that flag is not
+        only owned by the poll loop: `async_set_updated_data` sets it True on
+        every WebSocket frame, so it cannot by itself represent "this REST
+        collection is still down". Reset only by a successful response for the
+        collection, via `_update_device_collection`.
+
+        Every fetcher records its streak, including `_fetch_cameras` and
+        `_fetch_lights`, which re-raise on the first error rather than
+        swallowing - otherwise a persistently failing cameras endpoint would
+        never register as degraded and WebSocket frames would keep papering
+        over it.
+        """
+        return any(
+            count > MAX_CONSECUTIVE_FETCH_ERRORS
+            for count in self._consecutive_fetch_errors.values()
+        )
+
+    def _record_fetch_error(self, collection_key: str) -> bool:
+        """
+        Record a failed fetch and decide whether to stop swallowing the error.
+
+        Returns True once a collection has failed MAX_CONSECUTIVE_FETCH_ERRORS
+        polls in a row, telling the caller to re-raise. The error then reaches
+        `_async_update_data`, which fails the poll, so `last_update_success`
+        goes False and every Protect entity reports unavailable through
+        `UnifiFacadeCoordinator.protect_available`.
+
+        Errors deliberately never clear the cached collection. An empty list or
+        a 404 is evidence the devices are gone and `_update_device_collection`
+        may drop them; a connection or server error is only evidence that we
+        could not ask. Clearing on the latter would let `_cleanup_stale_devices`
+        remove still-valid devices from the device registry, losing area
+        assignments and breaking automations that reference them by device id.
+        """
+        # An error means the console is unhealthy, so any empty responses seen
+        # around it are not trustworthy evidence that the devices are gone.
+        # Clearing a collection must take MAX_CONSECUTIVE_EMPTY_FETCHES
+        # uninterrupted empty/404 responses - which is what the log claims -
+        # so an error resets that streak just as a response resets this one.
+        self._consecutive_empty_fetches[collection_key] = 0
+
+        count = self._consecutive_fetch_errors.get(collection_key, 0) + 1
+        self._consecutive_fetch_errors[collection_key] = count
+        if count <= MAX_CONSECUTIVE_FETCH_ERRORS:
+            return False
+
+        _LOGGER.warning(
+            "Protect coordinator: %s fetch failed %d consecutive times; failing "
+            "the update so entities report unavailable (cached devices kept)",
+            collection_key,
+            count,
+        )
+        return True
+
     async def _fetch_cameras(self) -> None:
         """Fetch camera data."""
         if not self.protect_client:
             return
 
         _LOGGER.debug("Protect coordinator: Fetching cameras")
-        cameras_models = await self.protect_client.cameras.get_all()
-        # Rebuild the dict from the API response so cameras removed from
-        # Protect disappear from coordinator data (enables stale cleanup).
-        cameras: dict[str, Any] = {}
-        for camera_model in cameras_models:
-            camera = self._normalize_camera_data(self._model_to_dict(camera_model))
-            camera_id = camera.get("id")
-            if camera_id:
-                cameras[camera_id] = camera
+        try:
+            cameras_models = await self.protect_client.cameras.get_all()
+            # Rebuild the dict from the API response so cameras removed from
+            # Protect disappear from coordinator data (enables stale cleanup).
+            cameras: dict[str, Any] = {}
+            for camera_model in cameras_models:
+                camera = self._normalize_camera_data(self._model_to_dict(camera_model))
+                camera_id = camera.get("id")
+                if camera_id:
+                    cameras[camera_id] = camera
 
-                _LOGGER.debug(
-                    "Protect coordinator: Camera %s supports smart detection: %s",
-                    camera.get("name", camera_id),
-                    camera.get("smartDetectTypes", []),
-                )
-        self.data["cameras"] = cameras
-        self._drop_rebuilt_latch_trackers(cameras)
+                    _LOGGER.debug(
+                        "Protect coordinator: Camera %s supports smart detection: %s",
+                        camera.get("name", camera_id),
+                        camera.get("smartDetectTypes", []),
+                    )
+            self._update_device_collection("cameras", cameras)
+        except UniFiNotFoundError:
+            self._update_device_collection("cameras", {}, is_404=True)
+        except Exception:
+            # Cameras and lights propagate on the first error instead of being
+            # swallowed, but the streak still has to be recorded: fetch_degraded
+            # is what stops a WebSocket frame from marking a persistently
+            # failing endpoint recovered, and it only sees collections that go
+            # through _record_fetch_error.
+            self._record_fetch_error("cameras")
+            raise
+        self._drop_rebuilt_latch_trackers(self.data["cameras"])
 
     def _drop_rebuilt_latch_trackers(self, cameras: dict[str, Any]) -> None:
         """
@@ -1068,14 +1272,25 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             return
 
         _LOGGER.debug("Protect coordinator: Fetching lights")
-        lights_models = await self.protect_client.lights.get_all()
-        lights: dict[str, Any] = {}
-        for light_model in lights_models:
-            light = self._model_to_dict(light_model)
-            light_id = light.get("id")
-            if light_id:
-                lights[light_id] = light
-        self.data["lights"] = lights
+        try:
+            lights_models = await self.protect_client.lights.get_all()
+            lights: dict[str, Any] = {}
+            for light_model in lights_models:
+                light = self._model_to_dict(light_model)
+                light_id = light.get("id")
+                if light_id:
+                    lights[light_id] = light
+            self._update_device_collection("lights", lights)
+        except UniFiNotFoundError:
+            self._update_device_collection("lights", {}, is_404=True)
+        except Exception:
+            # Cameras and lights propagate on the first error instead of being
+            # swallowed, but the streak still has to be recorded: fetch_degraded
+            # is what stops a WebSocket frame from marking a persistently
+            # failing endpoint recovered, and it only sees collections that go
+            # through _record_fetch_error.
+            self._record_fetch_error("lights")
+            raise
 
     async def _fetch_sensors(self) -> None:
         """Fetch sensor data."""
@@ -1091,13 +1306,17 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 sensor_id = sensor.get("id")
                 if sensor_id:
                     sensors[sensor_id] = sensor
-            self.data["sensors"] = sensors
+            self._update_device_collection("sensors", sensors)
             _LOGGER.debug(
                 "Protect coordinator: Successfully fetched %d sensors",
                 len(sensors_models),
             )
+        except UniFiNotFoundError:
+            self._update_device_collection("sensors", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching sensors: %s", err)
+            if self._record_fetch_error("sensors"):
+                raise
 
     async def _fetch_nvr(self) -> None:
         """Fetch NVR data."""
@@ -1108,15 +1327,20 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         try:
             nvr_model = await self.protect_client.nvr.get()
             nvr = self._model_to_dict(nvr_model)
-            if nvr:
-                nvr_id = nvr.get("id")
-                if nvr_id:
-                    self.data["nvrs"] = {nvr_id: nvr}
-                    _LOGGER.debug(
-                        "Protect coordinator: Successfully fetched NVR: %s", nvr_id
-                    )
+            nvr_id = nvr.get("id") if isinstance(nvr, dict) else None
+            if nvr_id:
+                self._update_device_collection("nvrs", {nvr_id: nvr})
+                _LOGGER.debug(
+                    "Protect coordinator: Successfully fetched NVR: %s", nvr_id
+                )
+            else:
+                self._update_device_collection("nvrs", {})
+        except UniFiNotFoundError:
+            self._update_device_collection("nvrs", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching NVR: %s", err)
+            if self._record_fetch_error("nvrs"):
+                raise
 
     async def _fetch_chimes(self) -> None:
         """Fetch chime data."""
@@ -1132,13 +1356,17 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 chime_id = chime.get("id")
                 if chime_id:
                     chimes[chime_id] = chime
-            self.data["chimes"] = chimes
+            self._update_device_collection("chimes", chimes)
             _LOGGER.debug(
                 "Protect coordinator: Successfully fetched %d chimes",
                 len(chimes_models),
             )
+        except UniFiNotFoundError:
+            self._update_device_collection("chimes", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching chimes: %s", err)
+            if self._record_fetch_error("chimes"):
+                raise
 
     async def _fetch_viewers(self) -> None:
         """Fetch viewer data."""
@@ -1155,13 +1383,17 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                     viewer_id = viewer.get("id")
                     if viewer_id:
                         viewers[viewer_id] = viewer
-                self.data["viewers"] = viewers
+                self._update_device_collection("viewers", viewers)
                 _LOGGER.debug(
                     "Protect coordinator: Successfully fetched %d viewers",
                     len(viewers_models),
                 )
+        except UniFiNotFoundError:
+            self._update_device_collection("viewers", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching viewers: %s", err)
+            if self._record_fetch_error("viewers"):
+                raise
 
     async def _fetch_liveviews(self) -> None:
         """Fetch liveview data."""

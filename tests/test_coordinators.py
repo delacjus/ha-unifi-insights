@@ -12,7 +12,10 @@ import pytest
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
@@ -34,6 +37,8 @@ from custom_components.unifi_insights.coordinators.config import UnifiConfigCoor
 from custom_components.unifi_insights.coordinators.device import UnifiDeviceCoordinator
 from custom_components.unifi_insights.coordinators.facade import UnifiFacadeCoordinator
 from custom_components.unifi_insights.coordinators.protect import (
+    MAX_CONSECUTIVE_EMPTY_FETCHES,
+    MAX_CONSECUTIVE_FETCH_ERRORS,
     STALE_EVENT_TIMEOUT,
     UnifiProtectCoordinator,
 )
@@ -2249,9 +2254,7 @@ class TestUnifiProtectCoordinator:
         still triggers reconciliation, matching the original behavior.
         """
         with patch.object(coordinator, "_reconcile_stale_events") as mock_reconcile:
-            coordinator._on_websocket_connection_state_change(
-                "devices", connected=True
-            )
+            coordinator._on_websocket_connection_state_change("devices", connected=True)
 
         mock_reconcile.assert_called_once()
 
@@ -2455,6 +2458,632 @@ class TestUnifiProtectCoordinator:
 
         # Should not raise, sensors should remain empty
         assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_preserves_cache_on_empty(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test sensor fetch preserves cached sensors across transient empty polls."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+
+        # Polls 1, 2, 3 should preserve cache
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+            assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_clears_cache_after_max_consecutive_empty(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test sensor cache is cleared after MAX_CONSECUTIVE_EMPTY_FETCHES polls."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+
+        # 4 consecutive empty polls exceeds threshold of 3
+        for _ in range(4):
+            await coordinator._fetch_sensors()
+
+        assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_preserves_cache_on_404(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test sensor fetch preserves cached sensors across transient 404s."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("Not Found", 404)
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+            assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_clears_cache_after_max_consecutive_404(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test sensor cache is cleared after consecutive 404s exceed threshold."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("Not Found", 404)
+        )
+
+        for _ in range(4):
+            await coordinator._fetch_sensors()
+
+        assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_404_when_no_sensors_configured(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test sensor fetch 404 leaves dict empty without error."""
+        coordinator.data["sensors"] = {}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("Not Found", 404)
+        )
+
+        await coordinator._fetch_sensors()
+        assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_raises_after_max_consecutive_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Persistent sensor errors fail the poll and never clear the cache."""
+        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
+        coordinator.data["sensors"] = cached
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+            assert "sensor1" in coordinator.data["sensors"]
+
+        # Past the threshold the error propagates so _async_update_data fails the
+        # poll and protect_available turns the entities unavailable.
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_sensors()
+
+        # An error is not evidence the sensor is gone - the cache must survive.
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_persistent_sensor_error_keeps_registry_devices(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """A sensors-endpoint outage must not remove devices from the registry."""
+        coordinator._previous_protect_device_ids = {
+            "cameras": set(),
+            "lights": set(),
+            "sensors": {"sensor1"},
+            "nvrs": set(),
+            "viewers": set(),
+            "chimes": set(),
+        }
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_sensors()
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_error_streak_reset_by_success(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A successful fetch clears the error streak so it never accumulates."""
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        assert coordinator._consecutive_fetch_errors["sensors"] == 3
+
+        sensor_model = MagicMock()
+        coordinator._model_to_dict = MagicMock(
+            return_value={"id": "sensor1", "state": "CONNECTED"}
+        )
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            return_value=[sensor_model]
+        )
+        await coordinator._fetch_sensors()
+        assert coordinator._consecutive_fetch_errors["sensors"] == 0
+
+        # Streak restarts from zero rather than tripping immediately.
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_nvr_missing_id_clears_cache_after_max_consecutive(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test NVR response without id is treated as empty."""
+        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
+        coordinator.data["nvrs"] = cached
+        mock_model = MagicMock()
+        coordinator._model_to_dict = MagicMock(return_value={"name": "No ID"})
+        coordinator.protect_client.nvr.get = AsyncMock(return_value=mock_model)
+
+        for _ in range(3):
+            await coordinator._fetch_nvr()
+            assert "nvr1" in coordinator.data["nvrs"]
+
+        await coordinator._fetch_nvr()
+        assert coordinator.data["nvrs"] == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("collection", "client_attr", "fetch_method"),
+        [
+            ("chimes", "chimes", "_fetch_chimes"),
+            ("viewers", "viewers", "_fetch_viewers"),
+        ],
+    )
+    async def test_swallowing_fetchers_raise_after_max_consecutive_errors(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        collection: str,
+        client_attr: str,
+        fetch_method: str,
+    ):
+        """Every swallowing fetcher bounds its error streak the same way."""
+        cached = {"device1": {"id": "device1"}}
+        coordinator.data[collection] = cached
+        getattr(coordinator.protect_client, client_attr).get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        fetch = getattr(coordinator, fetch_method)
+
+        for _ in range(3):
+            await fetch()
+            assert "device1" in coordinator.data[collection]
+
+        with pytest.raises(UniFiResponseError):
+            await fetch()
+
+        assert "device1" in coordinator.data[collection]
+
+    @pytest.mark.asyncio
+    async def test_update_data_fails_after_persistent_sensor_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """The whole poll fails once a sub-fetch error streak passes the bound.
+
+        This is the end of the chain the bound exists for: UpdateFailed clears
+        last_update_success, which UnifiFacadeCoordinator.protect_available
+        reads, which makes every Protect entity report unavailable instead of
+        serving frozen data - all without discarding the cache.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._async_update_data()
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_websocket_frame_does_not_clear_persistent_fetch_failure(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """An unrelated WS delta must not mark a failing collection recovered.
+
+        `async_set_updated_data` sets last_update_success = True on every
+        WebSocket frame. Without a guard, one camera frame flips the sensors
+        entities back to available off stale cache - reproducing the
+        unavailable -> off edge this branch exists to stop.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        assert coordinator.fetch_degraded is True
+
+        with patch.object(coordinator, "async_update_listeners") as mock_notify:
+            coordinator._handle_device_update(
+                "camera", {"id": "camera1", "state": "CONNECTED"}
+            )
+            # Listeners still hear about it; the coordinator just does not
+            # claim to have recovered.
+            mock_notify.assert_called_once()
+
+        assert coordinator.last_update_success is False
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_attr", ["cameras", "lights"])
+    async def test_websocket_frame_does_not_clear_immediate_raise_failure(
+        self, coordinator: UnifiProtectCoordinator, client_attr: str
+    ):
+        """Fetchers that re-raise on the first error still register as degraded.
+
+        `_fetch_cameras`/`_fetch_lights` never swallow, so they never reached
+        `_record_fetch_error` and `fetch_degraded` stayed False - letting a
+        WebSocket frame mark a persistently failing endpoint recovered, the
+        same hole as the swallowing fetchers.
+        """
+        getattr(coordinator.protect_client, client_attr).get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        assert coordinator.fetch_degraded is True
+
+        coordinator._handle_device_update(
+            "sensor", {"id": "sensor1", "state": "CONNECTED"}
+        )
+        assert coordinator.last_update_success is False
+
+    @pytest.mark.asyncio
+    async def test_transient_poll_failure_still_recovers_via_websocket(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Below the bound, WebSocket traffic keeps entities alive as designed.
+
+        The degraded guard must only override the deliberate
+        "WebSocket data is flowing" behaviour for *persistent* failure.
+        """
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        assert coordinator.fetch_degraded is False
+
+        coordinator._handle_device_update(
+            "sensor", {"id": "sensor1", "state": "CONNECTED"}
+        )
+        assert coordinator.last_update_success is True
+
+    @pytest.mark.asyncio
+    async def test_empty_response_does_not_clear_degraded_streak(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """An empty/404 cannot certify that a degraded collection recovered.
+
+        It is the same response class this helper already treats as suspicious
+        - that is why the cache is preserved - so accepting it as proof of
+        health would flip cached entities back to available with no fresh
+        device data, recreating the unavailable -> off edge.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.fetch_degraded is True
+
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+        await coordinator.async_refresh()
+
+        # The poll itself completes (an empty list is not an exception), so
+        # last_update_success is True - which is exactly why the entity-facing
+        # gate has to read fetch_degraded too. See
+        # TestUnifiFacadeCoordinator.test_protect_available_false_when_degraded.
+        assert coordinator.fetch_degraded is True
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_real_payload_clears_degraded_streak(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A response carrying actual devices is authoritative recovery."""
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.fetch_degraded is True
+
+        coordinator._model_to_dict = MagicMock(
+            return_value={"id": "sensor1", "state": "CONNECTED"}
+        )
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            return_value=[MagicMock()]
+        )
+        await coordinator._fetch_sensors()
+
+        assert coordinator.fetch_degraded is False
+
+    @pytest.mark.asyncio
+    async def test_sustained_empty_after_degradation_is_terminal(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """The empty/404 case is still terminal once the run is long enough.
+
+        Refusing to trust a single empty must not make the collection
+        permanently un-clearable when the devices really are gone.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.fetch_degraded is True
+
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES + 1):
+            await coordinator._fetch_sensors()
+
+        assert coordinator.data["sensors"] == {}
+        assert coordinator.fetch_degraded is False
+
+    @pytest.mark.asyncio
+    async def test_below_bound_websocket_frames_preserve_poll_deadline(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Frames must not push the REST retry out of reach of its own bound.
+
+        async_set_updated_data cancels the armed refresh and schedules a new
+        one a full interval out, so a stream arriving faster than
+        SCAN_INTERVAL_PROTECT would starve the retry and the error streak
+        would never grow.
+        """
+        unsub = coordinator.async_add_listener(lambda: None)
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        await coordinator.async_refresh()
+        assert coordinator._consecutive_fetch_errors["cameras"] == 1
+        armed = coordinator._unsub_refresh
+        assert armed is not None
+
+        for _ in range(5):
+            coordinator._handle_device_update(
+                "sensor", {"id": "sensor1", "state": "CONNECTED"}
+            )
+
+        # Availability may still recover below the bound; the deadline may not move.
+        assert coordinator.last_update_success is True
+        assert coordinator._unsub_refresh is armed
+
+        unsub()
+
+    @pytest.mark.asyncio
+    async def test_rest_poll_still_runs_despite_steady_websocket_traffic(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator, freezer
+    ):
+        """End to end: the failing REST fetch is still retried and reaches its bound."""
+        unsub = coordinator.async_add_listener(lambda: None)
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        await coordinator.async_refresh()
+        calls_before = coordinator.protect_client.cameras.get_all.call_count
+
+        # WebSocket frames arriving faster than the poll interval.
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            for _ in range(3):
+                freezer.tick(SCAN_INTERVAL_PROTECT / 4)
+                coordinator._handle_device_update(
+                    "sensor", {"id": "sensor1", "state": "CONNECTED"}
+                )
+            freezer.tick(SCAN_INTERVAL_PROTECT)
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+
+        assert coordinator.protect_client.cameras.get_all.call_count > calls_before
+        assert coordinator.fetch_degraded is True
+
+        unsub()
+
+    @pytest.mark.asyncio
+    async def test_websocket_frame_still_marks_success_when_healthy(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """The degraded guard must not change the normal WebSocket path."""
+        coordinator.last_update_success = False
+        assert coordinator.fetch_degraded is False
+
+        coordinator._handle_device_update(
+            "camera", {"id": "camera1", "state": "CONNECTED"}
+        )
+
+        assert coordinator.last_update_success is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_error_resets_consecutive_empty_streak(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """An error interrupts the empty streak, so clearing needs a clean run.
+
+        3 empty polls then an error then another empty must not count as four
+        consecutive empty responses: the error is evidence the console is
+        unhealthy, which makes the surrounding empties untrustworthy as
+        evidence that the devices are gone.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        empty = AsyncMock(return_value=[])
+        error = AsyncMock(side_effect=UniFiResponseError("Internal Server Error", 500))
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            coordinator.protect_client.sensors.get_all = empty
+            await coordinator._fetch_sensors()
+        assert coordinator._consecutive_empty_fetches["sensors"] == (
+            MAX_CONSECUTIVE_EMPTY_FETCHES
+        )
+
+        coordinator.protect_client.sensors.get_all = error
+        await coordinator._fetch_sensors()
+        assert coordinator._consecutive_empty_fetches["sensors"] == 0
+
+        coordinator.protect_client.sensors.get_all = empty
+        await coordinator._fetch_sensors()
+        assert "sensor1" in coordinator.data["sensors"]
+        assert coordinator._consecutive_empty_fetches["sensors"] == 1
+
+    @pytest.mark.asyncio
+    async def test_uninterrupted_empty_streak_still_clears(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Resetting on error must not make the empty bound unreachable."""
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES + 1):
+            await coordinator._fetch_sensors()
+
+        assert coordinator.data["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_nvr_raises_after_max_consecutive_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Persistent NVR errors fail the poll and never clear the cache."""
+        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
+        coordinator.data["nvrs"] = cached
+        coordinator.protect_client.nvr.get = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_nvr()
+            assert "nvr1" in coordinator.data["nvrs"]
+
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_nvr()
+
+        assert "nvr1" in coordinator.data["nvrs"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_preserves_cache_on_transient_empty(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test camera fetch preserves cache across transient empty polls."""
+        cached = {"camera1": {"id": "camera1", "state": "CONNECTED"}}
+        coordinator.data["cameras"] = cached
+        coordinator.protect_client.cameras.get_all = AsyncMock(return_value=[])
+
+        await coordinator._fetch_cameras()
+        assert "camera1" in coordinator.data["cameras"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_clears_cache_after_max_consecutive_empty(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test camera cache is cleared after consecutive empty polls."""
+        cached = {"camera1": {"id": "camera1", "state": "CONNECTED"}}
+        coordinator.data["cameras"] = cached
+        coordinator.protect_client.cameras.get_all = AsyncMock(return_value=[])
+
+        for _ in range(4):
+            await coordinator._fetch_cameras()
+
+        assert coordinator.data["cameras"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_lights_preserves_cache_on_transient_empty(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test light fetch preserves cached lights across transient empty responses."""
+        cached = {"light1": {"id": "light1", "state": "CONNECTED"}}
+        coordinator.data["lights"] = cached
+        coordinator.protect_client.lights.get_all = AsyncMock(return_value=[])
+
+        await coordinator._fetch_lights()
+        assert "light1" in coordinator.data["lights"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_preserves_devices_on_transient_empty(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test stale device cleanup preserves devices during transient empty poll."""
+        coordinator._previous_protect_device_ids = {
+            "cameras": set(),
+            "lights": set(),
+            "sensors": {"sensor1"},
+            "nvrs": set(),
+            "viewers": set(),
+            "chimes": set(),
+        }
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+
+        # 1 transient empty fetch
+        await coordinator._fetch_sensors()
+        assert "sensor1" in coordinator.data["sensors"]
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=mock_device
+            )
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_removes_device_after_max_consecutive_empty(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test stale device cleanup removes devices after max empty polls."""
+        coordinator._previous_protect_device_ids = {
+            "cameras": set(),
+            "lights": set(),
+            "sensors": {"sensor1"},
+            "nvrs": set(),
+            "viewers": set(),
+            "chimes": set(),
+        }
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(return_value=[])
+
+        # 4 consecutive empty polls
+        for _ in range(4):
+            await coordinator._fetch_sensors()
+
+        assert coordinator.data["sensors"] == {}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "sensor1_entry_id"
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=mock_device
+            )
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_called()
 
     @pytest.mark.asyncio
     async def test_fetch_nvr_error(self, coordinator: UnifiProtectCoordinator):
@@ -2930,6 +3559,7 @@ class TestUnifiFacadeCoordinator:
         mock_device = MagicMock()
         mock_device.last_update_success = True
         mock_protect = MagicMock()
+        mock_protect.fetch_degraded = False
         mock_protect.last_update_success = True
 
         facade_coordinator._config_coordinator = mock_config
@@ -2938,13 +3568,16 @@ class TestUnifiFacadeCoordinator:
 
         assert facade_coordinator.available is True
 
-    def test_available_config_fails(self, facade_coordinator: UnifiFacadeCoordinator):
+    def test_available_config_fails_decoupled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
         """Test available property when config coordinator fails."""
         mock_config = MagicMock()
         mock_config.last_update_success = False
         mock_device = MagicMock()
         mock_device.last_update_success = True
         mock_protect = MagicMock()
+        mock_protect.fetch_degraded = False
         mock_protect.last_update_success = True
 
         facade_coordinator._config_coordinator = mock_config
@@ -2952,14 +3585,20 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator._protect_coordinator = mock_protect
 
         assert facade_coordinator.available is False
+        assert facade_coordinator.config_available is False
+        assert facade_coordinator.device_available is True
+        assert facade_coordinator.protect_available is True
 
-    def test_available_device_fails(self, facade_coordinator: UnifiFacadeCoordinator):
+    def test_available_device_fails_decoupled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
         """Test available property when device coordinator fails."""
         mock_config = MagicMock()
         mock_config.last_update_success = True
         mock_device = MagicMock()
         mock_device.last_update_success = False
         mock_protect = MagicMock()
+        mock_protect.fetch_degraded = False
         mock_protect.last_update_success = True
 
         facade_coordinator._config_coordinator = mock_config
@@ -2967,14 +3606,20 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator._protect_coordinator = mock_protect
 
         assert facade_coordinator.available is False
+        assert facade_coordinator.device_available is False
+        assert facade_coordinator.config_available is True
+        assert facade_coordinator.protect_available is True
 
-    def test_available_protect_fails(self, facade_coordinator: UnifiFacadeCoordinator):
+    def test_available_protect_fails_decoupled(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
         """Test available property when protect coordinator fails."""
         mock_config = MagicMock()
         mock_config.last_update_success = True
         mock_device = MagicMock()
         mock_device.last_update_success = True
         mock_protect = MagicMock()
+        mock_protect.fetch_degraded = False
         mock_protect.last_update_success = False
 
         facade_coordinator._config_coordinator = mock_config
@@ -2982,6 +3627,45 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator._protect_coordinator = mock_protect
 
         assert facade_coordinator.available is False
+        assert facade_coordinator.protect_available is False
+        assert facade_coordinator.device_available is True
+        assert facade_coordinator.config_available is True
+
+    def test_available_all_coordinators_fail(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """Test available property when all coordinators fail."""
+        mock_config = MagicMock()
+        mock_config.last_update_success = False
+        mock_device = MagicMock()
+        mock_device.last_update_success = False
+        mock_protect = MagicMock()
+        mock_protect.fetch_degraded = False
+        mock_protect.last_update_success = False
+
+        facade_coordinator._config_coordinator = mock_config
+        facade_coordinator._device_coordinator = mock_device
+        facade_coordinator._protect_coordinator = mock_protect
+
+        assert facade_coordinator.available is False
+        assert facade_coordinator.device_available is False
+        assert facade_coordinator.config_available is False
+        assert facade_coordinator.protect_available is False
+
+    def test_protect_available_false_when_degraded(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ):
+        """A degraded Protect coordinator is unavailable even if a poll passed.
+
+        An empty/404 inside the preservation window, or any WebSocket frame,
+        leaves last_update_success True without proving recovery.
+        """
+        mock_protect = MagicMock()
+        mock_protect.last_update_success = True
+        mock_protect.fetch_degraded = True
+        facade_coordinator._protect_coordinator = mock_protect
+
+        assert facade_coordinator.protect_available is False
 
     def test_available_no_protect(
         self, facade_coordinator_no_protect: UnifiFacadeCoordinator
@@ -2997,6 +3681,7 @@ class TestUnifiFacadeCoordinator:
         # protect_coordinator is None by default for this fixture
 
         assert facade_coordinator_no_protect.available is True
+        assert facade_coordinator_no_protect.protect_available is True
 
     @pytest.mark.asyncio
     async def test_async_update_data(self, facade_coordinator: UnifiFacadeCoordinator):
