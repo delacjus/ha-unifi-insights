@@ -603,14 +603,27 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # while WebSocket data is flowing, and the 30s poll fallback re-arms
         # from the last WebSocket message rather than firing needlessly.
         #
-        # The exception is a collection that is failing every REST poll. A
-        # frame for an unrelated device says nothing about that endpoint, but
-        # async_set_updated_data sets last_update_success = True regardless -
-        # flipping those entities back to available off stale cache, which is
-        # the unavailable -> off edge this branch exists to stop - and re-arms
-        # the timer, postponing the retry. Notify listeners without claiming
-        # the coordinator recovered.
+        # Neither is safe while a REST collection is failing, and they have to
+        # be given up separately.
+        #
+        # Availability: a frame for an unrelated device says nothing about the
+        # failing endpoint, but async_set_updated_data sets
+        # last_update_success = True regardless - flipping those entities back
+        # to available off stale cache, which is the unavailable -> off edge
+        # this branch exists to stop. Past the bound, don't claim recovery.
         if self.fetch_degraded:
+            self.async_update_listeners()
+            return
+
+        # Retry scheduling: async_set_updated_data cancels the armed refresh and
+        # schedules a new one a full interval out. A WebSocket stream arriving
+        # faster than SCAN_INTERVAL_PROTECT would postpone the REST retry
+        # indefinitely, so a failing collection would never accumulate the
+        # attempts needed to reach its bound. Below the bound a frame may still
+        # mark the coordinator available, but it has to leave the already-armed
+        # poll deadline alone.
+        if self.fetch_erroring:
+            self.last_update_success = True
             self.async_update_listeners()
             return
 
@@ -1053,27 +1066,30 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         Only called for responses the API actually returned. Fetch *errors* never
         reach here and never clear a collection - see `_record_fetch_error`.
         """
-        # Reaching here means the API answered, so any error streak is over.
-        self._consecutive_fetch_errors[collection_key] = 0
-
         existing = self.data.get(collection_key)
         if not isinstance(existing, dict):
             existing = {}
             self.data[collection_key] = existing
 
         if new_items:
+            # Authoritative: real devices came back, so both streaks are over.
+            #
             # known gap: The bounded cache guard operates on wholesale empty responses.
             # A partial response (e.g. 3 of 5 devices returned during partial recovery)
             # is treated as truthy and replaces the collection, resetting the counter.
             self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
             self.data[collection_key] = new_items
             return
 
         # Response is empty or 404
         if not existing:
-            # Collection was already empty; nothing to preserve
+            # Nothing cached to protect, so an empty/404 here is the steady state
+            # for a console with none of this device type rather than a
+            # suspicious response - it can clear a degraded streak.
             self.data[collection_key] = {}
             self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
             if is_404:
                 _LOGGER.debug(
                     (
@@ -1090,6 +1106,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         status_desc = "404" if is_404 else "empty response"
 
         if count <= MAX_CONSECUTIVE_EMPTY_FETCHES:
+            # Deliberately does NOT clear the error streak. An empty/404 is the
+            # response class this branch already treats as untrustworthy - that
+            # is why the cache is being preserved - so it cannot certify that a
+            # degraded collection recovered. Only a real payload, or an
+            # uninterrupted run long enough to be believed below, can do that.
             _LOGGER.debug(
                 "Protect coordinator: %s fetch returned %s (poll %d/%d); "
                 "preserving %d cached devices",
@@ -1107,8 +1128,16 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 status_desc,
                 count,
             )
+            # An uninterrupted run this long is believed: the devices really
+            # are gone, which is an authoritative answer about the collection.
             self.data[collection_key] = {}
             self._consecutive_empty_fetches[collection_key] = 0
+            self._consecutive_fetch_errors[collection_key] = 0
+
+    @property
+    def fetch_erroring(self) -> bool:
+        """True while any collection has a non-zero REST error streak."""
+        return any(self._consecutive_fetch_errors.values())
 
     @property
     def fetch_degraded(self) -> bool:
