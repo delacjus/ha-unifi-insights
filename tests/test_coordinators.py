@@ -3027,6 +3027,53 @@ class TestUnifiProtectCoordinator:
         assert "sensor1" in coordinator.data["sensors"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_attr", ["cameras", "lights"])
+    async def test_websocket_frame_does_not_clear_immediate_raise_failure(
+        self, coordinator: UnifiProtectCoordinator, client_attr: str
+    ):
+        """Fetchers that re-raise on the first error still register as degraded.
+
+        `_fetch_cameras`/`_fetch_lights` never swallow, so they never reached
+        `_record_fetch_error` and `fetch_degraded` stayed False - letting a
+        WebSocket frame mark a persistently failing endpoint recovered, the
+        same hole as the swallowing fetchers.
+        """
+        getattr(coordinator.protect_client, client_attr).get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(MAX_CONSECUTIVE_FETCH_ERRORS + 1):
+            await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        assert coordinator.fetch_degraded is True
+
+        coordinator._handle_device_update(
+            "sensor", {"id": "sensor1", "state": "CONNECTED"}
+        )
+        assert coordinator.last_update_success is False
+
+    @pytest.mark.asyncio
+    async def test_transient_poll_failure_still_recovers_via_websocket(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Below the bound, WebSocket traffic keeps entities alive as designed.
+
+        The degraded guard must only override the deliberate
+        "WebSocket data is flowing" behaviour for *persistent* failure.
+        """
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        assert coordinator.fetch_degraded is False
+
+        coordinator._handle_device_update(
+            "sensor", {"id": "sensor1", "state": "CONNECTED"}
+        )
+        assert coordinator.last_update_success is True
+
+    @pytest.mark.asyncio
     async def test_websocket_frame_still_marks_success_when_healthy(
         self, coordinator: UnifiProtectCoordinator
     ):
