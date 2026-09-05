@@ -217,7 +217,16 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return True if the protect coordinator is available or not configured."""
         if self._protect_coordinator is None:
             return True
-        return self._protect_coordinator.last_update_success
+        # last_update_success alone is not enough. It is set True on every
+        # WebSocket frame, and a poll that only received an empty/404 for a
+        # collection whose cache is still being preserved also "succeeds"
+        # without proving that collection recovered - either would flip cached
+        # entities back to available with no fresh device data. fetch_degraded
+        # stays set until an authoritative response arrives.
+        return (
+            self._protect_coordinator.last_update_success
+            and not self._protect_coordinator.fetch_degraded
+        )
 
     async def _async_update_data(self) -> dict[str, Any]:
         """
