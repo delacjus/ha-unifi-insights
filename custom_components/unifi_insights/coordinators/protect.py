@@ -1120,6 +1120,12 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         every WebSocket frame, so it cannot by itself represent "this REST
         collection is still down". Reset only by a successful response for the
         collection, via `_update_device_collection`.
+
+        Every fetcher records its streak, including `_fetch_cameras` and
+        `_fetch_lights`, which re-raise on the first error rather than
+        swallowing - otherwise a persistently failing cameras endpoint would
+        never register as degraded and WebSocket frames would keep papering
+        over it.
         """
         return any(
             count > MAX_CONSECUTIVE_FETCH_ERRORS
@@ -1188,6 +1194,14 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("cameras", cameras)
         except UniFiNotFoundError:
             self._update_device_collection("cameras", {}, is_404=True)
+        except Exception:
+            # Cameras and lights propagate on the first error instead of being
+            # swallowed, but the streak still has to be recorded: fetch_degraded
+            # is what stops a WebSocket frame from marking a persistently
+            # failing endpoint recovered, and it only sees collections that go
+            # through _record_fetch_error.
+            self._record_fetch_error("cameras")
+            raise
         self._drop_rebuilt_latch_trackers(self.data["cameras"])
 
     def _drop_rebuilt_latch_trackers(self, cameras: dict[str, Any]) -> None:
@@ -1240,6 +1254,14 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("lights", lights)
         except UniFiNotFoundError:
             self._update_device_collection("lights", {}, is_404=True)
+        except Exception:
+            # Cameras and lights propagate on the first error instead of being
+            # swallowed, but the streak still has to be recorded: fetch_degraded
+            # is what stops a WebSocket frame from marking a persistently
+            # failing endpoint recovered, and it only sees collections that go
+            # through _record_fetch_error.
+            self._record_fetch_error("lights")
+            raise
 
     async def _fetch_sensors(self) -> None:
         """Fetch sensor data."""
