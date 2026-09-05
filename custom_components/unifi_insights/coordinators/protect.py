@@ -603,6 +603,18 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # entities relying on last_update_success don't stay unavailable
         # while WebSocket data is flowing, and the 30s poll fallback re-arms
         # from the last WebSocket message rather than firing needlessly.
+        #
+        # The exception is a collection that is failing every REST poll. A
+        # frame for an unrelated device says nothing about that endpoint, but
+        # async_set_updated_data sets last_update_success = True regardless -
+        # flipping those entities back to available off stale cache, which is
+        # the unavailable -> off edge this branch exists to stop - and re-arms
+        # the timer, postponing the retry. Notify listeners without claiming
+        # the coordinator recovered.
+        if self.fetch_degraded:
+            self.async_update_listeners()
+            return
+
         self.async_set_updated_data(self.data)
 
     def _normalize_camera_data(self, camera: dict[str, Any]) -> dict[str, Any]:
@@ -1118,6 +1130,22 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self.data[collection_key] = {}
             self._consecutive_empty_fetches[collection_key] = 0
 
+    @property
+    def fetch_degraded(self) -> bool:
+        """
+        True while a collection keeps failing past MAX_CONSECUTIVE_FETCH_ERRORS.
+
+        Tracked separately from `last_update_success` because that flag is not
+        only owned by the poll loop: `async_set_updated_data` sets it True on
+        every WebSocket frame, so it cannot by itself represent "this REST
+        collection is still down". Reset only by a successful response for the
+        collection, via `_update_device_collection`.
+        """
+        return any(
+            count > MAX_CONSECUTIVE_FETCH_ERRORS
+            for count in self._consecutive_fetch_errors.values()
+        )
+
     def _record_fetch_error(self, collection_key: str) -> bool:
         """
         Record a failed fetch and decide whether to stop swallowing the error.
@@ -1135,6 +1163,13 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         remove still-valid devices from the device registry, losing area
         assignments and breaking automations that reference them by device id.
         """
+        # An error means the console is unhealthy, so any empty responses seen
+        # around it are not trustworthy evidence that the devices are gone.
+        # Clearing a collection must take MAX_CONSECUTIVE_EMPTY_FETCHES
+        # uninterrupted empty/404 responses - which is what the log claims -
+        # so an error resets that streak just as a response resets this one.
+        self._consecutive_empty_fetches[collection_key] = 0
+
         count = self._consecutive_fetch_errors.get(collection_key, 0) + 1
         self._consecutive_fetch_errors[collection_key] = count
         if count <= MAX_CONSECUTIVE_FETCH_ERRORS:
