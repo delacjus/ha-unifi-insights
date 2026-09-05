@@ -1055,6 +1055,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self.data[collection_key] = existing
 
         if new_items:
+            # known gap: The bounded cache guard operates on wholesale empty responses.
+            # A partial response (e.g. 3 of 5 devices returned during partial recovery)
+            # is treated as truthy and replaces the collection, resetting the counter.
             self._consecutive_empty_fetches[collection_key] = 0
             self.data[collection_key] = new_items
             return
@@ -1201,6 +1204,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("sensors", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching sensors: %s", err)
+            self._update_device_collection("sensors", {})
 
     async def _fetch_nvr(self) -> None:
         """Fetch NVR data."""
@@ -1211,19 +1215,19 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         try:
             nvr_model = await self.protect_client.nvr.get()
             nvr = self._model_to_dict(nvr_model)
-            if nvr:
-                nvr_id = nvr.get("id")
-                if nvr_id:
-                    self._update_device_collection("nvrs", {nvr_id: nvr})
-                    _LOGGER.debug(
-                        "Protect coordinator: Successfully fetched NVR: %s", nvr_id
-                    )
+            nvr_id = nvr.get("id") if isinstance(nvr, dict) else None
+            if nvr_id:
+                self._update_device_collection("nvrs", {nvr_id: nvr})
+                _LOGGER.debug(
+                    "Protect coordinator: Successfully fetched NVR: %s", nvr_id
+                )
             else:
                 self._update_device_collection("nvrs", {})
         except UniFiNotFoundError:
             self._update_device_collection("nvrs", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching NVR: %s", err)
+            self._update_device_collection("nvrs", {})
 
     async def _fetch_chimes(self) -> None:
         """Fetch chime data."""
@@ -1248,6 +1252,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("chimes", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching chimes: %s", err)
+            self._update_device_collection("chimes", {})
 
     async def _fetch_viewers(self) -> None:
         """Fetch viewer data."""
@@ -1273,6 +1278,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("viewers", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching viewers: %s", err)
+            self._update_device_collection("viewers", {})
 
     async def _fetch_liveviews(self) -> None:
         """Fetch liveview data."""
