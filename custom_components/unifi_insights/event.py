@@ -164,6 +164,8 @@ class UnifiProtectDoorbellEventEntity(
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if not self.coordinator.protect_available:
+            # `available` already reads protect_available; the hass guard lets
+            # this run on an entity that was never added to hass (see tests).
             if self.hass is not None:
                 self.async_write_ha_state()
             return
@@ -245,6 +247,8 @@ class UnifiProtectSmartDetectEventEntity(
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if not self.coordinator.protect_available:
+            # `available` already reads protect_available; the hass guard lets
+            # this run on an entity that was never added to hass (see tests).
             if self.hass is not None:
                 self.async_write_ha_state()
             return
@@ -335,6 +339,8 @@ class UnifiProtectSensorEventEntity(
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if not self.coordinator.protect_available:
+            # `available` already reads protect_available; the hass guard lets
+            # this run on an entity that was never added to hass (see tests).
             if self.hass is not None:
                 self.async_write_ha_state()
             return

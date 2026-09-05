@@ -2833,22 +2833,90 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["sensors"] == {}
 
     @pytest.mark.asyncio
-    async def test_fetch_sensors_clears_cache_after_max_consecutive_errors(
+    async def test_fetch_sensors_raises_after_max_consecutive_errors(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test persistent sensor error clears cache after threshold."""
+        """Persistent sensor errors fail the poll and never clear the cache."""
         cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
         coordinator.data["sensors"] = cached
         coordinator.protect_client.sensors.get_all = AsyncMock(
-            side_effect=Exception("500 Internal Server Error")
+            side_effect=UniFiResponseError("Internal Server Error", 500)
         )
 
         for _ in range(3):
             await coordinator._fetch_sensors()
             assert "sensor1" in coordinator.data["sensors"]
 
+        # Past the threshold the error propagates so _async_update_data fails the
+        # poll and protect_available turns the entities unavailable.
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_sensors()
+
+        # An error is not evidence the sensor is gone - the cache must survive.
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_persistent_sensor_error_keeps_registry_devices(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """A sensors-endpoint outage must not remove devices from the registry."""
+        coordinator._previous_protect_device_ids = {
+            "cameras": set(),
+            "lights": set(),
+            "sensors": {"sensor1"},
+            "nvrs": set(),
+            "viewers": set(),
+            "chimes": set(),
+        }
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_sensors()
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_sensors_error_streak_reset_by_success(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A successful fetch clears the error streak so it never accumulates."""
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        assert coordinator._consecutive_fetch_errors["sensors"] == 3
+
+        sensor_model = MagicMock()
+        coordinator._model_to_dict = MagicMock(
+            return_value={"id": "sensor1", "state": "CONNECTED"}
+        )
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            return_value=[sensor_model]
+        )
         await coordinator._fetch_sensors()
-        assert coordinator.data["sensors"] == {}
+        assert coordinator._consecutive_fetch_errors["sensors"] == 0
+
+        # Streak restarts from zero rather than tripping immediately.
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        for _ in range(3):
+            await coordinator._fetch_sensors()
+        assert "sensor1" in coordinator.data["sensors"]
 
     @pytest.mark.asyncio
     async def test_fetch_nvr_missing_id_clears_cache_after_max_consecutive(
@@ -2869,22 +2937,80 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["nvrs"] == {}
 
     @pytest.mark.asyncio
-    async def test_fetch_nvr_clears_cache_after_max_consecutive_errors(
+    @pytest.mark.parametrize(
+        ("collection", "client_attr", "fetch_method"),
+        [
+            ("chimes", "chimes", "_fetch_chimes"),
+            ("viewers", "viewers", "_fetch_viewers"),
+        ],
+    )
+    async def test_swallowing_fetchers_raise_after_max_consecutive_errors(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        collection: str,
+        client_attr: str,
+        fetch_method: str,
+    ):
+        """Every swallowing fetcher bounds its error streak the same way."""
+        cached = {"device1": {"id": "device1"}}
+        coordinator.data[collection] = cached
+        getattr(coordinator.protect_client, client_attr).get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+        fetch = getattr(coordinator, fetch_method)
+
+        for _ in range(3):
+            await fetch()
+            assert "device1" in coordinator.data[collection]
+
+        with pytest.raises(UniFiResponseError):
+            await fetch()
+
+        assert "device1" in coordinator.data[collection]
+
+    @pytest.mark.asyncio
+    async def test_update_data_fails_after_persistent_sensor_errors(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test persistent NVR error clears cache after threshold."""
+        """The whole poll fails once a sub-fetch error streak passes the bound.
+
+        This is the end of the chain the bound exists for: UpdateFailed clears
+        last_update_success, which UnifiFacadeCoordinator.protect_available
+        reads, which makes every Protect entity report unavailable instead of
+        serving frozen data - all without discarding the cache.
+        """
+        coordinator.data["sensors"] = {"sensor1": {"id": "sensor1"}}
+        coordinator.protect_client.sensors.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Internal Server Error", 500)
+        )
+
+        for _ in range(3):
+            await coordinator._async_update_data()
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+        assert "sensor1" in coordinator.data["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_nvr_raises_after_max_consecutive_errors(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Persistent NVR errors fail the poll and never clear the cache."""
         cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
         coordinator.data["nvrs"] = cached
         coordinator.protect_client.nvr.get = AsyncMock(
-            side_effect=Exception("500 Internal Server Error")
+            side_effect=UniFiResponseError("Internal Server Error", 500)
         )
 
         for _ in range(3):
             await coordinator._fetch_nvr()
             assert "nvr1" in coordinator.data["nvrs"]
 
-        await coordinator._fetch_nvr()
-        assert coordinator.data["nvrs"] == {}
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_nvr()
+
+        assert "nvr1" in coordinator.data["nvrs"]
 
     @pytest.mark.asyncio
     async def test_fetch_cameras_preserves_cache_on_transient_empty(
