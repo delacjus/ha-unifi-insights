@@ -61,6 +61,7 @@ _LOGGER = logging.getLogger(__name__)
 # tied to any one event type - see `_reconcile_stale_events`.
 STALE_EVENT_TIMEOUT: Final = timedelta(minutes=5)
 MAX_CONSECUTIVE_EMPTY_FETCHES: Final = 3
+MAX_CONSECUTIVE_FETCH_ERRORS: Final = 3
 
 # Envelope-only keys that must never leak from the raw top-level WebSocket
 # frame into a merged device/event dict - see `_pick_field` and the
@@ -142,6 +143,14 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "chimes": set(),
         }
         self._consecutive_empty_fetches: dict[str, int] = {
+            "cameras": 0,
+            "lights": 0,
+            "sensors": 0,
+            "nvrs": 0,
+            "viewers": 0,
+            "chimes": 0,
+        }
+        self._consecutive_fetch_errors: dict[str, int] = {
             "cameras": 0,
             "lights": 0,
             "sensors": 0,
@@ -1028,7 +1037,13 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         transient empty responses or 404 errors. If empty/404 persists beyond the
         threshold, the collection is cleared so genuinely removed or unadopted devices
         are cleaned up from the device registry.
+
+        Only called for responses the API actually returned. Fetch *errors* never
+        reach here and never clear a collection - see `_record_fetch_error`.
         """
+        # Reaching here means the API answered, so any error streak is over.
+        self._consecutive_fetch_errors[collection_key] = 0
+
         existing = self.data.get(collection_key)
         if not isinstance(existing, dict):
             existing = {}
@@ -1082,6 +1097,36 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             )
             self.data[collection_key] = {}
             self._consecutive_empty_fetches[collection_key] = 0
+
+    def _record_fetch_error(self, collection_key: str) -> bool:
+        """
+        Record a failed fetch and decide whether to stop swallowing the error.
+
+        Returns True once a collection has failed MAX_CONSECUTIVE_FETCH_ERRORS
+        polls in a row, telling the caller to re-raise. The error then reaches
+        `_async_update_data`, which fails the poll, so `last_update_success`
+        goes False and every Protect entity reports unavailable through
+        `UnifiFacadeCoordinator.protect_available`.
+
+        Errors deliberately never clear the cached collection. An empty list or
+        a 404 is evidence the devices are gone and `_update_device_collection`
+        may drop them; a connection or server error is only evidence that we
+        could not ask. Clearing on the latter would let `_cleanup_stale_devices`
+        remove still-valid devices from the device registry, losing area
+        assignments and breaking automations that reference them by device id.
+        """
+        count = self._consecutive_fetch_errors.get(collection_key, 0) + 1
+        self._consecutive_fetch_errors[collection_key] = count
+        if count <= MAX_CONSECUTIVE_FETCH_ERRORS:
+            return False
+
+        _LOGGER.warning(
+            "Protect coordinator: %s fetch failed %d consecutive times; failing "
+            "the update so entities report unavailable (cached devices kept)",
+            collection_key,
+            count,
+        )
+        return True
 
     async def _fetch_cameras(self) -> None:
         """Fetch camera data."""
@@ -1184,7 +1229,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("sensors", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching sensors: %s", err)
-            self._update_device_collection("sensors", {})
+            if self._record_fetch_error("sensors"):
+                raise
 
     async def _fetch_nvr(self) -> None:
         """Fetch NVR data."""
@@ -1207,7 +1253,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("nvrs", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching NVR: %s", err)
-            self._update_device_collection("nvrs", {})
+            if self._record_fetch_error("nvrs"):
+                raise
 
     async def _fetch_chimes(self) -> None:
         """Fetch chime data."""
@@ -1232,7 +1279,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("chimes", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching chimes: %s", err)
-            self._update_device_collection("chimes", {})
+            if self._record_fetch_error("chimes"):
+                raise
 
     async def _fetch_viewers(self) -> None:
         """Fetch viewer data."""
@@ -1258,7 +1306,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("viewers", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching viewers: %s", err)
-            self._update_device_collection("viewers", {})
+            if self._record_fetch_error("viewers"):
+                raise
 
     async def _fetch_liveviews(self) -> None:
         """Fetch liveview data."""
