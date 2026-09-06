@@ -2832,6 +2832,45 @@ class TestUnifiProtectCoordinator:
         await coordinator._fetch_sensors()
         assert coordinator.data["sensors"] == {}
 
+    def test_update_device_collection_handles_non_dict_existing(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test _update_device_collection handles existing data being non-dict."""
+        coordinator.data["cameras"] = None  # type: ignore[assignment]
+        coordinator._update_device_collection("cameras", {})
+        assert coordinator.data["cameras"] == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("collection", "client_attr", "client_method", "fetch_method"),
+        [
+            ("cameras", "cameras", "get_all", "_fetch_cameras"),
+            ("lights", "lights", "get_all", "_fetch_lights"),
+            ("nvrs", "nvr", "get", "_fetch_nvr"),
+            ("chimes", "chimes", "get_all", "_fetch_chimes"),
+            ("viewers", "viewers", "get_all", "_fetch_viewers"),
+        ],
+    )
+    async def test_fetch_endpoints_preserve_cache_on_404(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        collection: str,
+        client_attr: str,
+        client_method: str,
+        fetch_method: str,
+    ):
+        """Test fetch methods handle UniFiNotFoundError (404) by preserving cache."""
+        device_id = f"{collection}_1"
+        cached = {device_id: {"id": device_id}}
+        coordinator.data[collection] = cached
+        setattr(
+            getattr(coordinator.protect_client, client_attr),
+            client_method,
+            AsyncMock(side_effect=UniFiNotFoundError("Not Found", 404)),
+        )
+        await getattr(coordinator, fetch_method)()
+        assert device_id in coordinator.data[collection]
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("collection", ["sensors", "nvrs", "chimes", "viewers"])
     async def test_fetch_preserves_cache_across_persistent_errors(
