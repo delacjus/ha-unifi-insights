@@ -1204,7 +1204,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("sensors", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching sensors: %s", err)
-            self._update_device_collection("sensors", {})
 
     async def _fetch_nvr(self) -> None:
         """Fetch NVR data."""
@@ -1227,7 +1226,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("nvrs", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching NVR: %s", err)
-            self._update_device_collection("nvrs", {})
 
     async def _fetch_chimes(self) -> None:
         """Fetch chime data."""
@@ -1252,7 +1250,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("chimes", {}, is_404=True)
         except Exception as err:
             _LOGGER.warning("Protect coordinator: Error fetching chimes: %s", err)
-            self._update_device_collection("chimes", {})
 
     async def _fetch_viewers(self) -> None:
         """Fetch viewer data."""
@@ -1278,7 +1275,6 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self._update_device_collection("viewers", {}, is_404=True)
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching viewers: %s", err)
-            self._update_device_collection("viewers", {})
 
     async def _fetch_liveviews(self) -> None:
         """Fetch liveview data."""

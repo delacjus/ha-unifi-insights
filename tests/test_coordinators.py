@@ -2833,22 +2833,58 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["sensors"] == {}
 
     @pytest.mark.asyncio
-    async def test_fetch_sensors_clears_cache_after_max_consecutive_errors(
-        self, coordinator: UnifiProtectCoordinator
+    @pytest.mark.parametrize("collection", ["sensors", "nvrs", "chimes", "viewers"])
+    async def test_fetch_preserves_cache_across_persistent_errors(
+        self,
+        hass: HomeAssistant,
+        coordinator: UnifiProtectCoordinator,
+        collection: str,
     ):
-        """Test persistent sensor error clears cache after threshold."""
-        cached = {"sensor1": {"id": "sensor1", "state": "CONNECTED"}}
-        coordinator.data["sensors"] = cached
-        coordinator.protect_client.sensors.get_all = AsyncMock(
-            side_effect=Exception("500 Internal Server Error")
+        """Test a persistent fetch error never evicts devices or registry entries.
+
+        An error means "we could not ask", not "the server says they are gone",
+        so it must not feed the empty-response eviction counter. When it did,
+        roughly two minutes of HTTP 500s cleared the collection and
+        _cleanup_stale_devices then removed every device in it from the device
+        registry, losing area assignments and any automation keyed on device_id.
+        """
+        # collection -> (protect_client attribute, its fetch method, coordinator fetch)
+        endpoints = {
+            "sensors": ("sensors", "get_all", "_fetch_sensors"),
+            "nvrs": ("nvr", "get", "_fetch_nvr"),
+            "chimes": ("chimes", "get_all", "_fetch_chimes"),
+            "viewers": ("viewers", "get_all", "_fetch_viewers"),
+        }
+        client_attr, client_method, fetch_method = endpoints[collection]
+
+        device_id = f"{collection}_device1"
+        coordinator.data[collection] = {device_id: {"id": device_id}}
+        coordinator._previous_protect_device_ids = {
+            key: set()
+            for key in ("cameras", "lights", "sensors", "nvrs", "viewers", "chimes")
+        }
+        coordinator._previous_protect_device_ids[collection] = {device_id}
+        setattr(
+            getattr(coordinator.protect_client, client_attr),
+            client_method,
+            AsyncMock(side_effect=Exception("500 Internal Server Error")),
         )
 
-        for _ in range(3):
-            await coordinator._fetch_sensors()
-            assert "sensor1" in coordinator.data["sensors"]
+        # Well past MAX_CONSECUTIVE_EMPTY_FETCHES: errors have no threshold.
+        for _ in range(6):
+            await getattr(coordinator, fetch_method)()
+            assert device_id in coordinator.data[collection]
 
-        await coordinator._fetch_sensors()
-        assert coordinator.data["sensors"] == {}
+        assert coordinator._consecutive_empty_fetches.get(collection, 0) == 0
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fetch_nvr_missing_id_clears_cache_after_max_consecutive(
@@ -2860,24 +2896,6 @@ class TestUnifiProtectCoordinator:
         mock_model = MagicMock()
         coordinator._model_to_dict = MagicMock(return_value={"name": "No ID"})
         coordinator.protect_client.nvr.get = AsyncMock(return_value=mock_model)
-
-        for _ in range(3):
-            await coordinator._fetch_nvr()
-            assert "nvr1" in coordinator.data["nvrs"]
-
-        await coordinator._fetch_nvr()
-        assert coordinator.data["nvrs"] == {}
-
-    @pytest.mark.asyncio
-    async def test_fetch_nvr_clears_cache_after_max_consecutive_errors(
-        self, coordinator: UnifiProtectCoordinator
-    ):
-        """Test persistent NVR error clears cache after threshold."""
-        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
-        coordinator.data["nvrs"] = cached
-        coordinator.protect_client.nvr.get = AsyncMock(
-            side_effect=Exception("500 Internal Server Error")
-        )
 
         for _ in range(3):
             await coordinator._fetch_nvr()
