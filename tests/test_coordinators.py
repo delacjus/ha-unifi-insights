@@ -34,6 +34,8 @@ from custom_components.unifi_insights.coordinators.config import UnifiConfigCoor
 from custom_components.unifi_insights.coordinators.device import UnifiDeviceCoordinator
 from custom_components.unifi_insights.coordinators.facade import UnifiFacadeCoordinator
 from custom_components.unifi_insights.coordinators.protect import (
+    MAX_CONSECUTIVE_EMPTY_FETCHES,
+    MAX_CONSECUTIVE_MISSING_POLLS,
     STALE_EVENT_TIMEOUT,
     UnifiProtectCoordinator,
 )
@@ -2080,7 +2082,9 @@ class TestUnifiProtectCoordinator:
                 return_value=mock_device
             )
 
-            coordinator._cleanup_stale_devices()
+            # Removal waits out the MAX_CONSECUTIVE_MISSING_POLLS grace window.
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS + 1):
+                coordinator._cleanup_stale_devices()
 
             # camera2 should be marked for removal
             mock_registry.return_value.async_update_device.assert_called()
@@ -3041,8 +3045,216 @@ class TestUnifiProtectCoordinator:
             mock_registry.return_value.async_get_device = MagicMock(
                 return_value=mock_device
             )
-            coordinator._cleanup_stale_devices()
+            # Removal waits out the MAX_CONSECUTIVE_MISSING_POLLS grace window.
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS + 1):
+                coordinator._cleanup_stale_devices()
             mock_registry.return_value.async_update_device.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_preserves_camera_skipped_by_validation(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a camera dropped on a ValidationError keeps its cached entry.
+
+        `get_all()` skips an item whose payload will not parse - typically a
+        field reshaped by a Protect release - and returns the rest. That short
+        list is non-empty, so the bounded empty-response guard never engages
+        and the grace window only delays the loss: the skip is deterministic
+        and repeats on every poll. The collection must merge instead of
+        replace while the endpoint reports the result incomplete.
+        """
+        coordinator.data["cameras"] = {
+            "camera1": {"id": "camera1", "name": "Front"},
+            "camera2": {"id": "camera2", "name": "Back"},
+        }
+        coordinator._previous_protect_device_ids["cameras"] = {"camera1", "camera2"}
+
+        mock_camera = MagicMock()
+        mock_camera.model_dump = MagicMock(
+            return_value={"id": "camera1", "name": "Front"}
+        )
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            return_value=[mock_camera]
+        )
+        coordinator.protect_client.cameras.last_result_complete = False
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS + 2):
+                await coordinator._fetch_cameras()
+                coordinator._cleanup_stale_devices()
+
+            assert "camera2" in coordinator.data["cameras"]
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_still_refreshes_data_when_result_incomplete(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test preserving a skipped camera does not stall the others' data.
+
+        Merging must layer the fresh response over the cache, not fall back to
+        it, or one unparseable camera would freeze every sibling's state.
+        """
+        coordinator.data["cameras"] = {
+            "camera1": {"id": "camera1", "state": "DISCONNECTED"},
+            "camera2": {"id": "camera2", "state": "CONNECTED"},
+        }
+
+        mock_camera = MagicMock()
+        mock_camera.model_dump = MagicMock(
+            return_value={"id": "camera1", "state": "CONNECTED"}
+        )
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            return_value=[mock_camera]
+        )
+        coordinator.protect_client.cameras.last_result_complete = False
+
+        await coordinator._fetch_cameras()
+
+        assert coordinator.data["cameras"]["camera1"]["state"] == "CONNECTED"
+        assert coordinator.data["cameras"]["camera2"]["state"] == "CONNECTED"
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_replaces_collection_when_result_complete(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a complete response still drops cameras removed from Protect.
+
+        The merge is scoped to incomplete results; a clean listing remains
+        authoritative so genuinely unadopted cameras are cleaned up.
+        """
+        coordinator.data["cameras"] = {
+            "camera1": {"id": "camera1"},
+            "camera2": {"id": "camera2"},
+        }
+
+        mock_camera = MagicMock()
+        mock_camera.model_dump = MagicMock(return_value={"id": "camera1"})
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            return_value=[mock_camera]
+        )
+        coordinator.protect_client.cameras.last_result_complete = True
+
+        await coordinator._fetch_cameras()
+
+        assert set(coordinator.data["cameras"]) == {"camera1"}
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_preserves_cache_when_every_camera_fails_parsing(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a schema break that drops every camera does not purge the cache.
+
+        A Protect release reshaping a shared field fails validation for all
+        cameras at once, so `get_all()` returns an empty list that looks
+        exactly like "no cameras adopted". Left there, the bounded
+        empty-response guard clears the collection a few polls later and hands
+        every camera to `_cleanup_stale_devices`. An endpoint that reports the
+        result incomplete must not advance that counter.
+        """
+        coordinator.data["cameras"] = {"camera1": {"id": "camera1"}}
+        coordinator.protect_client.cameras.get_all = AsyncMock(return_value=[])
+        coordinator.protect_client.cameras.last_result_complete = False
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES + 3):
+            await coordinator._fetch_cameras()
+
+        assert "camera1" in coordinator.data["cameras"]
+        assert coordinator._consecutive_empty_fetches["cameras"] == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_defers_removal_on_brief_absence(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a device missing from one poll is not purged from the registry.
+
+        A partial controller response - or an item that `get_all()` skipped on
+        a ValidationError - drops a still-adopted device out of the collection.
+        Acting on that single poll is irreversible: the registry entry, its
+        area assignment and every automation keyed on device_id are lost.
+        """
+        coordinator._previous_protect_device_ids["cameras"] = {"cam1", "cam2"}
+        coordinator.data["cameras"] = {"cam1": {"id": "cam1"}}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_removes_device_after_sustained_absence(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a device absent past the grace window is still evicted.
+
+        Guards the other half of the deferral: a device genuinely unadopted
+        from Protect must not be tracked forever just because removal is no
+        longer immediate (Gold stale-device requirement).
+        """
+        coordinator._previous_protect_device_ids["cameras"] = {"cam1", "cam2"}
+        coordinator.data["cameras"] = {"cam1": {"id": "cam1"}}
+        mock_device = MagicMock()
+        mock_device.id = "registry_id_cam2"
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=mock_device
+            )
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS + 1):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_called_once_with(
+                device_id="registry_id_cam2",
+                remove_config_entry_id=coordinator.config_entry.entry_id,
+            )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_resets_absence_counter_on_return(
+        self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
+    ):
+        """Test a device that reappears restarts its grace window.
+
+        Without a reset, intermittent partial responses would accumulate
+        across unrelated polls and eventually evict a healthy device.
+        """
+        coordinator._previous_protect_device_ids["cameras"] = {"cam1", "cam2"}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.protect.dr.async_get"
+        ) as mock_registry:
+            mock_registry.return_value.async_get_device = MagicMock(
+                return_value=MagicMock()
+            )
+            # Absent for one poll short of the threshold.
+            coordinator.data["cameras"] = {"cam1": {"id": "cam1"}}
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS):
+                coordinator._cleanup_stale_devices()
+
+            # cam2 comes back, then goes missing again for the same span.
+            coordinator.data["cameras"] = {
+                "cam1": {"id": "cam1"},
+                "cam2": {"id": "cam2"},
+            }
+            coordinator._cleanup_stale_devices()
+
+            coordinator.data["cameras"] = {"cam1": {"id": "cam1"}}
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fetch_nvr_error(self, coordinator: UnifiProtectCoordinator):

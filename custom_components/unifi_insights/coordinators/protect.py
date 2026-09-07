@@ -62,6 +62,16 @@ _LOGGER = logging.getLogger(__name__)
 STALE_EVENT_TIMEOUT: Final = timedelta(minutes=5)
 MAX_CONSECUTIVE_EMPTY_FETCHES: Final = 3
 
+# How many consecutive polls a device may be absent from its collection before
+# `_cleanup_stale_devices` removes it from the device registry. That removal is
+# irreversible - it drops the area assignment, entity customizations and any
+# automation keyed on device_id - while the absence itself is ambiguous: the
+# coordinator cannot tell "unadopted from Protect" from "omitted by a partial
+# controller response" or "skipped by `get_all()` on a ValidationError". The
+# grace window keeps the eviction, just no longer on the strength of a single
+# poll. 3 polls is ~90s at SCAN_INTERVAL_PROTECT (30s).
+MAX_CONSECUTIVE_MISSING_POLLS: Final = 3
+
 # Envelope-only keys that must never leak from the raw top-level WebSocket
 # frame into a merged device/event dict - see `_pick_field` and the
 # `_on_websocket_message`/`_on_websocket_event_message` docstrings for why.
@@ -148,6 +158,17 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": 0,
             "viewers": 0,
             "chimes": 0,
+        }
+        # device_type -> {device_id: consecutive polls the device has been
+        # missing from its collection}. Drives the registry-removal grace
+        # window in `_cleanup_stale_devices`.
+        self._consecutive_missing_polls: dict[str, dict[str, int]] = {
+            "cameras": {},
+            "lights": {},
+            "sensors": {},
+            "nvrs": {},
+            "viewers": {},
+            "chimes": {},
         }
         self.data: dict[str, Any] = {
             "cameras": {},
@@ -1040,6 +1061,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         new_items: dict[str, Any],
         *,
         is_404: bool = False,
+        is_partial: bool = False,
     ) -> None:
         """
         Update a device collection with bounded cache preservation.
@@ -1048,6 +1070,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         transient empty responses or 404 errors. If empty/404 persists beyond the
         threshold, the collection is cleared so genuinely removed or unadopted devices
         are cleaned up from the device registry.
+
+        `is_partial` marks a response the endpoint already knows is short - it
+        dropped an item on a ValidationError. Those results are merged over the
+        cache rather than replacing it, because the missing device is still
+        adopted and the bounded empty-response guard never sees a short list.
         """
         existing = self.data.get(collection_key)
         if not isinstance(existing, dict):
@@ -1055,11 +1082,40 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             self.data[collection_key] = existing
 
         if new_items:
-            # known gap: The bounded cache guard operates on wholesale empty responses.
-            # A partial response (e.g. 3 of 5 devices returned during partial recovery)
-            # is treated as truthy and replaces the collection, resetting the counter.
             self._consecutive_empty_fetches[collection_key] = 0
+            if is_partial:
+                # Layer the fresh response over the cache: siblings still get
+                # their new state, and the dropped device keeps its last-known
+                # entry so `_cleanup_stale_devices` never reads it as removed.
+                _LOGGER.debug(
+                    "Protect coordinator: %s response was incomplete; merging "
+                    "%d fetched over %d cached devices",
+                    collection_key,
+                    len(new_items),
+                    len(existing),
+                )
+                self.data[collection_key] = {**existing, **new_items}
+                return
+            # known gap: completeness is only known for items the endpoint itself
+            # dropped. A response short because the controller omitted a device
+            # (e.g. 3 of 5 during a partial start) still looks authoritative here;
+            # the grace window in `_cleanup_stale_devices` is what covers that.
             self.data[collection_key] = new_items
+            return
+
+        # An incomplete response that came back with nothing left is a parse
+        # failure across the whole collection, not an empty controller. Treat
+        # it like a fetch error: preserve the cache and do not advance the
+        # eviction counter, or a schema change affecting every device of a
+        # family would purge them all a few polls later.
+        if is_partial and existing:
+            _LOGGER.warning(
+                "Protect coordinator: every %s in the response failed to parse; "
+                "preserving %d cached devices",
+                collection_key,
+                len(existing),
+            )
+            self._consecutive_empty_fetches[collection_key] = 0
             return
 
         # Response is empty or 404
@@ -1125,7 +1181,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                         camera.get("name", camera_id),
                         camera.get("smartDetectTypes", []),
                     )
-            self._update_device_collection("cameras", cameras)
+            self._update_device_collection(
+                "cameras",
+                cameras,
+                is_partial=not self.protect_client.cameras.last_result_complete,
+            )
         except UniFiNotFoundError:
             self._update_device_collection("cameras", {}, is_404=True)
         self._drop_rebuilt_latch_trackers(self.data["cameras"])
@@ -1177,7 +1237,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 light_id = light.get("id")
                 if light_id:
                     lights[light_id] = light
-            self._update_device_collection("lights", lights)
+            self._update_device_collection(
+                "lights",
+                lights,
+                is_partial=not self.protect_client.lights.last_result_complete,
+            )
         except UniFiNotFoundError:
             self._update_device_collection("lights", {}, is_404=True)
 
@@ -1195,7 +1259,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 sensor_id = sensor.get("id")
                 if sensor_id:
                     sensors[sensor_id] = sensor
-            self._update_device_collection("sensors", sensors)
+            self._update_device_collection(
+                "sensors",
+                sensors,
+                is_partial=not self.protect_client.sensors.last_result_complete,
+            )
             _LOGGER.debug(
                 "Protect coordinator: Successfully fetched %d sensors",
                 len(sensors_models),
@@ -1241,7 +1309,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 chime_id = chime.get("id")
                 if chime_id:
                     chimes[chime_id] = chime
-            self._update_device_collection("chimes", chimes)
+            self._update_device_collection(
+                "chimes",
+                chimes,
+                is_partial=not self.protect_client.chimes.last_result_complete,
+            )
             _LOGGER.debug(
                 "Protect coordinator: Successfully fetched %d chimes",
                 len(chimes_models),
@@ -1266,7 +1338,10 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                     viewer_id = viewer.get("id")
                     if viewer_id:
                         viewers[viewer_id] = viewer
-                self._update_device_collection("viewers", viewers)
+                complete = self.protect_client.viewers.last_result_complete
+                self._update_device_collection(
+                    "viewers", viewers, is_partial=not complete
+                )
                 _LOGGER.debug(
                     "Protect coordinator: Successfully fetched %d viewers",
                     len(viewers_models),
@@ -1300,7 +1375,17 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             _LOGGER.debug("Protect coordinator: Error fetching liveviews: %s", err)
 
     def _cleanup_stale_devices(self) -> None:
-        """Remove stale Protect devices from the device registry (Gold requirement)."""
+        """
+        Remove stale Protect devices from the device registry (Gold requirement).
+
+        A device is only evicted once it has been absent for more than
+        MAX_CONSECUTIVE_MISSING_POLLS consecutive polls. A single poll is not
+        evidence of removal: a partial controller response, or an item that
+        `get_all()` skipped on a ValidationError, drops a still-adopted device
+        out of the collection, and `async_update_device(remove_config_entry_id=)`
+        cannot be undone. Devices still inside the grace window stay in the
+        tracked set so their absence keeps accumulating across polls.
+        """
         device_registry = dr.async_get(self.hass)
 
         for device_type in [
@@ -1313,9 +1398,32 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         ]:
             current_ids: set[str] = set(self.data.get(device_type, {}).keys())
             previous_ids = self._previous_protect_device_ids.get(device_type, set())
+            missing_polls = self._consecutive_missing_polls.setdefault(device_type, {})
 
-            stale_ids = previous_ids - current_ids
-            for device_id in stale_ids:
+            # A device that reported in restarts its grace window.
+            for device_id in current_ids:
+                missing_polls.pop(device_id, None)
+
+            # Devices still within the grace window are kept under observation
+            # rather than evicted, and stay tracked for the next poll.
+            pending_ids: set[str] = set()
+
+            for device_id in previous_ids - current_ids:
+                count = missing_polls.get(device_id, 0) + 1
+                if count <= MAX_CONSECUTIVE_MISSING_POLLS:
+                    missing_polls[device_id] = count
+                    pending_ids.add(device_id)
+                    _LOGGER.debug(
+                        "Protect coordinator: %s device %s missing from poll "
+                        "%d/%d; deferring registry removal",
+                        device_type,
+                        device_id,
+                        count,
+                        MAX_CONSECUTIVE_MISSING_POLLS,
+                    )
+                    continue
+
+                missing_polls.pop(device_id, None)
                 # Try both identifier patterns (with and without "protect_" prefix)
                 for identifier in [
                     f"protect_{device_type[:-1]}_{device_id}",  # protect_camera_xyz
@@ -1326,9 +1434,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                     )
                     if device:
                         _LOGGER.info(
-                            "Protect coordinator: Removing stale %s device: %s",
+                            "Protect coordinator: Removing stale %s device: %s "
+                            "(absent for %d consecutive polls)",
                             device_type,
                             device_id,
+                            count,
                         )
                         device_registry.async_update_device(
                             device_id=device.id,
@@ -1336,7 +1446,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                         )
                         break
 
-            self._previous_protect_device_ids[device_type] = current_ids
+            self._previous_protect_device_ids[device_type] = current_ids | pending_ids
 
     def get_camera(self, camera_id: str) -> dict[str, Any] | None:
         """Get camera data by ID."""
