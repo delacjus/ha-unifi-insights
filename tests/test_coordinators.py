@@ -2744,11 +2744,14 @@ class TestUnifiProtectCoordinator:
         ) as mock_registry:
             mock_registry.return_value.async_get_device = MagicMock(return_value=None)
 
-            # Should not raise - just skip removal
-            coordinator._cleanup_stale_devices()
+            # Poll past the grace window so eviction is actually attempted,
+            # then fall through both identifier patterns without a match.
+            for _ in range(MAX_CONSECUTIVE_MISSING_POLLS + 1):
+                coordinator._cleanup_stale_devices()
 
             # No device updates should happen (nothing found)
             mock_registry.return_value.async_update_device.assert_not_called()
+            assert mock_registry.return_value.async_get_device.called
 
     @pytest.mark.asyncio
     async def test_fetch_sensors_error(self, coordinator: UnifiProtectCoordinator):
