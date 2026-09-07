@@ -1861,10 +1861,18 @@ class TestUnifiProtectCoordinator:
     async def test_async_update_data_connection_error(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test data fetch with connection error."""
+        """Test a sustained connection error eventually fails the poll.
+
+        The first MAX_CONSECUTIVE_EMPTY_FETCHES polls are absorbed so a single
+        blipped endpoint does not take every Protect entity unavailable; past
+        that window the error propagates and the coordinator reports failure.
+        """
         coordinator.protect_client.cameras.get_all = AsyncMock(
             side_effect=UniFiConnectionError("Connection refused")
         )
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._async_update_data()
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
@@ -2989,6 +2997,136 @@ class TestUnifiProtectCoordinator:
         assert "light1" in coordinator.data["lights"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "err",
+        [
+            # The session-drop the controller serves as an HTML login page.
+            pytest.param(
+                UniFiResponseError("Response is not JSON", status_code=200),
+                id="response_error",
+            ),
+            pytest.param(UniFiConnectionError("Connection reset"), id="connection"),
+            pytest.param(UniFiTimeoutError("Timed out"), id="timeout"),
+        ],
+    )
+    async def test_fetch_cameras_preserves_cache_on_transient_error(
+        self, coordinator: UnifiProtectCoordinator, err: Exception
+    ):
+        """A transient camera fetch error must not fail the whole Protect poll.
+
+        `_fetch_cameras` runs first, so letting the error escape aborts every
+        later fetcher and raises `UpdateFailed`, marking all Protect entities
+        unavailable for that cycle.
+        """
+        cached = {"camera1": {"id": "camera1", "state": "CONNECTED"}}
+        coordinator.data["cameras"] = cached
+        coordinator.protect_client.cameras.get_all = AsyncMock(side_effect=err)
+
+        await coordinator._fetch_cameras()
+
+        assert "camera1" in coordinator.data["cameras"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_lights_preserves_cache_on_transient_error(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A transient light fetch error must not fail the whole Protect poll."""
+        cached = {"light1": {"id": "light1", "state": "CONNECTED"}}
+        coordinator.data["lights"] = cached
+        coordinator.protect_client.lights.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Response is not JSON", status_code=200)
+        )
+
+        await coordinator._fetch_lights()
+
+        assert "light1" in coordinator.data["lights"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_transient_error_does_not_advance_eviction(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A fetch error is not evidence a camera was removed, unlike an empty poll.
+
+        An empty response clears the cache after MAX_CONSECUTIVE_EMPTY_FETCHES so
+        genuinely removed devices are cleaned up. An error says nothing about the
+        device set, so it must not advance that counter: errored polls followed by
+        a single empty one must still preserve the cache.
+        """
+        cached = {"camera1": {"id": "camera1", "state": "CONNECTED"}}
+        coordinator.data["cameras"] = cached
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Bad gateway", status_code=502)
+        )
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_cameras()
+
+        # First clean poll after the outage genuinely returns no cameras.
+        coordinator.protect_client.cameras.get_all = AsyncMock(return_value=[])
+        await coordinator._fetch_cameras()
+
+        assert "camera1" in coordinator.data["cameras"]
+
+    @pytest.mark.asyncio
+    async def test_sustained_camera_fetch_errors_fail_the_poll(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Preservation is bounded: a lasting outage must mark Protect unavailable.
+
+        Serving a warm cache forever would leave every Protect entity reporting
+        stale state through a controller outage, which is worse than the flapping
+        the bounded window prevents.
+        """
+        coordinator.data["cameras"] = {"camera1": {"id": "camera1"}}
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Response is not JSON", status_code=200)
+        )
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_cameras()
+
+        with pytest.raises(UniFiResponseError):
+            await coordinator._fetch_cameras()
+
+    @pytest.mark.asyncio
+    async def test_camera_fetch_error_counter_resets_on_success(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A recovered poll re-arms the full preservation window."""
+        coordinator.data["cameras"] = {"camera1": {"id": "camera1"}}
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_cameras()
+
+        camera = MagicMock()
+        camera.model_dump = MagicMock(return_value={"id": "camera1", "name": "Cam"})
+        coordinator.protect_client.cameras.get_all = AsyncMock(return_value=[camera])
+        await coordinator._fetch_cameras()
+
+        # Window is re-armed, so the next error is absorbed rather than raised.
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        await coordinator._fetch_cameras()
+
+        assert "camera1" in coordinator.data["cameras"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["_fetch_cameras", "_fetch_lights"])
+    async def test_fetch_propagates_auth_error(
+        self, coordinator: UnifiProtectCoordinator, method: str
+    ):
+        """An expired key must still reach the reauth flow, not be swallowed."""
+        collection = "cameras" if method == "_fetch_cameras" else "lights"
+        getattr(coordinator.protect_client, collection).get_all = AsyncMock(
+            side_effect=UniFiAuthenticationError("API key expired")
+        )
+
+        with pytest.raises(UniFiAuthenticationError):
+            await getattr(coordinator, method)()
+
+    @pytest.mark.asyncio
     async def test_cleanup_stale_devices_preserves_devices_on_transient_empty(
         self, hass: HomeAssistant, coordinator: UnifiProtectCoordinator
     ):
@@ -3431,10 +3569,18 @@ class TestUnifiProtectCoordinator:
     async def test_async_update_data_response_error(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test data fetch with response error."""
+        """Test a sustained response error eventually fails the poll.
+
+        The first MAX_CONSECUTIVE_EMPTY_FETCHES polls are absorbed so a single
+        blipped endpoint does not take every Protect entity unavailable; past
+        that window the error propagates and the coordinator reports failure.
+        """
         coordinator.protect_client.cameras.get_all = AsyncMock(
             side_effect=UniFiResponseError("Invalid response", status_code=400)
         )
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._async_update_data()
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
@@ -3443,10 +3589,18 @@ class TestUnifiProtectCoordinator:
     async def test_async_update_data_timeout_error(
         self, coordinator: UnifiProtectCoordinator
     ):
-        """Test data fetch with timeout error."""
+        """Test a sustained timeout error eventually fails the poll.
+
+        The first MAX_CONSECUTIVE_EMPTY_FETCHES polls are absorbed so a single
+        blipped endpoint does not take every Protect entity unavailable; past
+        that window the error propagates and the coordinator reports failure.
+        """
         coordinator.protect_client.cameras.get_all = AsyncMock(
             side_effect=UniFiTimeoutError("Request timed out")
         )
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._async_update_data()
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()

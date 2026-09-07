@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime, timedelta
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.core import callback
@@ -158,6 +158,13 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": 0,
             "viewers": 0,
             "chimes": 0,
+        }
+        # collection -> consecutive polls whose fetch raised a transient error.
+        # Kept separate from `_consecutive_empty_fetches`: an empty response is
+        # evidence the devices are gone, an error is evidence of nothing.
+        self._consecutive_fetch_errors: dict[str, int] = {
+            "cameras": 0,
+            "lights": 0,
         }
         # device_type -> {device_id: consecutive polls the device has been
         # missing from its collection}. Drives the registry-removal grace
@@ -1055,6 +1062,46 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # Should never reach here due to raises above
         return self.data  # pragma: no cover
 
+    def _absorb_transient_fetch_error(
+        self, collection_key: str, err: Exception
+    ) -> bool:
+        """
+        Return True if a transient fetch error should be absorbed this poll.
+
+        `_fetch_cameras` and `_fetch_lights` run before every other fetcher, so
+        letting an error escape aborts the whole poll and raises `UpdateFailed`,
+        taking every Protect entity unavailable over one blipped endpoint. The
+        first `MAX_CONSECUTIVE_EMPTY_FETCHES` failures are absorbed and the cache
+        is preserved instead.
+
+        Absorption is bounded on purpose: past the window the error propagates so
+        a real controller outage still marks the entities unavailable rather than
+        serving a stale cache indefinitely.
+        """
+        count = self._consecutive_fetch_errors.get(collection_key, 0) + 1
+        self._consecutive_fetch_errors[collection_key] = count
+        if count > MAX_CONSECUTIVE_EMPTY_FETCHES:
+            _LOGGER.warning(
+                "Protect coordinator: %s fetch failed for %d consecutive polls "
+                "(%s); failing the update",
+                collection_key,
+                count,
+                err,
+            )
+            return False
+        _LOGGER.warning(
+            "Protect coordinator: Error fetching %s (poll %d/%d): %s; "
+            "preserving cached devices",
+            collection_key,
+            count,
+            MAX_CONSECUTIVE_EMPTY_FETCHES,
+            err,
+        )
+        # `is_partial` preserves the cache without advancing the empty-response
+        # eviction counter - a failed fetch is no evidence a device was removed.
+        self._update_device_collection(collection_key, {}, is_partial=True)
+        return True
+
     def _update_device_collection(
         self,
         collection_key: str,
@@ -1181,6 +1228,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                         camera.get("name", camera_id),
                         camera.get("smartDetectTypes", []),
                     )
+            self._consecutive_fetch_errors["cameras"] = 0
             self._update_device_collection(
                 "cameras",
                 cameras,
@@ -1188,6 +1236,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             )
         except UniFiNotFoundError:
             self._update_device_collection("cameras", {}, is_404=True)
+        except (UniFiConnectionError, UniFiTimeoutError, UniFiResponseError) as err:
+            # Auth and unexpected errors deliberately stay uncaught: reauth must
+            # still trigger, and an unknown failure should not be papered over.
+            if not self._absorb_transient_fetch_error("cameras", err):
+                raise
         self._drop_rebuilt_latch_trackers(self.data["cameras"])
 
     def _drop_rebuilt_latch_trackers(self, cameras: dict[str, Any]) -> None:
@@ -1237,6 +1290,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 light_id = light.get("id")
                 if light_id:
                     lights[light_id] = light
+            self._consecutive_fetch_errors["lights"] = 0
             self._update_device_collection(
                 "lights",
                 lights,
@@ -1244,6 +1298,10 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             )
         except UniFiNotFoundError:
             self._update_device_collection("lights", {}, is_404=True)
+        except (UniFiConnectionError, UniFiTimeoutError, UniFiResponseError) as err:
+            # See `_fetch_cameras` for why this is bounded rather than swallowed.
+            if not self._absorb_transient_fetch_error("lights", err):
+                raise
 
     async def _fetch_sensors(self) -> None:
         """Fetch sensor data."""
