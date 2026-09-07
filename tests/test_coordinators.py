@@ -3088,6 +3088,56 @@ class TestUnifiProtectCoordinator:
             await coordinator._fetch_cameras()
 
     @pytest.mark.asyncio
+    async def test_camera_fetch_error_counter_resets_on_handled_404(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """A 404 is a healthy answer, so it breaks the transient-error streak.
+
+        The endpoint replied, which is evidence the session is alive. Without
+        the reset, three absorbed errors plus a 404 plus one more error would
+        fail the poll on errors that were never consecutive.
+        """
+        coordinator.data["cameras"] = {"camera1": {"id": "camera1"}}
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_cameras()
+
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("No cameras configured", 404)
+        )
+        await coordinator._fetch_cameras()
+
+        # Streak was broken, so this error is the first of a new window.
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        await coordinator._fetch_cameras()
+
+    @pytest.mark.asyncio
+    async def test_light_fetch_error_counter_resets_on_handled_404(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """See the camera case: a handled 404 resets the light error streak."""
+        coordinator.data["lights"] = {"light1": {"id": "light1"}}
+        coordinator.protect_client.lights.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_lights()
+
+        coordinator.protect_client.lights.get_all = AsyncMock(
+            side_effect=UniFiNotFoundError("No lights configured", 404)
+        )
+        await coordinator._fetch_lights()
+
+        coordinator.protect_client.lights.get_all = AsyncMock(
+            side_effect=UniFiResponseError("Blip", status_code=502)
+        )
+        await coordinator._fetch_lights()
+
+    @pytest.mark.asyncio
     async def test_camera_fetch_error_counter_resets_on_success(
         self, coordinator: UnifiProtectCoordinator
     ):

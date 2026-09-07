@@ -40,7 +40,7 @@ class ProtectDeviceEndpoint(Generic[_ModelT]):
         # ValidationError. Callers need to tell a complete listing from a short
         # one: a device absent because its payload would not parse is still
         # adopted, and must not be treated as removed.
-        self.last_result_complete = True
+        self.last_result_complete: bool = True
 
     async def get_all(self, site_id: str | None = None) -> list[_ModelT]:
         """

@@ -1097,9 +1097,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             MAX_CONSECUTIVE_EMPTY_FETCHES,
             err,
         )
-        # `is_partial` preserves the cache without advancing the empty-response
-        # eviction counter - a failed fetch is no evidence a device was removed.
-        self._update_device_collection(collection_key, {}, is_partial=True)
+        # Leave the cached collection untouched and hold the empty-response
+        # eviction counter at zero: a failed fetch is no evidence a device was
+        # removed. Deliberately not routed through `_update_device_collection`,
+        # whose `is_partial` path would log a parse failure that did not happen.
+        self._consecutive_empty_fetches[collection_key] = 0
         return True
 
     def _update_device_collection(
@@ -1235,6 +1237,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 is_partial=not self.protect_client.cameras.last_result_complete,
             )
         except UniFiNotFoundError:
+            # The endpoint answered, so the session is alive: end any error streak.
+            self._consecutive_fetch_errors["cameras"] = 0
             self._update_device_collection("cameras", {}, is_404=True)
         except (UniFiConnectionError, UniFiTimeoutError, UniFiResponseError) as err:
             # Auth and unexpected errors deliberately stay uncaught: reauth must
@@ -1297,6 +1301,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 is_partial=not self.protect_client.lights.last_result_complete,
             )
         except UniFiNotFoundError:
+            # The endpoint answered, so the session is alive: end any error streak.
+            self._consecutive_fetch_errors["lights"] = 0
             self._update_device_collection("lights", {}, is_404=True)
         except (UniFiConnectionError, UniFiTimeoutError, UniFiResponseError) as err:
             # See `_fetch_cameras` for why this is bounded rather than swallowed.
