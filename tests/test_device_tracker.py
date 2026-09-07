@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,10 @@ from custom_components.unifi_insights.device_tracker import (
     _get_client_type,
     async_setup_entry,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers import entity_registry as er
 
 
 class TestParallelUpdates:
@@ -823,9 +828,9 @@ class TestRegistryReconciliation:
     permanent and takes the user's name/area/entity_id customisation with it.
     """
 
-    OFFLINE_MAC = "aa:bb:cc:dd:ee:01"
-    WIRED_MAC = "aa:bb:cc:dd:ee:02"
-    WIFI_MAC = "aa:bb:cc:dd:ee:03"
+    OFFLINE_MAC: str = "aa:bb:cc:dd:ee:01"
+    WIRED_MAC: str = "aa:bb:cc:dd:ee:02"
+    WIFI_MAC: str = "aa:bb:cc:dd:ee:03"
 
     @pytest.fixture
     def mock_coordinator(self) -> MagicMock:
@@ -835,7 +840,9 @@ class TestRegistryReconciliation:
         return coordinator
 
     @staticmethod
-    def _entry(hass, coordinator: MagicMock, options: dict) -> MockConfigEntry:
+    def _entry(
+        hass: HomeAssistant, coordinator: MagicMock, options: dict[str, Any]
+    ) -> MockConfigEntry:
         """Build a config entry wired to the coordinator."""
         entry = MockConfigEntry(
             domain=DOMAIN,
@@ -849,7 +856,9 @@ class TestRegistryReconciliation:
         return entry
 
     @staticmethod
-    def _register(entity_registry, entry: MockConfigEntry, mac: str) -> str:
+    def _register(
+        entity_registry: er.EntityRegistry, entry: MockConfigEntry, mac: str
+    ) -> str:
         """Register an existing client tracker and return its entity_id."""
         return entity_registry.async_get_or_create(
             "device_tracker",
@@ -860,7 +869,7 @@ class TestRegistryReconciliation:
         ).entity_id
 
     @staticmethod
-    def _client(mac: str, client_type: str) -> dict:
+    def _client(mac: str, client_type: str) -> dict[str, Any]:
         """Build a connected-client payload."""
         return {"id": mac, "mac": mac, "connected": True, "type": client_type}
 
@@ -877,7 +886,11 @@ class TestRegistryReconciliation:
         ],
     )
     async def test_absent_client_keeps_its_registry_entry(
-        self, hass, entity_registry, mock_coordinator, data
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        mock_coordinator: MagicMock,
+        data: dict[str, Any],
     ) -> None:
         """A client missing from the snapshot must not lose its registry entry."""
         mock_coordinator.data = data
@@ -891,7 +904,10 @@ class TestRegistryReconciliation:
 
     @pytest.mark.asyncio
     async def test_connected_client_of_untracked_type_is_removed(
-        self, hass, entity_registry, mock_coordinator
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        mock_coordinator: MagicMock,
     ) -> None:
         """A connected client whose type is no longer tracked is still removed."""
         mock_coordinator.data["clients"]["site1"] = {
@@ -907,7 +923,10 @@ class TestRegistryReconciliation:
 
     @pytest.mark.asyncio
     async def test_connected_tracked_client_is_kept(
-        self, hass, entity_registry, mock_coordinator
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        mock_coordinator: MagicMock,
     ) -> None:
         """A connected client of a tracked type keeps its registry entry."""
         mock_coordinator.data["clients"]["site1"] = {
@@ -923,7 +942,10 @@ class TestRegistryReconciliation:
 
     @pytest.mark.asyncio
     async def test_tracking_disabled_removes_all_trackers(
-        self, hass, entity_registry, mock_coordinator
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        mock_coordinator: MagicMock,
     ) -> None:
         """Turning tracking off is a config decision, so it may remove everything."""
         entry = self._entry(hass, mock_coordinator, {})
