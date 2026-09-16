@@ -526,7 +526,7 @@ class TestUnifiClientTracker:
         assert tracker.available is True
 
         # Coordinator fails update
-        mock_coordinator.last_update_success = False
+        mock_coordinator.device_available = False
         assert tracker.available is False
 
     def test_ip_address(self, mock_coordinator) -> None:

@@ -1640,7 +1640,7 @@ class TestUnifiVpnClientSwitch:
             client_id="vpn1",
         )
         assert switch.available is True
-        mock_coordinator.last_update_success = False
+        mock_coordinator.config_available = False
         assert switch.available is False
 
         mock_coordinator.last_update_success = True

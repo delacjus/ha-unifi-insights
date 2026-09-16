@@ -1074,7 +1074,7 @@ class TestUnifiPortSensorEdgeCases:
         )
 
         # Set last_update_success to False
-        mock_coordinator.last_update_success = False
+        mock_coordinator.device_available = False
 
         assert sensor.available is False
 
@@ -2508,7 +2508,7 @@ class TestUnifiSiteClientSensor:
         )
         assert sensor.available is True
 
-        mock_coordinator_with_clients.last_update_success = False
+        mock_coordinator_with_clients.device_available = False
         assert sensor.available is False
 
     async def test_device_info_attaches_to_gateway(

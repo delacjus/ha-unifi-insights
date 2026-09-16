@@ -456,7 +456,7 @@ class UnifiClientTracker(CoordinatorEntity[UnifiFacadeCoordinator], ScannerEntit
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return bool(self.coordinator.last_update_success)
+        return bool(self.coordinator.device_available)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
