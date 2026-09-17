@@ -144,6 +144,7 @@ class TestRefreshDataService:
         """Test refresh data success."""
         mock_coordinator = MagicMock()
         mock_coordinator.async_refresh = AsyncMock()
+        mock_coordinator.async_refresh_or_raise = AsyncMock()
         mock_coordinator.data = {"sites": {"site1": {}}}
         mock_entry = MagicMock()
         mock_entry.runtime_data = MagicMock()
@@ -163,7 +164,12 @@ class TestRefreshDataService:
                 blocking=True,
             )
 
-        mock_coordinator.async_refresh.assert_called_once()
+        # A console-wide call refreshes every child, Protect included.
+        mock_coordinator.async_refresh_or_raise.assert_called_once_with(
+            include_protect=True
+        )
+        # The facade's own async_refresh() only re-aggregates the cache.
+        mock_coordinator.async_refresh.assert_not_called()
 
         await async_unload_services(hass)
 
@@ -171,6 +177,7 @@ class TestRefreshDataService:
         """Test refresh data with specific site_id."""
         mock_coordinator = MagicMock()
         mock_coordinator.async_refresh = AsyncMock()
+        mock_coordinator.async_refresh_or_raise = AsyncMock()
         mock_coordinator.data = {"sites": {"site1": {}}}
         mock_entry = MagicMock()
         mock_entry.runtime_data = MagicMock()
@@ -190,7 +197,10 @@ class TestRefreshDataService:
                 blocking=True,
             )
 
-        mock_coordinator.async_refresh.assert_called_once()
+        # A site is a Network concept, so Protect is left alone.
+        mock_coordinator.async_refresh_or_raise.assert_called_once_with(
+            include_protect=False
+        )
 
         await async_unload_services(hass)
 
@@ -200,6 +210,7 @@ class TestRefreshDataService:
         """Test refresh data skips coordinator when site_id not found."""
         mock_coordinator = MagicMock()
         mock_coordinator.async_refresh = AsyncMock()
+        mock_coordinator.async_refresh_or_raise = AsyncMock()
         mock_coordinator.data = {"sites": {"site1": {}}}  # Only has site1
         mock_entry = MagicMock()
         mock_entry.runtime_data = MagicMock()
@@ -207,10 +218,15 @@ class TestRefreshDataService:
 
         await async_setup_services(hass)
 
-        with patch.object(
-            hass.config_entries,
-            "async_entries",
-            return_value=[mock_entry],
+        with (
+            patch.object(
+                hass.config_entries,
+                "async_entries",
+                return_value=[mock_entry],
+            ),
+            # A site_id no console owns is user error and must be reported,
+            # not silently answered with "refreshed".
+            pytest.raises(ServiceValidationError, match="site2"),
         ):
             # Request refresh for site2, which doesn't exist
             await hass.services.async_call(
@@ -221,7 +237,7 @@ class TestRefreshDataService:
             )
 
         # Coordinator should NOT be refreshed since site2 wasn't found
-        mock_coordinator.async_refresh.assert_not_called()
+        mock_coordinator.async_refresh_or_raise.assert_not_called()
 
         await async_unload_services(hass)
 
@@ -760,8 +776,8 @@ class TestServiceErrorHandling:
         """Test refresh_data with coordinator error."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {"sites": {"default": {}}}
-        mock_coordinator.async_refresh = AsyncMock(
-            side_effect=Exception("Refresh failed")
+        mock_coordinator.async_refresh_or_raise = AsyncMock(
+            side_effect=HomeAssistantError("Refresh failed")
         )
         mock_entry = MagicMock()
         mock_entry.runtime_data = MagicMock()

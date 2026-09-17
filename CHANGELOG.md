@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The configuration flow now reports "Failed to connect" instead of "Unknown error" or "Invalid authentication" when the console answers with a server error or is temporarily unavailable, including while discovering and validating cloud consoles.
 - Service actions now run against the console that owns the target instead of always the first configured one. With two consoles set up, `restart_device`, the Protect camera, light, PTZ, chime and viewer actions, and guest authorisation were all sent to console 1 regardless of which console owned the device, camera or site.
 - `authorize_guest` resolves a client given by MAC address, not only by client ID, so guest actions reach the right site.
+- The `refresh_data` action now actually fetches from the consoles. It called the facade coordinator's own `async_refresh()`, which only re-aggregates data already in memory, so the action re-published the same values and reported success without a single API request.
+- `refresh_data` reports failures instead of swallowing them. A coordinator refresh records the problem as `last_update_success` and returns normally rather than raising, so a refresh against an unreachable console was logged and reported as a success.
+- One unreachable console no longer stops the others from being refreshed; every console is attempted and the failures are reported together.
+- A `site_id` that no configured console owns is now reported as a validation error instead of quietly answering "refreshed".
 
 ### Changed
 
