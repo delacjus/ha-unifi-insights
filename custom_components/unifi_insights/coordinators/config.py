@@ -15,7 +15,7 @@ from custom_components.unifi_insights.api import (
     UniFiResponseError,
     UniFiTimeoutError,
 )
-from custom_components.unifi_insights.const import SCAN_INTERVAL_CONFIG
+from custom_components.unifi_insights.const import CONF_SITE_IDS, SCAN_INTERVAL_CONFIG
 
 from .base import UnifiBaseCoordinator
 
@@ -67,6 +67,10 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             "vpn_clients": {},
             "network_info": {},
         }
+        # Every site the console reports (id -> display name), before the
+        # site filter is applied, so the options flow can offer all of them.
+        self.available_sites: dict[str, str] = {}
+        self._warned_no_selected_sites = False
         # (section, site_id) pairs for optional sections (WiFi, firewall)
         # whose last fetch failed. They keep their previous data but report
         # unavailable, without failing the whole refresh.
@@ -304,9 +308,17 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 )
 
             site_list = [self._model_to_dict(s) for s in sites_models]
-            sites: dict[str, dict[str, Any]] = {
+            all_sites: dict[str, dict[str, Any]] = {
                 site["id"]: site for site in site_list if site.get("id")
             }
+            self.available_sites = {
+                site_id: str(
+                    site.get("name") or site.get("internalReference") or site_id
+                )
+                for site_id, site in all_sites.items()
+            }
+            sites = self._filter_selected_sites(all_sites)
+            self.data["sites"] = sites
 
             _LOGGER.debug(
                 "Config coordinator: Found %d sites",
@@ -323,6 +335,16 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 self._available = True
                 self.data["last_update"] = datetime.now(tz=UTC)
                 return self.data
+
+            # Per-site maps are updated in place below, so drop any site that
+            # is no longer polled (removed from the console, or deselected)
+            # rather than keep serving its last values.
+            for key in ("wifi", "firewall_rules", "policy_based_routes", "vpn_clients"):
+                self.data[key] = {
+                    site_id: value
+                    for site_id, value in self.data[key].items()
+                    if site_id in self.data["sites"]
+                }
 
             # Resolve classic site names so we can enrich WiFi data with secrets
             # and per-SSID client counts that the official API does not expose.
@@ -550,6 +572,34 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
         sites = self.data.get("sites", {})
         result = sites.get(site_id)
         return result if isinstance(result, dict) else None
+
+    def _filter_selected_sites(
+        self, sites: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Narrow sites to the ones selected in options.
+
+        Both coordinators fan out per site from ``self.data["sites"]``, so
+        filtering here is what keeps unselected sites off the API entirely.
+        """
+        selected = self.config_entry.options.get(CONF_SITE_IDS)
+        if not selected or not sites:
+            return sites
+
+        filtered = {
+            site_id: site for site_id, site in sites.items() if site_id in selected
+        }
+        if filtered:
+            self._warned_no_selected_sites = False
+        elif not self._warned_no_selected_sites:
+            # Warn once rather than on every poll until the user acts.
+            self._warned_no_selected_sites = True
+            _LOGGER.warning(
+                "Config coordinator: none of the selected sites (%s) exist on "
+                "the console any more; re-select sites in the integration options",
+                ", ".join(selected),
+            )
+        return filtered
 
     def get_site_ids(self) -> list[str]:
         """Get all site IDs."""

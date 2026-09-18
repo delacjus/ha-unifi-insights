@@ -114,6 +114,7 @@ After setup, open the integration's options flow (**Settings** → **Devices & S
 | Track WiFi Clients    | Off     | Creates device tracker entities for connected wireless clients. May add a large number of entities on busy networks.                                                                                                                 |
 | Track Wired Clients   | Off     | Creates device tracker entities for connected wired clients.                                                                                                                                                                         |
 | Enable Client Control | On      | Creates allow/block switch and reconnect button entities for each connected client. Disable this if you only need read-only monitoring — it prevents orphaned unavailable entities from accumulating when clients leave the network. |
+| Sites                 | All     | Only shown when the console has more than one site. Pick the sites to poll; unselected sites are not queried at all, which cuts API traffic on multi-site consoles. Leave empty to include every site.                             |
 
 ## Entities
 
@@ -309,6 +310,12 @@ To download a sanitized diagnostic report for troubleshooting:
 1. Go to **Settings** → **Devices & Services**.
 2. Select **UniFi Insights**.
 3. Click the three-dot menu and choose **Download diagnostics**.
+
+The report is sanitized before it is written: API keys, passwords and Wi-Fi
+secrets, host names and IP addresses, SSIDs, and the names of your clients are
+redacted, and every MAC address is replaced with a placeholder that stays
+consistent within a single report. Device, site and camera names are kept so
+the report remains readable.
 
 ## Contributing
 
