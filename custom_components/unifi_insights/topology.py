@@ -61,6 +61,8 @@ class TopologyNode(TypedDict):
     model: NotRequired[str]
     ha_device_id: NotRequired[str]
     connection: NotRequired[ClientConnection]
+    vlan_id: NotRequired[int]
+    network_name: NotRequired[str]
 
 
 class TopologyEdge(TypedDict):
@@ -333,7 +335,9 @@ def _device_node(
     return node
 
 
-def _client_node(client: Mapping[str, Any], node_id: str) -> TopologyNode:
+def _client_node(
+    client: Mapping[str, Any], node_id: str, link: Mapping[str, Any]
+) -> TopologyNode:
     """Build the allowlisted node for one client."""
     node: TopologyNode = {
         "id": node_id,
@@ -344,7 +348,53 @@ def _client_node(client: Mapping[str, Any], node_id: str) -> TopologyNode:
     connection = _connection(client)
     if connection is not None:
         node["connection"] = connection
+    vlan = _as_int(link.get("vlan"))
+    if vlan is not None:
+        node["vlan_id"] = vlan
+    network_name = link.get("network_name")
+    if isinstance(network_name, str) and network_name:
+        node["network_name"] = network_name
     return node
+
+
+def _client_edge(
+    client: Mapping[str, Any],
+    node_id: str,
+    link: Mapping[str, Any],
+    device_node_ids: Mapping[str, str],
+    mac_index: Mapping[str, str],
+) -> TopologyEdge | UnresolvedReason:
+    """Return a client's edge to its AP/switch, or why it has none."""
+    connection = _connection(client)
+    link_parent_keys = (
+        ("ap_mac", "sw_mac") if connection == "wireless" else ("sw_mac", "ap_mac")
+    )
+    link_parent: str | None = None
+    link_macs = [normalize_mac(link.get(key)) for key in link_parent_keys]
+    for mac in link_macs:
+        if mac is not None and mac in mac_index:
+            link_parent = mac_index[mac]
+            break
+    uplink = _field(client, "uplinkDeviceId", "uplink_device_id")
+    target = device_node_ids.get(uplink) if isinstance(uplink, str) else None
+    if target is None:
+        target = link_parent
+    if target is None:
+        has_reference = isinstance(uplink, str) or any(link_macs)
+        return "parent_not_found" if has_reference else "no_uplink_data"
+
+    edge: TopologyEdge = {
+        "source": node_id,
+        "target": target,
+        "medium": connection or "unknown",
+    }
+    # /stat/sta is up to five minutes older than uplinkDeviceId, so its port
+    # is only trusted when it names the same switch the edge points at.
+    sw_parent = mac_index.get(normalize_mac(link.get("sw_mac")) or "")
+    sw_port = _as_int(link.get("sw_port"))
+    if connection == "wired" and sw_port is not None and sw_parent == target:
+        edge["parent_port"] = sw_port
+    return edge
 
 
 def _device_edge(
@@ -467,6 +517,7 @@ def build_site_topology(
     """Build the allowlisted topology snapshot for one site."""
     devices = _site_map(data, "devices", site_id)
     clients = _site_map(data, "clients", site_id)
+    links = _site_map(data, "client_links", site_id)
     nodes: list[TopologyNode] = []
     edges: list[TopologyEdge] = []
     unresolved: list[TopologyUnresolved] = []
@@ -497,22 +548,17 @@ def build_site_topology(
     included, clients_total = _select_clients(clients, max_clients)
     for client_id, client in included:
         node_id = opaque_node_id("cli", entry_id, client_id)
-        nodes.append(_client_node(client, node_id))
-        uplink = _field(client, "uplinkDeviceId", "uplink_device_id")
-        if not isinstance(uplink, str):
-            unresolved.append({"node_id": node_id, "reason": "no_uplink_data"})
-            continue
-        target = device_node_ids.get(uplink)
-        if target is None:
-            unresolved.append({"node_id": node_id, "reason": "parent_not_found"})
-            continue
-        edges.append(
-            {
-                "source": node_id,
-                "target": target,
-                "medium": _connection(client) or "unknown",
-            }
+        client_mac = normalize_mac(_field(client, "macAddress", "mac"))
+        raw_link = links.get(client_mac) if client_mac is not None else None
+        client_link_data = raw_link if isinstance(raw_link, dict) else {}
+        nodes.append(_client_node(client, node_id, client_link_data))
+        client_link = _client_edge(
+            client, node_id, client_link_data, device_node_ids, mac_index
         )
+        if isinstance(client_link, dict):
+            edges.append(client_link)
+        else:
+            unresolved.append({"node_id": node_id, "reason": client_link})
 
     issues: list[TopologyIssue] = []
     by_site = data.get("devices")
