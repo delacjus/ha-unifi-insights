@@ -51,7 +51,7 @@ One snapshot per site:
 {
   schema_version: 1,
   entry_id: str, site_id: str, site_name: str,
-  revision: str,          # sha256 of canonical JSON of everything below
+  revision: str,          # opaque change token: first 16 hex of sha256(canonical JSON of everything below)
   status: "ok" | "partial" | "unavailable",
   issues: [{code: str, severity: "info" | "warning" | "error"}],
   nodes: [Node], edges: [Edge], unresolved: [Unresolved],
