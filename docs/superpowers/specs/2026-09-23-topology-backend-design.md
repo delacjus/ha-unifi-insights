@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-23
 - **Upstream issues:** ruaan-deysel/ha-unifi-insights#165 (this spec), #166 (card — separate design cycle, builds on this contract)
-- **Status:** approved in brainstorming; pending written-spec review
+- **Status:** approved (written spec approved 2026-09-23; amended same day with live `/stat/sta` + raw uplink key findings)
 - **Branch policy:** this spec lives on local-only branch `design/topology`; it is never pushed upstream.
 
 ## 1. Goal
@@ -25,8 +25,9 @@ The issue assumes the official v1 API returns `uplink.deviceId`. **It does not o
 | device kind | `type` null; UDM Pro SE reports only `features: ["switching"]` | legacy `type` (`udm`/`uxg`/`ugw`/`usw`/`uap`) |
 | device uplink port (child side) | legacy-normalised `ports[].is_uplink` ✔ | — |
 | client → AP/switch | `uplinkDeviceId` resolves 58/58 ✔ | — |
-| client switch port / VLAN | `swPort`/`swMac`/`apMac`/`vlan`/`networkId` null 58/58 | legacy `/stat/sta` — already fetched every 5 min (`coordinators/config.py` `get_active_legacy`) only for SSID counts |
-| VLAN names | never fetched | `networks.get_all(site_id)` (exists, unused) |
+| client switch port / VLAN / network | `swPort`/`swMac`/`apMac`/`vlan`/`networkId` null 58/58 | legacy `/stat/sta` — already fetched every 5 min (`coordinators/config.py` `get_active_legacy`) only for SSID counts. Live: `sw_mac`+`sw_port` 42/42 wired, `ap_mac` 16/16 wireless, `network` (= network name) 58/58, `vlan` 54/54 on VLAN-enabled networks (absent on the untagged default network) |
+
+Raw legacy keys (verified live): `uplink` = {`uplink_mac`, `uplink_remote_port`, `port_idx` (child's own port), `type` (`wire`), `speed`, …}; `last_uplink` carries the same link keys and survives a device going offline.
 
 v1 device ids are UUIDs and differ from legacy `_id` → parent resolution joins **by normalised MAC**.
 Client ids are UUIDs (58/58).
@@ -36,8 +37,8 @@ Client ids are UUIDs (58/58).
 Two stacked PRs, prepared locally, posted together:
 
 - **PR 1 — `feat/topology-graph`** (off `upstream/main`): legacy uplink merge, pure builder, WebSocket API.
-- **PR 2 — `feat/topology-client-links`** (stacked on PR 1): client port/VLAN + network names. Fills
-  optional contract fields only — no contract change.
+- **PR 2 — `feat/topology-client-links`** (stacked on PR 1): client port/VLAN + network name from the
+  existing `/stat/sta` call. No new API calls. Fills optional contract fields only — no contract change.
 
 Upstream accepts only `main` as base, so PR 2's diff includes PR 1's commits; its body states
 "stacked on #X — review after". Both bodies follow the house PR format.
@@ -73,7 +74,8 @@ One snapshot per site:
 - optional `speed_mbps`, `parent_port`, `child_port`, `poe_power_w` (watts drawn at the parent port).
 - PR 2 fills `parent_port` for wired client edges.
 
-**Unresolved** — `{node_id, reason}`, reason ∈ `parent_not_found | no_uplink_data | mac_keyed_parent`.
+**Unresolved** — `{node_id, reason}`, reason ∈ `parent_not_found | no_uplink_data`. (MAC-keyed devices are
+indexed by their MAC id, so they resolve like any other parent.)
 Invariant: **every edge endpoint exists in `nodes`.** A node with no parent reference and legacy
 kind `gateway` is a root, not unresolved.
 
@@ -91,8 +93,9 @@ snapshot roughly every 30 s. Revision dedupe still suppresses identical snapshot
 ### PR 1 — `coordinators/device.py`
 - New `_merge_legacy_uplink_data(device, legacy_devices_by_mac)` called beside
   `_merge_legacy_port_data` / `_merge_legacy_wan_data`. Writes one namespaced block:
-  `device["topology"] = {uplink_mac, uplink_remote_port, uplink_type, uplink_speed, legacy_type}`
-  (keys present only when the legacy source has them; MAC normalised lower-case).
+  `device["topology"] = {uplink_mac, uplink_remote_port, uplink_port_idx, uplink_type, uplink_speed, legacy_type}`
+  (keys present only when the legacy source has them; MAC normalised lower-case). Link keys come from
+  legacy `uplink`, falling back to `last_uplink` when `uplink` has no `uplink_mac` (offline device).
 - Legacy-only path (`_legacy_device_to_v1_dict`, v1 5xx) produces the identical block.
 - No new API calls. Existing `ports`/`uplink` consumers unchanged.
 - Diagnostics: existing recursive MAC placeholdering covers `uplink_mac`; add a test from a real
@@ -102,12 +105,11 @@ snapshot roughly every 30 s. Revision dedupe still suppresses identical snapshot
 - Lift the `/stat/sta` fetch out of the Wi-Fi enrichment `try` (today it runs only when Wi-Fi
   models loaded) into its own guarded per-site fetch; the same response still feeds `_enrich_wifi`
   (no extra call).
-- Store `client_links[site_id][normalised mac] = {sw_mac, sw_port, ap_mac, vlan, network_id}`.
-- New `networks[site_id][network_id] = {name, vlan_id, purpose}` from `networks.get_all(site_id)`
-  — the only new API call (one per site per 5 min). Per-site failure logs and skips, following the
-  Wi-Fi pattern; never fails the refresh.
-- Facade exposes both. Diagnostics: redact subnet / gateway IP keys; VLAN ids and network names
-  stay readable; tests from real model dumps.
+- Store `client_links[site_id][normalised mac] = {sw_mac, sw_port, ap_mac, vlan, network_name}` from the
+  same `/stat/sta` response (`network` → `network_name`). No new API call; `networks.get_all` is not used.
+  A failed fetch keeps the site's previous links (never fails the refresh).
+- Facade exposes `client_links`. Diagnostics: `sw_mac`/`ap_mac` already in `MAC_KEYS` and MAC-shaped
+  keys are placeholdered; VLAN ids and network names stay readable; test from a real-shaped record.
 - **Accepted trade-off:** client port/VLAN may lag the 30 s client edge by up to 5 min.
 
 ## 6. Builder — `custom_components/unifi_insights/topology.py`
@@ -122,21 +124,24 @@ build_site_topology(
     *,
     ha_device_ids: Mapping[str, str],  # v1 device id -> HA device registry id
     max_clients: int = 500,
+    devices_available: bool = True,    # facade.device_available
 ) -> SiteTopology
 ```
 
 Steps:
 1. Device nodes. `kind`: legacy `type` (`udm|uxg|ugw|udr|ucg` → gateway, `usw` → switch,
-   `uap` → access_point) → v1 `type` → `features` (`accessPoint` → access_point) → `other`.
-2. Per-site MAC index: normalised `macAddress` → node id.
-3. Device edges from `topology.uplink_mac` via the MAC index. `child_port` = the child's
-   `is_uplink` port index; `parent_port` = `uplink_remote_port`; `speed_mbps` = `uplink_speed`;
+   `uap` → access_point) → v1 `type` → `features` (`accessPoint` → access_point, `switching` → switch)
+   → `other`.
+2. Per-site MAC index: normalised `macAddress`/`mac` (or a MAC-shaped device id) → node id.
+3. Device edges from `topology.uplink_mac` via the MAC index. `child_port` = `uplink_port_idx`,
+   else the child's `is_uplink` port index; `parent_port` = `uplink_remote_port`; `speed_mbps` = `uplink_speed`;
    `medium` from `uplink_type` (`wire` → wired, `wireless` → wireless); `poe_power_w` from the
    parent's port entry at `parent_port` when PoE data is present. Self-edges skipped. Unmatched →
    `unresolved`.
 4. Client nodes + edges from `uplinkDeviceId` / `uplink_device_id` matched against device ids.
-   (PR 2: fall back to `client_links` `sw_mac`/`ap_mac` through the MAC index; enrich port/VLAN;
-   VLAN name via `networks`.)
+   (PR 2: fall back to `client_links` `sw_mac`/`ap_mac` through the MAC index; enrich `parent_port`
+   from `sw_port`, `vlan_id` from `vlan`, `network_name` from `network_name`. A client without `vlan`
+   gets no `vlan_id` — never an invented VLAN 1.)
 5. Client cap + `truncation`.
 6. Status/issues (table below), deterministic sort (nodes by kind then id; edges by source then
    target), `revision` = sha256 of canonical JSON (`sort_keys=True`, compact separators) of the
@@ -167,6 +172,8 @@ authenticated access (no `require_admin`) — any logged-in user; privacy comes 
 - Scoping: entry must exist, belong to `DOMAIN`, be loaded (guard `runtime_data` like
   `services.py`); `site_id` must be in `config_coordinator.get_site_ids()`.
 - Error codes: `entry_not_found`, `entry_not_loaded`, `site_not_selected`.
+- When the entry unloads mid-subscription, the subscription sends a final snapshot with
+  `status: unavailable` and issue `entry_unloaded` (error), then stops.
 - `ha_device_ids` resolved from the device registry using the existing identifier
   `(DOMAIN, f"{site_id}_{device_id}")`.
 - Subscribe: `facade.async_add_listener` → rebuild → send only when `revision` changed. Unsub
@@ -193,8 +200,9 @@ Environment: `.local/ha-test-venv-ci` (HA 2026.9.3, matches CI). Ruff via repo c
   an unchanged update; listener cleanup on unsubscribe and on unload.
 - `tests/test_coordinators.py`: uplink block on v1+legacy merge and legacy-only paths.
 - `tests/test_diagnostics.py`: `uplink_mac` placeholdered.
-- PR 2: `client_links`/`networks` fetch success, per-site failure isolation, non-selected sites not
-  fetched, diagnostics redaction, builder port/VLAN enrichment + `sw_mac`/`ap_mac` fallback.
+- PR 2: `client_links` built from `/stat/sta` even when Wi-Fi is unavailable; fetch failure keeps previous
+  links; Wi-Fi enrichment unchanged; diagnostics placeholdering; builder port/VLAN/network enrichment,
+  `sw_mac`/`ap_mac` fallback, untagged client has no `vlan_id`.
 
 ## 9. Live verification (VM113)
 
