@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Remote connections now load account-wide Site Manager host, site, and device inventory, five-minute ISP metrics, and SD-WAN configuration metadata through a shared optional coordinator. Diagnostics include bounded counts, selected-host ISP samples, and collection health without exporting cloud identifiers or raw account data. A Site Manager outage does not prevent the console integration from loading. [#171](https://github.com/ruaan-deysel/ha-unifi-insights/issues/171)
+
 ## [2026.9.7] - 2026-09-24
 
 ### Added
