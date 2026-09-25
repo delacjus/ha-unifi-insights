@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.9.8] - 2026-09-26
+
 ### Added
 
 - Network topology dashboard card, served by the integration and listed in the
