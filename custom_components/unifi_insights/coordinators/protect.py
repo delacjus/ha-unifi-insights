@@ -187,10 +187,22 @@ _TAMPER_TIMESTAMP_FIELDS: Final[frozenset[str]] = frozenset(
     {"tamperingDetectedAt", "tampering_detected_at"}
 )
 _LEAK_STATE_FIELDS: Final[frozenset[str]] = frozenset(
-    {"isLeakDetected", "is_leak_detected"}
+    {
+        "isLeakDetected",
+        "is_leak_detected",
+        "isExternalLeakDetected",
+        "is_external_leak_detected",
+    }
 )
+# `externalLeakDetectedAt` is the second (external probe) channel of
+# multi-channel leak sensors such as the USL-Environmental.
 _LEAK_TIMESTAMP_FIELDS: Final[frozenset[str]] = frozenset(
-    {"leakDetectedAt", "leak_detected_at"}
+    {
+        "leakDetectedAt",
+        "leak_detected_at",
+        "externalLeakDetectedAt",
+        "external_leak_detected_at",
+    }
 )
 
 # Group name -> every field spelling (state + timestamp) that identifies a
@@ -213,7 +225,10 @@ _PRESERVED_SENSOR_STATE_GROUP_STATE_FIELDS: Final[dict[str, frozenset[str]]] = {
     "door": _DOOR_STATE_FIELDS,
     "motion": _MOTION_STATE_FIELDS,
     "tamper": _TAMPER_STATE_FIELDS,
-    "leak": _LEAK_STATE_FIELDS,
+    # Sensors like the USL-Environmental report no `isLeakDetected` flag;
+    # their leak state IS the `*LeakDetectedAt` timestamp (null when dry),
+    # so the timestamps must take part in the agreement check.
+    "leak": _LEAK_STATE_FIELDS | _LEAK_TIMESTAMP_FIELDS,
 }
 
 
@@ -2085,7 +2100,14 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         about); present on only one side is treated as NOT agreeing, since
         that is itself a discrepancy.
         """
-        for field in _PRESERVED_SENSOR_STATE_GROUP_STATE_FIELDS[group]:
+        fields = _PRESERVED_SENSOR_STATE_GROUP_STATE_FIELDS[group]
+        if group == "leak" and any(
+            cached_sensor.get(field) is not None or rest_sensor.get(field) is not None
+            for field in _LEAK_STATE_FIELDS
+        ):
+            fields = _LEAK_STATE_FIELDS
+
+        for field in fields:
             cached_has = field in cached_sensor
             rest_has = field in rest_sensor
             if cached_has != rest_has:
