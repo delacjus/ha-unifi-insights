@@ -96,6 +96,29 @@ async def test_updates_resource_when_bundle_changes(
     assert resources.items[0]["url"] != f"{CARD_URL}?v=old"
 
 
+async def test_keeps_current_resource_unchanged(
+    hass, http, enable_custom_integrations
+) -> None:
+    """A current Lovelace resource needs neither creation nor an update."""
+    version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
+    digest = hashlib.sha256(CARD_PATH.read_bytes()).hexdigest()[:8]
+    item = {
+        "id": "topology",
+        "url": f"{CARD_URL}?v={version}-{digest}",
+        "type": "module",
+    }
+    resources = FakeResources([item])
+    hass.data[LOVELACE_DATA].resources = resources
+
+    with patch.object(frontend, "ResourceStorageCollection", FakeResources):
+        await async_register_frontend(hass)
+
+    resources.async_create_item.assert_not_awaited()
+    resources.async_update_item.assert_not_awaited()
+    assert resources.items == [item]
+    http.async_register_static_paths.assert_awaited_once()
+
+
 async def test_resource_failure_does_not_fail_setup_and_can_retry(
     hass, http, enable_custom_integrations, caplog
 ) -> None:
