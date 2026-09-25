@@ -26,6 +26,16 @@ describe("deriveState", () => {
         ).toBe("incompatible");
     });
 
+    it("greys the current graph while the socket is down", () => {
+        const snapshot = fixtureSnapshot();
+        expect(
+            deriveState({ ...base, snapshot, disconnected: true }),
+        ).toMatchObject({ phase: "reloading", render: snapshot, stale: true });
+        expect(deriveState({ ...base, disconnected: true }).phase).toBe(
+            "loading",
+        );
+    });
+
     it("shows an error over the last good graph", () => {
         const lastGood = fixtureSnapshot();
         const state = deriveState({
@@ -57,6 +67,13 @@ describe("deriveState", () => {
             "unconfigured",
         );
         expect(deriveState({ ...base }).phase).toBe("loading");
+    });
+
+    it("lets a live snapshot outrank sources fetched before its entry loaded", () => {
+        expect(
+            deriveState({ ...base, sources: [], snapshot: fixtureSnapshot() })
+                .phase,
+        ).toBe("ok");
     });
 
     it("renders ok, empty and partial snapshots", () => {

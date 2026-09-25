@@ -101,7 +101,15 @@ export function fakeHass(
     } = {},
 ) {
     const subs: FakeSub[] = [];
+    const listeners = new Map<string, Set<() => void>>();
     const connection = {
+        addEventListener: vi.fn((event: string, listener: () => void) => {
+            if (!listeners.has(event)) listeners.set(event, new Set());
+            listeners.get(event)!.add(listener);
+        }),
+        removeEventListener: vi.fn((event: string, listener: () => void) => {
+            listeners.get(event)?.delete(listener);
+        }),
         subscribeMessage: vi.fn(
             (callback: (m: unknown) => void, message: MessageBase) => {
                 if (opts.subscribeError !== undefined)
@@ -125,6 +133,8 @@ export function fakeHass(
         subs,
         connection,
         push: (payload: unknown) => subs.at(-1)!.callback(payload),
+        emit: (event: "ready" | "disconnected") =>
+            listeners.get(event)?.forEach((listener) => listener()),
     };
 }
 

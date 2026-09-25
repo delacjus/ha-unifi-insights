@@ -23,7 +23,17 @@ export interface SubscriptionHandlers {
     onSnapshot(snapshot: SiteTopology): void;
     onError(error: WsError): void;
     onIncompatible(): void;
+    /** The socket dropped: whatever is drawn is no longer live. */
+    onDisconnected(): void;
+    /** The socket is back; the stream (if any) has been reopened. */
+    onReconnected(): void;
 }
+
+/**
+ * Errors that mean "not yet": the entry is still setting up, or (right after
+ * an HA restart) the integration has not registered its commands.
+ */
+const RETRYABLE = new Set([ERR_ENTRY_NOT_LOADED, "unknown_command"]);
 
 export const BACKOFF_BASE_MS = 2000;
 export const BACKOFF_MAX_MS = 60000;
@@ -40,12 +50,14 @@ export function backoffDelay(
 /**
  * One card's `topology/subscribe` stream.
  *
- * Socket reconnects are handled by home-assistant-js-websocket's own
- * resubscribe; this class covers what the server ends: after
- * `entry_unloaded` it releases the dead subscription and retries with
- * backoff (retrying `entry_not_loaded` too). A generation counter makes every
- * callback from a superseded subscription a no-op, so racing
- * `set hass`/connect/disconnect calls can never leave two streams open.
+ * Socket reconnects are handled here, not by home-assistant-js-websocket's
+ * resubscribe: the library drops a failed resubscribe silently, which is the
+ * normal case after an HA restart (the entry is still loading). On `ready`
+ * the stream is reopened like a first subscribe. For streams the server ends
+ * (`entry_unloaded`) it releases the dead subscription and retries with
+ * backoff, as it does for `entry_not_loaded` / `unknown_command`. A generation
+ * counter makes every callback from a superseded subscription a no-op, so
+ * racing `set hass`/connect/disconnect calls can never leave two streams open.
  */
 export class TopologySubscription {
     private generation = 0;
@@ -85,19 +97,53 @@ export class TopologySubscription {
         this.connection = connection;
         this.key = key;
         this.keyId = keyId;
+        if (connection) {
+            connection.addEventListener("ready", this.onReady);
+            connection.addEventListener("disconnected", this.onDisconnected);
+        }
         if (connection && key) this.open();
     }
 
     stop(): void {
         this.generation++;
-        if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
-        this.retryTimer = undefined;
+        this.clearRetry();
         this.attempt = 0;
         this.release();
+        this.connection?.removeEventListener("ready", this.onReady);
+        this.connection?.removeEventListener(
+            "disconnected",
+            this.onDisconnected,
+        );
         this.connection = undefined;
         this.key = undefined;
         this.keyId = undefined;
     }
+
+    private clearRetry(): void {
+        if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
+        this.retryTimer = undefined;
+    }
+
+    /** The socket is gone and took the subscription with it: nothing to unsubscribe. */
+    private drop(): void {
+        this.generation++;
+        this.clearRetry();
+        this.unsubscribe = undefined;
+        this.isLive = false;
+        this.lastRevision = undefined;
+    }
+
+    private readonly onDisconnected = (): void => {
+        this.drop();
+        this.handlers.onDisconnected();
+    };
+
+    private readonly onReady = (): void => {
+        this.drop();
+        this.attempt = 0;
+        if (this.key) this.open();
+        this.handlers.onReconnected();
+    };
 
     private release(): void {
         const unsubscribe = this.unsubscribe;
@@ -124,7 +170,7 @@ export class TopologySubscription {
                     site_id: key.site_id,
                     max_clients: key.max_clients,
                 },
-                { resubscribe: true },
+                { resubscribe: false },
             )
             .then(
                 (unsubscribe) => {
@@ -136,8 +182,7 @@ export class TopologySubscription {
                     if (generation !== this.generation) return;
                     const error = toWsError(err);
                     this.handlers.onError(error);
-                    if (error.code === ERR_ENTRY_NOT_LOADED)
-                        this.scheduleRetry();
+                    if (RETRYABLE.has(error.code)) this.scheduleRetry();
                 },
             );
     }

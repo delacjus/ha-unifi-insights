@@ -10,7 +10,19 @@ export interface MessageBase {
 
 export type UnsubscribeFunc = () => Promise<void>;
 
+/** Socket lifecycle events a card cares about. */
+export type ConnectionEvent = "ready" | "disconnected";
+export type ConnectionListener = (connection: Connection) => void;
+
 export interface Connection {
+    addEventListener(
+        event: ConnectionEvent,
+        listener: ConnectionListener,
+    ): void;
+    removeEventListener(
+        event: ConnectionEvent,
+        listener: ConnectionListener,
+    ): void;
     subscribeMessage<T>(
         callback: (message: T) => void,
         message: MessageBase,

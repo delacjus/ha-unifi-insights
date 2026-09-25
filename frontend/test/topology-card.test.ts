@@ -1,11 +1,13 @@
 import type { TopologyCardConfig } from "../src/config";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/index";
 import { WS_SUBSCRIBE } from "../src/contract";
+import { BACKOFF_BASE_MS } from "../src/data/subscription";
 import type { UnifiInsightsTopologyCard } from "../src/topology-card";
 import type { UitGraphView } from "../src/views/graph-view";
 import {
     SOURCES_MULTI,
+    SOURCES_ONE,
     cleanup,
     fakeHass,
     fixtureSnapshot,
@@ -304,6 +306,54 @@ describe("interaction", () => {
         el.layout = "panel";
         await settle(el);
         expect(graphOf(el).ctrlZoom).toBe(false);
+    });
+});
+
+describe("reconnects", () => {
+    it("greys the graph while the socket is down and reopens the stream on ready", async () => {
+        const { el, fake } = await card();
+        fake.push(fixtureSnapshot());
+        await settle(el);
+        fake.emit("disconnected");
+        await settle(el);
+        expect(q(el, ".badge.stale")!.textContent).toBe(
+            "Stale · Reconnecting…",
+        );
+        expect(graphOf(el).model?.visuals.size).toBeGreaterThan(0);
+
+        fake.emit("ready");
+        await settle(el);
+        expect(fake.subs).toHaveLength(2);
+        expect(fake.hass.callWS).toHaveBeenCalledTimes(2);
+        fake.push(fixtureSnapshot());
+        await settle(el);
+        expect(q(el, ".content.stale")).toBeNull();
+    });
+
+    it("keeps asking for sources while none are loaded yet", async () => {
+        vi.useFakeTimers();
+        try {
+            const fake = fakeHass({ sources: [] });
+            const el = document.createElement(
+                "unifi-insights-topology-card",
+            ) as UnifiInsightsTopologyCard;
+            el.setConfig({ type: TYPE });
+            el.hass = fake.hass;
+            document.body.append(el);
+            await vi.advanceTimersByTimeAsync(0);
+            await el.updateComplete;
+            expect(text(el)).toContain(
+                "No UniFi Insights integration is loaded.",
+            );
+
+            vi.mocked(fake.hass.callWS).mockResolvedValue(SOURCES_ONE);
+            await vi.advanceTimersByTimeAsync(BACKOFF_BASE_MS * 1.2 + 1);
+            await el.updateComplete;
+            expect(fake.subs).toHaveLength(1);
+            expect(text(el)).toContain("Loading network topology…");
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

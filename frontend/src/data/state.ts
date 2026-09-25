@@ -46,6 +46,8 @@ export interface StateInput {
     lastGood?: SiteTopology | undefined;
     error?: WsError | undefined;
     incompatible: boolean;
+    /** The socket is down; `snapshot` is whatever arrived before it dropped. */
+    disconnected?: boolean;
     maxClients: number;
 }
 
@@ -145,7 +147,20 @@ export function deriveState(input: StateInput): CardState {
             notices: [errorNotice(input.error)],
         };
     }
-    if (input.sources !== undefined && input.sources.length === 0)
+    if (input.disconnected) {
+        const current = input.snapshot;
+        const render =
+            current && current.nodes.length > 0 ? current : input.lastGood;
+        if (render)
+            return { phase: "reloading", render, stale: true, notices: [] };
+    }
+    // Sources lists loaded entries only, so it can be empty while an explicitly
+    // bound entry is still setting up; a live snapshot outranks it.
+    if (
+        input.sources !== undefined &&
+        input.sources.length === 0 &&
+        input.snapshot === undefined
+    )
         return { phase: "no_sources", stale: false, notices: [] };
     if (input.binding === undefined) {
         return {

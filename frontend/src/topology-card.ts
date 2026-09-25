@@ -37,7 +37,7 @@ import {
     type Notice,
     type NoticeAction,
 } from "./data/state";
-import { TopologySubscription } from "./data/subscription";
+import { TopologySubscription, backoffDelay } from "./data/subscription";
 import {
     navigate,
     toWsError,
@@ -64,7 +64,7 @@ import {
     type UiState,
 } from "./model/graph-model";
 import { controlStyles, themeTokens } from "./styles";
-import { KIND_KEYS } from "./views/describe";
+import { KIND_KEYS, VIEW_KEYS } from "./views/describe";
 import "./views/detail-panel";
 import "./views/graph-view";
 import type { UitGraphView } from "./views/graph-view";
@@ -72,10 +72,6 @@ import "./views/list-view";
 
 const NARROW_PX = 600;
 const INTEGRATION_PATH = "/config/integrations/integration/unifi_insights";
-const VIEW_KEYS: Record<ViewMode, LocalizeKey> = {
-    graph: "view.graph",
-    list: "view.list",
-};
 const ACTION_KEYS: Record<NoticeAction, LocalizeKey> = {
     integration: "action.integration",
     edit: "action.edit",
@@ -106,6 +102,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
         lastGood: { state: true },
         error: { state: true },
         incompatible: { state: true },
+        disconnected: { state: true },
         ui: { state: true },
         view: { state: true },
         selectedId: { state: true },
@@ -124,6 +121,8 @@ export class UnifiInsightsTopologyCard extends LitElement {
     declare lastGood?: SiteTopology;
     declare error?: WsError;
     declare incompatible: boolean;
+    /** The socket is down: the drawn graph is the last one received. */
+    declare disconnected: boolean;
     declare ui: UiState;
     declare view: ViewMode;
     declare selectedId?: string;
@@ -140,12 +139,22 @@ export class UnifiInsightsTopologyCard extends LitElement {
         onIncompatible: () => {
             this.incompatible = true;
         },
+        onDisconnected: () => {
+            this.disconnected = true;
+        },
+        onReconnected: () => {
+            // Entries may have been added, removed or still be loading.
+            if (this.hass) void this.loadSources(this.hass);
+        },
     });
     private readonly buildModel = createModelBuilder();
     private readonly announcer = new Announcer((message) => {
         this.announcement = message;
     });
     private sourcesFor: Connection | undefined;
+    private sourcesPending = false;
+    private sourcesRetry: ReturnType<typeof setTimeout> | undefined;
+    private sourcesAttempt = 0;
     private boundKey: string | undefined;
     private cardState: CardState = {
         phase: "loading",
@@ -161,6 +170,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
     constructor() {
         super();
         this.incompatible = false;
+        this.disconnected = false;
         this.ui = {
             kinds: new Set(NODE_KINDS),
             clients: "collapsed",
@@ -238,6 +248,21 @@ export class UnifiInsightsTopologyCard extends LitElement {
         this.resizeObserver = undefined;
         this.motionQuery?.removeEventListener("change", this.onMotionChange);
         this.sourcesFor = undefined;
+        this.clearSourcesRetry();
+    }
+
+    /** HA replaces `hass` on every entity state change; only its connection and language matter here. */
+    protected override shouldUpdate(changed: PropertyValues<this>): boolean {
+        if (changed.size !== 1 || !changed.has("hass")) return true;
+        const previous = changed.get("hass") as HomeAssistant | undefined;
+        const hass = this.hass;
+        return (
+            !previous ||
+            !hass ||
+            previous.connection !== hass.connection ||
+            (previous.locale?.language ?? previous.language) !==
+                (hass.locale?.language ?? hass.language)
+        );
     }
 
     protected override willUpdate(changed: PropertyValues<this>): void {
@@ -257,6 +282,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
             lastGood: this.lastGood,
             error: this.error,
             incompatible: this.incompatible,
+            disconnected: this.disconnected,
             maxClients: config.max_clients,
         });
         this.model = this.cardState.render
@@ -299,6 +325,9 @@ export class UnifiInsightsTopologyCard extends LitElement {
         if (!this.isConnected || !hass || !config) return;
         if (this.sourcesFor !== hass.connection) {
             this.sourcesFor = hass.connection;
+            this.disconnected = false;
+            this.clearSourcesRetry();
+            this.sourcesAttempt = 0;
             void this.loadSources(hass);
         }
         const binding = this.binding;
@@ -322,14 +351,38 @@ export class UnifiInsightsTopologyCard extends LitElement {
         );
     }
 
+    /**
+     * Sources list loaded entries only, so during HA startup or a setup retry
+     * they come back empty; keep asking (with backoff) until one loads.
+     */
     private async loadSources(hass: HomeAssistant): Promise<void> {
+        if (this.sourcesPending) return;
+        this.sourcesPending = true;
+        this.clearSourcesRetry();
+        const connection = hass.connection;
         try {
-            this.sources = await hass.callWS<TopologySource[]>({
+            const sources = await hass.callWS<TopologySource[]>({
                 type: WS_SOURCES,
             });
+            if (this.sourcesFor !== connection) return;
+            this.sources = sources;
+            if (sources.length > 0) this.sourcesAttempt = 0;
+            else if (this.isConnected) {
+                this.sourcesRetry = setTimeout(() => {
+                    this.sourcesRetry = undefined;
+                    if (this.hass) void this.loadSources(this.hass);
+                }, backoffDelay(this.sourcesAttempt++));
+            }
         } catch (err) {
-            this.error = toWsError(err);
+            if (this.sourcesFor === connection) this.error = toWsError(err);
+        } finally {
+            this.sourcesPending = false;
         }
+    }
+
+    private clearSourcesRetry(): void {
+        if (this.sourcesRetry !== undefined) clearTimeout(this.sourcesRetry);
+        this.sourcesRetry = undefined;
     }
 
     private applySnapshot(snapshot: SiteTopology): void {
@@ -337,11 +390,21 @@ export class UnifiInsightsTopologyCard extends LitElement {
         this.snapshot = snapshot;
         this.error = undefined;
         this.incompatible = false;
+        this.disconnected = false;
         if (snapshot.status !== "unavailable" && snapshot.nodes.length > 0)
             this.lastGood = snapshot;
+        // Sources were fetched before this entry finished loading (HA startup,
+        // a setup retry): refresh them so selectors and titles catch up.
+        if (
+            this.hass &&
+            this.sources !== undefined &&
+            !this.sources.some((s) => s.entry_id === snapshot.entry_id)
+        )
+            void this.loadSources(this.hass);
         const localize = this.localize;
         let message = localize("announce.updated");
         const firstIssue = snapshot.issues[0];
+        const offline = offlineDevices(snapshot);
         if (snapshot.status === "unavailable" && firstIssue) {
             const notice = issueNotice(
                 firstIssue,
@@ -349,13 +412,8 @@ export class UnifiInsightsTopologyCard extends LitElement {
                 this.config?.max_clients ?? 0,
             );
             message = localize(notice.key, notice.vars);
-        } else if (
-            offlineDevices(snapshot) > 0 &&
-            offlineDevices(snapshot) !== offlineDevices(previous)
-        ) {
-            message = localize("announce.offline", {
-                count: offlineDevices(snapshot),
-            });
+        } else if (offline > 0 && offline !== offlineDevices(previous)) {
+            message = localize("announce.offline", { count: offline });
         }
         this.announcer.announce(message);
     }

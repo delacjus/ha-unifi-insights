@@ -1,3 +1,4 @@
+import type { ViewMode } from "../config";
 import type {
     LinkMedium,
     NodeKind,
@@ -23,6 +24,10 @@ export const STATE_KEYS: Record<NodeState, LocalizeKey> = {
     online: "state.online",
     offline: "state.offline",
     unknown: "state.unknown",
+};
+export const VIEW_KEYS: Record<ViewMode, LocalizeKey> = {
+    graph: "view.graph",
+    list: "view.list",
 };
 export const MEDIUM_KEYS: Record<LinkMedium, LocalizeKey> = {
     wired: "medium.wired",

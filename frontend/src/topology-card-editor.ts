@@ -11,7 +11,6 @@ import {
     type Orientation,
     type SiteOption,
     type TopologyCardConfig,
-    type ViewMode,
 } from "./config";
 import {
     MAX_CLIENTS_PER_SITE,
@@ -22,7 +21,7 @@ import {
 } from "./contract";
 import { fireEvent, type CardHelpers, type HomeAssistant } from "./ha-types";
 import { makeLocalize, type LocalizeFunc, type LocalizeKey } from "./localize";
-import { KIND_KEYS } from "./views/describe";
+import { KIND_KEYS, VIEW_KEYS } from "./views/describe";
 
 /** Site value for a configured site that no longer exists: kept, labelled "(unavailable)". */
 export const STALE_SITE = "current";
@@ -48,10 +47,6 @@ export interface FormField {
     schema?: FormField[];
 }
 
-const VIEW_KEYS: Record<ViewMode, LocalizeKey> = {
-    graph: "view.graph",
-    list: "view.list",
-};
 const CLIENT_KEYS: Record<ClientsMode, LocalizeKey> = {
     collapsed: "clients.collapsed",
     expanded: "clients.expanded",
@@ -258,7 +253,9 @@ export function fromFormData(
     if (typeof data.show_labels === "boolean")
         next.show_labels = data.show_labels;
     const max = data.max_clients;
-    if (
+    // Absent means "the server cap"; pinning today's cap would outlive a change to it.
+    if (max === MAX_CLIENTS_PER_SITE) delete next.max_clients;
+    else if (
         typeof max === "number" &&
         Number.isInteger(max) &&
         max >= 1 &&
