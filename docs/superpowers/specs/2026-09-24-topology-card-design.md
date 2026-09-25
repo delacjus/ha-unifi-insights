@@ -236,8 +236,8 @@ selection opens the same detail panel.
 | Code | Message | Action |
 |---|---|---|
 | `site_unavailable` | Site data temporarily unavailable; will recover automatically. | — |
-| `devices_unavailable` | Device data unavailable; showing clients only. | Integration |
-| `legacy_uplink_missing` (info) | Uplink details unavailable; device links may be missing. | — |
+| `devices_unavailable` | Device data unavailable; showing last known layout. | Integration |
+| `legacy_uplink_missing` (warning) | Uplink details unavailable; device links may be missing. | — |
 | `parents_unresolved` | {n} devices couldn't be placed; shown as separate roots. | — |
 | `clients_truncated` | Showing {included} of {total} clients (limit {max}). | — |
 | `entry_not_found`, `site_not_selected` | The configured site no longer exists or is disabled. | Edit card |
@@ -301,11 +301,20 @@ HA variables only: `--card-background-color`, `--primary-text-color`, `--seconda
 Card uses: `window.customCards`, `getConfigElement`/`getStubConfig`, `getGridOptions`,
 `getCardSize`, `window.loadCardHelpers`, `ha-form` (select/boolean/number/text selectors),
 `ha-card`, `ha-button`, `ha-icon-button`, `ha-select`, `hass.connection.subscribeMessage`,
-`hass.callWS`, `hass.locale`, `hass.themes.darkMode`. Implementation Task 0 records the HA version
-that introduced each and confirms all are ≤ the `hacs.json` minimum (2026.6.0); any that are not
-get a feature-detected fallback. Backend: `StaticPathConfig` / `async_register_static_paths`
-(`homeassistant/components/http/server.py`) and `add_extra_js_url`
-(`homeassistant/components/frontend/__init__.py`) — present in HA 2026.9.3 (verified).
+`hass.callWS`, `hass.locale`, `hass.themes.darkMode`.
+
+| API | File checked at frontend 20260527.4 (HA 2026.6.0) | Present |
+|---|---|---|
+| `getGridOptions` | `src/panels/lovelace/types.ts` | Yes |
+| `loadCardHelpers` | `src/panels/lovelace/ha-panel-lovelace.ts` (imports `src/panels/lovelace/custom-card-helpers.ts`) | Yes |
+| `hui-card` `isPanel` | `src/panels/lovelace/cards/hui-card.ts` | Yes |
+| `_element.layout = this.layout` | `src/panels/lovelace/cards/hui-card.ts` | Yes |
+| `searchParams.edit === "1"` | `src/panels/lovelace/hui-root.ts` | Yes |
+| `ha-form` (`grid`) | `src/components/ha-form/ha-form.ts` | Yes |
+| `ha-selector-select` (`multiple`) | `src/components/ha-selector/ha-selector-select.ts` | Yes |
+| `ha-selector-number` (`mode`) | `src/components/ha-selector/ha-selector-number.ts` | Yes |
+| `StaticPathConfig` / `async_register_static_paths` | `homeassistant/components/http/__init__.py` | Yes |
+| `add_extra_js_url` | `homeassistant/components/frontend/__init__.py` | Yes |
 
 ## 8. Testing and verification
 
@@ -404,3 +413,20 @@ the acceptance checklist. Drafted locally first (`.local/pr-bodies/topology-card
 | Compatibility with current HA versions | 7 |
 | Single-site and multi-site render (AC) | 8 |
 | Smooth desktop + mobile on larger graphs (AC) | 4, 6, 8 (benchmark + live mobile check) |
+
+
+## 11. Amendments (planning, 2026-09-24)
+
+- **A1** `manifest.json` gets `"after_dependencies": ["http", "frontend"]`, **not** `dependencies`. Declaring `frontend` as a dependency makes every config-entry test set up `frontend`, which imports `hass_frontend` — not installed in the test venv or CI. `frontend.py` skips registration unless both `http` and `frontend` are in `hass.config.components`.
+- **A2** Toolbar controls are native `<button>`/`<select>` styled with HA variables, not `ha-button`/`ha-icon-button`/`ha-select` (those are lazy-loaded and not guaranteed to be defined inside a custom card). `ha-card` stays. The editor still uses `ha-form` after `ensureHaForm()`.
+- **A3** Test environment is jsdom (axe-core needs it), not happy-dom. `test/setup.ts` stubs `ResizeObserver` and `matchMedia`.
+- **A4** Notice severity always comes from the payload (`legacy_uplink_missing` is `warning`, `clients_truncated` is `info`). `devices_unavailable` text is "Device data unavailable; showing last known layout." (the contract keeps last-known nodes for that issue).
+- **A5** Subscription dedupe skips `revision === ""`.
+- **A6** An expanded client group keeps its group node (collapsible header); its clients render as the group's children.
+- **A7** Clients whose every ancestor is filtered out go into one root-level group `group:root` ("Clients"); clients with no parent at all go into `group:unconnected` ("Unconnected clients"), always the last root.
+- **A8** On `entry_unloaded` the card calls its now-dead unsubscribe function (errors swallowed) so home-assistant-js-websocket does not resubscribe it after a socket reconnect, then retries with backoff.
+- **A9** Panel detection uses the `layout` property `hui-card` sets on cards (`layout === "panel"`). "Edit card" navigates to `<current path>?edit=1`.
+- **A10** TypeScript is pinned to 6.0.3 (typescript-eslint 8.70.1 supports `<6.1`).
+- **A11** JSON imports widen string literals, so the TS side validates the shared fixture field-by-field at runtime against specs tied to the TS interfaces with `satisfies Record<keyof X, FieldSpec>` (unknown or missing fields fail), rather than a compile-time type-check.
+- **A12** No explicit `requestAnimationFrame` coalescing: Lit already batches every property change within a task into one render, and snapshots arrive at most every few seconds. Pan/zoom never re-renders (the viewport transform is written directly); culling recomputes on zoom end.
+- **A13** Escape clears the selection, which closes the detail panel in one step (the panel is bound to the selection).
