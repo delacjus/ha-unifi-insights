@@ -1,10 +1,12 @@
 // Entry point of the topology card bundle, served by the integration (frontend.py).
-import { CARD_TAG } from "./config";
+import { CARD_TAG, EDITOR_TAG } from "./config";
 import { defineOnce } from "./define";
 import { makeLocalize } from "./localize";
 import { UnifiInsightsTopologyCard } from "./topology-card";
+import { UnifiInsightsTopologyCardEditor } from "./topology-card-editor";
 
 defineOnce(CARD_TAG, UnifiInsightsTopologyCard);
+defineOnce(EDITOR_TAG, UnifiInsightsTopologyCardEditor);
 
 const localize = makeLocalize("en");
 window.customCards ??= [];
