@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.loader import async_get_integration
 from homeassistant.util.hass_dict import HassKey
@@ -55,4 +54,4 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL, str(CARD_PATH), cache_headers=True)]
     )
-    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}-{digest}")
+    _LOGGER.debug("Topology card bundle available at %s?v=%s-%s", CARD_URL, integration.version, digest)
