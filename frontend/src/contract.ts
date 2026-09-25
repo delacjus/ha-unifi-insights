@@ -155,6 +155,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export function parseSnapshot(raw: unknown): SiteTopology {
     if (!isRecord(raw))
         throw new TypeError("Topology snapshot is not an object");
+    if (typeof raw.schema_version !== "number")
+        throw new TypeError(
+            "Topology snapshot field schema_version is not a number",
+        );
     if (raw.schema_version !== SCHEMA_VERSION)
         throw new IncompatibleSchemaError(raw.schema_version);
     for (const key of ["nodes", "edges", "issues", "unresolved"] as const) {
