@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,6 +32,7 @@ def http(hass):
 async def test_registers_bundle_once(hass, http, enable_custom_integrations) -> None:
     """The static path and the module URL are registered exactly once."""
     version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
+    digest = hashlib.sha256(CARD_PATH.read_bytes()).hexdigest()[:8]
     with patch.object(frontend, "add_extra_js_url") as add_js:
         await async_register_frontend(hass)
         await async_register_frontend(hass)
@@ -40,7 +42,7 @@ async def test_registers_bundle_once(hass, http, enable_custom_integrations) -> 
     assert [(c.url_path, c.path, c.cache_headers) for c in configs] == [
         (CARD_URL, str(CARD_PATH), True)
     ]
-    add_js.assert_called_once_with(hass, f"{CARD_URL}?v={version}")
+    add_js.assert_called_once_with(hass, f"{CARD_URL}?v={version}-{digest}")
 
 
 @pytest.mark.parametrize("missing", ["http", "frontend"])

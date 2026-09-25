@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -23,13 +24,20 @@ CARD_PATH: Final = Path(__file__).parent / "frontend" / "topology-card.js"
 _REGISTERED: HassKey[bool] = HassKey(f"{DOMAIN}_frontend_registered")
 
 
+def _bundle_digest() -> str:
+    """Short content hash of the bundle, so a rebuild busts caches too."""
+    return hashlib.sha256(CARD_PATH.read_bytes()).hexdigest()[:8]
+
+
 async def async_register_frontend(hass: HomeAssistant) -> None:
     """
     Serve the card bundle and load it on every dashboard, once per instance.
 
     Called from async_setup, like the topology WebSocket commands, so it runs
     once per Home Assistant instance rather than once per config entry. The
-    URL carries the integration version so each release busts browser caches.
+    bundle is served with long-lived cache headers, so the URL carries the
+    integration version plus a hash of the bundle: a release or a rebuilt
+    bundle under the same version (a fork or test build) busts browser caches.
     http and frontend are after_dependencies, not dependencies: a setup
     without them (a headless install, or the test harness, which has no
     hass_frontend package) simply gets no card. Static paths cannot be
@@ -43,7 +51,8 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         return
     hass.data[_REGISTERED] = True
     integration = await async_get_integration(hass, DOMAIN)
+    digest = await hass.async_add_executor_job(_bundle_digest)
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL, str(CARD_PATH), cache_headers=True)]
     )
-    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}")
+    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}-{digest}")
