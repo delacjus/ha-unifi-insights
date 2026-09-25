@@ -82,3 +82,58 @@ export function cleanup(): void {
     document.body.replaceChildren();
     history.replaceState(null, "", "/");
 }
+
+import { vi } from "vitest";
+import type { HomeAssistant, MessageBase } from "../src/ha-types";
+
+export interface FakeSub {
+    message: MessageBase;
+    callback: (message: unknown) => void;
+    unsubscribe: ReturnType<typeof vi.fn>;
+}
+
+/** A hass object whose sources call and subscribe command are scripted. */
+export function fakeHass(
+    opts: {
+        sources?: TopologySource[];
+        sourcesError?: unknown;
+        subscribeError?: unknown;
+    } = {},
+) {
+    const subs: FakeSub[] = [];
+    const connection = {
+        subscribeMessage: vi.fn(
+            (callback: (m: unknown) => void, message: MessageBase) => {
+                if (opts.subscribeError !== undefined)
+                    return Promise.reject(opts.subscribeError);
+                const unsubscribe = vi.fn(async () => undefined);
+                subs.push({ message, callback, unsubscribe });
+                return Promise.resolve(unsubscribe);
+            },
+        ),
+    };
+    const hass = {
+        connection,
+        callWS: vi.fn(async () => {
+            if (opts.sourcesError !== undefined) throw opts.sourcesError;
+            return opts.sources ?? SOURCES_ONE;
+        }),
+        locale: { language: "en" },
+    } as unknown as HomeAssistant;
+    return {
+        hass,
+        subs,
+        connection,
+        push: (payload: unknown) => subs.at(-1)!.callback(payload),
+    };
+}
+
+/** Let promise callbacks and Lit updates run to completion. */
+export async function settle(el: {
+    updateComplete: Promise<boolean>;
+}): Promise<void> {
+    for (let i = 0; i < 4; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await el.updateComplete;
+    }
+}

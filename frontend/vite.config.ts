@@ -15,6 +15,14 @@ export default defineConfig({
         minify: true,
         sourcemap: false,
         reportCompressedSize: false,
+        rollupOptions: {
+            output: {
+                minify: {
+                    compress: true,
+                    mangle: { toplevel: true },
+                },
+            },
+        },
     },
     test: {
         environment: "jsdom",
