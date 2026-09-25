@@ -70,7 +70,15 @@ async def test_async_setup_registers_the_card(hass) -> None:
 
 
 def test_manifest_loads_after_web_components() -> None:
-    """http/frontend are ordering hints, not hard dependencies (no hass_frontend in tests)."""
+    """http/frontend are ordering hints, not hard dependencies.
+
+    Tests run without hass_frontend.
+    """
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert set(manifest["after_dependencies"]) >= {"http", "frontend"}
     assert "frontend" not in manifest["dependencies"]
+
+
+def test_bundle_is_shipped() -> None:
+    """HACS installs the repository tree, so the built bundle must be committed."""
+    assert CARD_PATH.is_file()
