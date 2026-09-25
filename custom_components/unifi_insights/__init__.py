@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
+import logging
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL, Platform
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+import homeassistant.helpers.config_validation as cv
 
 from .api import (
     ApiKeyAuth,
@@ -33,11 +33,9 @@ from .const import (
     CONF_CONSOLE_ID,
     CONF_CONSOLE_NAME,
     CONNECTION_TYPE_LOCAL,
+    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
     DEFAULT_API_HOST,
     DOMAIN,
-)
-from .const import (
-    CONNECTION_TYPE_REMOTE as CONNECTION_TYPE_REMOTE,
 )
 from .coordinators import (
     UnifiConfigCoordinator,
@@ -45,6 +43,7 @@ from .coordinators import (
     UnifiFacadeCoordinator,
     UnifiProtectCoordinator,
 )
+from .frontend import async_register_frontend
 from .probe import (
     ProbeResult,
     ProbeStatus,
@@ -122,6 +121,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: ARG00
     # id keys are loaded first so the handlers can read them synchronously.
     await async_load_node_keys(hass)
     async_register_websocket_commands(hass)
+    # The card bundle is served the same way: once per instance.
+    await async_register_frontend(hass)
     return True
 
 
