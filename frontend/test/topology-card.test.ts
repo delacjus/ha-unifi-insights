@@ -310,6 +310,88 @@ describe("interaction", () => {
 });
 
 describe("reconnects", () => {
+    it.each([
+        {
+            label: "multiple sites",
+            sources: SOURCES_MULTI,
+            expected: "Choose a site to show.",
+            subscriptions: 0,
+        },
+        {
+            label: "one site",
+            sources: SOURCES_ONE,
+            expected: "Loading network topology…",
+            subscriptions: 1,
+        },
+    ])(
+        "retries a failed sources load and recovers for $label",
+        async ({ sources, expected, subscriptions }) => {
+            vi.useFakeTimers();
+            try {
+                const fake = fakeHass({ sources });
+                vi.mocked(fake.hass.callWS).mockRejectedValueOnce({
+                    code: "unknown_command",
+                    message: "Not ready",
+                });
+                const el = document.createElement(
+                    "unifi-insights-topology-card",
+                ) as UnifiInsightsTopologyCard;
+                el.setConfig({ type: TYPE });
+                el.hass = fake.hass;
+                document.body.append(el);
+                await vi.advanceTimersByTimeAsync(0);
+                await el.updateComplete;
+                expect(el.error?.code).toBe("unknown_command");
+
+                await vi.advanceTimersByTimeAsync(BACKOFF_BASE_MS * 1.2 + 1);
+                await el.updateComplete;
+                expect(fake.hass.callWS).toHaveBeenCalledTimes(2);
+                expect(el.error).toBeUndefined();
+                expect(fake.subs).toHaveLength(subscriptions);
+                expect(text(el)).toContain(expected);
+            } finally {
+                vi.useRealTimers();
+            }
+        },
+    );
+
+    it("keeps a subscription error when sources refresh succeeds", async () => {
+        const fake = fakeHass({
+            subscribeError: { code: "site_not_selected", message: "Site gone" },
+        });
+        const { el } = await card(
+            { entry_id: "entry-1", site_id: "site-1" },
+            fake,
+        );
+        expect(el.error?.code).toBe("site_not_selected");
+
+        fake.emit("ready");
+        await settle(el);
+        expect(fake.hass.callWS).toHaveBeenCalledTimes(2);
+        expect(el.error?.code).toBe("site_not_selected");
+    });
+
+    it("loads sources for a new connection after an old request settles", async () => {
+        const old = fakeHass();
+        let finishOld!: (sources: typeof SOURCES_ONE) => void;
+        const oldRequest = new Promise<typeof SOURCES_ONE>((resolve) => {
+            finishOld = resolve;
+        });
+        vi.mocked(old.hass.callWS).mockReturnValueOnce(oldRequest);
+        const { el } = await card({}, old);
+
+        const current = fakeHass({ sources: SOURCES_MULTI });
+        el.hass = current.hass;
+        await settle(el);
+        expect(current.hass.callWS).not.toHaveBeenCalled();
+
+        finishOld(SOURCES_ONE);
+        await settle(el);
+        expect(current.hass.callWS).toHaveBeenCalledOnce();
+        expect(el.sources).toEqual(SOURCES_MULTI);
+        expect(text(el)).toContain("Choose a site to show.");
+    });
+
     it("greys the graph while the socket is down and reopens the stream on ready", async () => {
         const { el, fake } = await card();
         fake.push(fixtureSnapshot());

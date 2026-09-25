@@ -155,6 +155,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
     private sourcesPending = false;
     private sourcesRetry: ReturnType<typeof setTimeout> | undefined;
     private sourcesAttempt = 0;
+    private sourcesError: WsError | undefined;
     private boundKey: string | undefined;
     private cardState: CardState = {
         phase: "loading",
@@ -340,6 +341,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
             this.snapshot = undefined;
             this.lastGood = undefined;
             this.error = undefined;
+            this.sourcesError = undefined;
             this.incompatible = false;
             this.selectedId = undefined;
         }
@@ -366,18 +368,37 @@ export class UnifiInsightsTopologyCard extends LitElement {
             });
             if (this.sourcesFor !== connection) return;
             this.sources = sources;
+            if (this.sourcesError && this.error === this.sourcesError)
+                this.error = undefined;
+            this.sourcesError = undefined;
             if (sources.length > 0) this.sourcesAttempt = 0;
-            else if (this.isConnected) {
-                this.sourcesRetry = setTimeout(() => {
-                    this.sourcesRetry = undefined;
-                    if (this.hass) void this.loadSources(this.hass);
-                }, backoffDelay(this.sourcesAttempt++));
-            }
+            else this.scheduleSourcesRetry();
         } catch (err) {
-            if (this.sourcesFor === connection) this.error = toWsError(err);
+            if (this.sourcesFor !== connection) return;
+            const previousSourcesError = this.sourcesError;
+            this.sourcesError = toWsError(err);
+            if (!this.error || this.error === previousSourcesError)
+                this.error = this.sourcesError;
+            this.scheduleSourcesRetry();
         } finally {
             this.sourcesPending = false;
+            // A connection change can happen while the old request is pending.
+            if (
+                this.isConnected &&
+                this.sourcesFor !== undefined &&
+                this.sourcesFor !== connection &&
+                this.hass
+            )
+                void this.loadSources(this.hass);
         }
+    }
+
+    private scheduleSourcesRetry(): void {
+        if (!this.isConnected) return;
+        this.sourcesRetry = setTimeout(() => {
+            this.sourcesRetry = undefined;
+            if (this.hass) void this.loadSources(this.hass);
+        }, backoffDelay(this.sourcesAttempt++));
     }
 
     private clearSourcesRetry(): void {
