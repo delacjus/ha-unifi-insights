@@ -45,3 +45,40 @@ export const SOURCES_MULTI: TopologySource[] = [
         sites: [{ id: "default", name: "Default" }],
     },
 ];
+
+import { NODE_KINDS as ALL_KINDS } from "../src/contract";
+import {
+    buildModel,
+    type GraphModel,
+    type UiState,
+} from "../src/model/graph-model";
+
+export function fixtureModel(
+    ui: Partial<UiState> = {},
+    snapshot: SiteTopology = fixtureSnapshot(),
+): GraphModel {
+    return buildModel(snapshot, {
+        kinds: new Set(ALL_KINDS),
+        clients: "collapsed",
+        toggledGroups: new Set(),
+        ...ui,
+    });
+}
+
+export async function mount<T extends HTMLElement>(
+    tag: string,
+    props: Record<string, unknown> = {},
+): Promise<T> {
+    const el = document.createElement(tag) as T & {
+        updateComplete: Promise<boolean>;
+    };
+    Object.assign(el, props);
+    document.body.append(el);
+    await el.updateComplete;
+    return el;
+}
+
+export function cleanup(): void {
+    document.body.replaceChildren();
+    history.replaceState(null, "", "/");
+}
