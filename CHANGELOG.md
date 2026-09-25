@@ -33,14 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - A **WAN Connection** binary sensor for each WAN in use on a gateway (named "WAN", "WAN2" like the UniFi UI), including PPPoE WANs. It follows the gateway's own per-WAN status rather than the port's link light, so a PPPoE session that drops while the cable stays connected shows as disconnected. The raw status, reachability check result and address are attributes. The existing **WAN Status** sensor keeps reporting whether the gateway itself is online. [#162](https://github.com/ruaan-deysel/ha-unifi-insights/issues/162)
 - A **Site-to-Site VPN** binary sensor for each site-to-site VPN tunnel (such as IPsec or SD-WAN), named after the tunnel and attached to the gateway. It follows the gateway's live per-tunnel connection state and turns off when the tunnel is not connected; the tunnel type and raw status are attributes. The site-wide tunnel counts UniFi also reports were not used: they were found to stay at "0 active" even while an IPsec tunnel was up. [#162](https://github.com/ruaan-deysel/ha-unifi-insights/issues/162)
 
@@ -81,14 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - New devices and entities now appear on their own, without reloading the integration. Adopting an access point, switch or Protect camera, plugging in an SFP transceiver, or a device gaining a new capability previously left the matching entities missing until the integration was reloaded or Home Assistant was restarted, because all eleven entity platforms only created entities during setup. Every platform now re-checks the coordinator data as it arrives and adds whatever is new, tracking what it has already created so nothing is duplicated, and honouring the **Client control** option for the entities it gates. [#143](https://github.com/ruaan-deysel/ha-unifi-insights/pull/143)
 - A **Sites** option lets a multi-site console poll only the sites you pick. Unselected sites are not queried at all, which cuts API traffic when Home Assistant only needs one site out of many. Leave it empty to keep polling every site. The picker only appears when the console has more than one site. Devices of a site you deselect can now be deleted from the device page, since they will never update again. [#128](https://github.com/ruaan-deysel/ha-unifi-insights/issues/128)
 
@@ -169,14 +153,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added support for UniFi Power Distribution Units (PDUs) and SmartPower strips (e.g. USP-PDU-Pro, USP-Strip):
   - Per-outlet relay switches (`UnifiOutletSwitch`) to toggle power state on individual outlets
   - Config switches (`UnifiOutletCycleSwitch`) for outlets supporting automatic modem power cycling
@@ -196,14 +172,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added VPN Client switch control (`UnifiInsightsVpnClientSwitch`) to enable or disable VPN client interfaces (e.g., Privado VPN, WireGuard, OpenVPN) directly from Home Assistant (closes #79)
 - Added Policy-Based Routes (Traffic Routes) switch control (`UnifiInsightsPolicyBasedRouteSwitch`) to enable or disable traffic and VPN client routing rules dynamically from Home Assistant (closes #79)
 - Added `VpnClientsEndpoint` and `VpnClient` model in the vendored Network API client targeting `/proxy/network/api/s/{site}/rest/networkconf` with strict `purpose == "vpn-client"` filtering and error envelope propagation
@@ -238,14 +206,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added 5-minute event auto-off timeout (`STALE_EVENT_TIMEOUT`) and reconciliation logic during REST polls and WebSocket reconnections to prevent latched motion or ring states if an "end" frame is missed (closes #101)
 - Added granular per-subscription WebSocket health tracking (`devices` and `events`) to integration diagnostics (closes #101)
 
@@ -273,14 +233,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added support for standalone Protect-only consoles (e.g., UNVR, UNVR-Instant, UNVR-Pro) in both Local and Remote connection modes — onboarding and integration setup gracefully probe both Network and Protect APIs, enabling Protect monitoring and control even when UniFi Network is not installed or enabled (closes #93)
 - Added dual-application connection validation in the config flow (`_async_validate_local_connection` and `_async_validate_remote_console`) to automatically detect available Network and Protect services
 
@@ -294,14 +246,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Expanded the vendored UniFi Network and Protect API packages with typed models
   and endpoints for link aggregation groups (LAG), multi-chassis LAG domains, and
   switch stacks (Network) and for alarm hubs, arm profiles, relays, sirens,
@@ -357,14 +301,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added **Client Control** option (enabled by default) to the integration's options flow — disabling it prevents creation of client allow/block switch entities and client reconnect button entities, eliminating orphaned unavailable entities when clients leave the network (closes #57)
 
 ### Fixed
@@ -377,14 +313,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added per-WiFi-network connected client count sensors (`sensor.<ssid>_connected_clients`) — shows how many clients are currently on each SSID, updated every polling cycle (closes #49)
 - Added WiFi QR code image entities (`image.<ssid>_wifi_qr_code`) — phone cameras can scan these directly to join the network; credentials sourced from the classic API (closes #49)
 - Added `authorize_guest` and `unauthorize_guest` coordinator methods wired to the official Network Integration API `POST /clients/{id}/actions` endpoint with `AUTHORIZE_GUEST_ACCESS` / `UNAUTHORIZE_GUEST_ACCESS`; the previously stubbed `authorize_guest` service now works
@@ -430,14 +358,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added `"homeassistant": "2026.4.1"` minimum version requirement to `manifest.json`
 - Added Aikido security scan instructions (`.github/instructions/aikido_rules.instructions.md`) to enforce pre-commit and PR security scanning
 
@@ -455,14 +375,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added `.github/dependabot.yml` configuration for `devcontainers`, `github-actions`, and `pip` updates with daily checks, grouped updates, labels, and commit message prefixes
 
 ### Changed
@@ -478,14 +390,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Added SFP/SFP+ port differentiation with user-friendly port names (e.g., "SFP+ 1" instead of "Port 25")
 - Added SFP module diagnostic sensors: module model, vendor, type (compliance), and serial number
 - Added SFP module presence binary sensor for all SFP/SFP+ ports with module detail attributes
@@ -515,14 +419,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Expanded the vendored UniFi Network API package with typed models and endpoints for firewall policies, DNS policies, traffic matching lists, vouchers, supporting resources, and legacy site and device lookups
 - Added a full vendored UniFi Protect client with endpoint coverage for cameras, sensors, lights, chimes, NVRs, viewers, live views, events, application files, RTSPS streams, talkback sessions, and WebSocket subscriptions
 - Added enable and disable switches for user-defined UniFi Network firewall rules
@@ -571,15 +467,6 @@ Thanks @delacjus
 - Improved data transformation layer for consistent field naming
 
 ### Added
-
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 
 #### UniFi Network
 
@@ -635,14 +522,6 @@ Thanks @delacjus
 
 ### Added
 
-- Network topology dashboard card, served by the integration and listed in the
-  card picker as **UniFi Insights Topology**. It draws each site's gateway,
-  switches, access points and clients as an interactive graph (pan, zoom,
-  pinch, node details with uplink port, speed and PoE) or an accessible list,
-  with per-card site selection, client grouping, kind filters, and clear
-  loading, partial-data, reconnecting and error states. Configurable entirely
-  from the card editor.
-  [#166](https://github.com/ruaan-deysel/ha-unifi-insights/issues/166)
 - Initial release of UniFi Insights integration
 - Basic sensor support for UniFi Network devices
 - CPU, memory, uptime, and throughput sensors
