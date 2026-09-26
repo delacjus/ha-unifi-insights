@@ -3762,17 +3762,69 @@ class TestUnifiProtectCoordinator:
         assert warning_records == []
         assert any("event33" in r.getMessage() for r in debug_records)
 
-    def test_on_websocket_event_message_error_frame_warns_once_then_debug(
-        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        ("window_ms", "expected_delay"),
+        [
+            (1000, 1.0),
+            (2500, 2.5),
+            (None, 1.0),
+            ("invalid", 1.0),
+            (True, 1.0),
+            (-1, 1.0),
+            (float("inf"), 1.0),
+            (10**1000, 1.0),
+        ],
+    )
+    def test_on_websocket_event_rate_limit_defers_without_warning(
+        self,
+        coordinator: UnifiProtectCoordinator,
+        caplog: pytest.LogCaptureFixture,
+        window_ms: Any,
+        expected_delay: float,
     ) -> None:
-        """Test a console error frame is reported as an error, not as a
-        parse failure, and is capped the same warn-once way.
-        """
+        """A rate-limit frame defers requests without spending warning flags."""
         frame: dict[str, Any] = {
             "error": "Too many requests",
             "name": "TOO_MANY_REQUESTS_ERROR",
-            "windowMs": 1000,
+            "windowMs": window_ms,
             "limit": 10,
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            coordinator._on_websocket_event_message(frame)
+
+        assert coordinator.protect_client is not None
+        coordinator.protect_client._defer_after_rate_limit.assert_called_once_with(
+            expected_delay
+        )
+        assert "requests deferred" in caplog.text
+        assert "limit=10" in caplog.text
+        assert not any(r.levelno == logging.WARNING for r in caplog.records)
+        assert coordinator._ws_event_error_warned is False
+
+    def test_on_websocket_event_rate_limit_in_nested_error(
+        self, coordinator: UnifiProtectCoordinator
+    ) -> None:
+        """An error object can carry its own rate-limit fields."""
+        coordinator._on_websocket_event_message(
+            {
+                "payload": {
+                    "error": {"name": "TOO_MANY_REQUESTS_ERROR", "windowMs": 1500}
+                }
+            }
+        )
+
+        assert coordinator.protect_client is not None
+        coordinator.protect_client._defer_after_rate_limit.assert_called_once_with(1.5)
+        assert coordinator._ws_event_error_warned is False
+
+    def test_on_websocket_event_message_error_frame_warns_once_then_debug(
+        self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Other console errors still warn once, then log at DEBUG."""
+        frame: dict[str, Any] = {
+            "error": "Unexpected stream fault",
+            "name": "UNEXPECTED_ERROR",
         }
 
         with caplog.at_level(logging.DEBUG):
@@ -3791,6 +3843,8 @@ class TestUnifiProtectCoordinator:
             for r in caplog.records
             if r.levelno == logging.DEBUG
         )
+        assert coordinator.protect_client is not None
+        coordinator.protect_client._defer_after_rate_limit.assert_not_called()
 
     def test_on_websocket_event_message_error_frame_keeps_parse_warning(
         self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture

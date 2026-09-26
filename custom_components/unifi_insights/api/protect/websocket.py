@@ -7,9 +7,13 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+
+from custom_components.unifi_insights.api.base import parse_retry_after
+from custom_components.unifi_insights.api.const import RATE_LIMIT_MAX_RETRY_AFTER
 
 if TYPE_CHECKING:
     from .client import UniFiProtectClient
@@ -93,8 +97,8 @@ class ProtectWebSocket:
         # connection (surfacing as WSMsgType.CLOSED/ERROR, which
         # subscribe_with_callback already handles) if no pong comes back,
         # turning a silent hang into a bounded-time reconnect instead.
-        ws = await session.ws_connect(url, headers=headers, heartbeat=30)
-        return ws
+        await self._client._throttle()
+        return await session.ws_connect(url, headers=headers, heartbeat=30)
 
     @asynccontextmanager
     async def subscribe_devices(  # pragma: no cover
@@ -248,6 +252,7 @@ class ProtectWebSocket:
 
         while self._running:
             ws: aiohttp.ClientWebSocketResponse | None = None
+            retry_delay = reconnect_delay
             try:
                 ws = await self._connect(path)
                 _LOGGER.debug(
@@ -279,22 +284,43 @@ class ProtectWebSocket:
                 # stops instead of silently looping into a reconnect below.
                 raise
             except aiohttp.ClientError as err:
-                # Expected during disconnects; log so a hardware/URL problem
-                # is visible instead of a silent reconnect loop, then allow
-                # the reconnection logic below to run.
-                _LOGGER.warning(
-                    "ProtectWebSocket: connection error subscribing to %s at %s: %s",
-                    subscription_type,
-                    path,
-                    err,
-                )
+                if (
+                    isinstance(err, aiohttp.WSServerHandshakeError)
+                    and err.status == HTTPStatus.TOO_MANY_REQUESTS
+                ):
+                    # The server rejected this handshake. Defer REST calls
+                    # and both subscriptions through the same client limiter.
+                    # Bound the reconnect wait like the existing HTTP 429
+                    # path, including a missing or excessive Retry-After.
+                    cooldown = min(
+                        parse_retry_after(err.headers or {}),
+                        RATE_LIMIT_MAX_RETRY_AFTER,
+                    )
+                    self._client._defer_after_rate_limit(cooldown)
+                    retry_delay = max(reconnect_delay, cooldown)
+                    _LOGGER.debug(
+                        "ProtectWebSocket: rate-limited %s handshake; "
+                        "requests deferred for %ss",
+                        subscription_type,
+                        cooldown,
+                    )
+                else:
+                    # Expected during disconnects; keep non-rate-limit
+                    # failures visible while the reconnect loop recovers.
+                    _LOGGER.warning(
+                        "ProtectWebSocket: connection error subscribing to "
+                        "%s at %s: %s",
+                        subscription_type,
+                        path,
+                        err,
+                    )
             finally:
                 _report_state(connected=False)
                 if ws is not None and not ws.closed:
                     await ws.close()
 
             if self._running and reconnect:
-                await asyncio.sleep(reconnect_delay)
+                await asyncio.sleep(retry_delay)
             else:
                 break
 

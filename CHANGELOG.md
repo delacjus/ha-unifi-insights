@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Protect WebSocket connections now share the client's request-rate limiter with polling. Rate-limit responses defer further requests without restarting an established events stream, and recovered rate-limit notices are logged at debug level instead of warning. [#185](https://github.com/ruaan-deysel/ha-unifi-insights/issues/185)
+
 ## [2026.9.9] - 2026-09-26
 
 ### Added
