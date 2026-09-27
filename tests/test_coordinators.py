@@ -3818,6 +3818,25 @@ class TestUnifiProtectCoordinator:
         coordinator.protect_client._defer_after_rate_limit.assert_called_once_with(1.5)
         assert coordinator._ws_event_error_warned is False
 
+    def test_on_websocket_event_rate_limit_without_protect_client(
+        self,
+        coordinator_no_protect: UnifiProtectCoordinator,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A late rate-limit frame is harmless after the Protect client is gone."""
+        with caplog.at_level(logging.DEBUG):
+            coordinator_no_protect._on_websocket_event_message(
+                {
+                    "error": "Too many requests",
+                    "name": "TOO_MANY_REQUESTS_ERROR",
+                    "windowMs": 1000,
+                }
+            )
+
+        assert coordinator_no_protect._ws_event_error_warned is False
+        assert coordinator_no_protect._ws_stream_health["events"]["last_message_at"]
+        assert not any(r.levelno == logging.WARNING for r in caplog.records)
+
     def test_on_websocket_event_message_error_frame_warns_once_then_debug(
         self, coordinator: UnifiProtectCoordinator, caplog: pytest.LogCaptureFixture
     ) -> None:
