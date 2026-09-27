@@ -98,7 +98,19 @@ class ProtectWebSocket:
         # subscribe_with_callback already handles) if no pong comes back,
         # turning a silent hang into a bounded-time reconnect instead.
         await self._client._throttle()
-        return await session.ws_connect(url, headers=headers, heartbeat=30)
+        try:
+            return await session.ws_connect(url, headers=headers, heartbeat=30)
+        except aiohttp.WSServerHandshakeError as err:
+            if err.status == HTTPStatus.TOO_MANY_REQUESTS:
+                # Every subscription path shares this limiter, including the
+                # context-manager APIs that do not run a reconnect loop.
+                self._client._defer_after_rate_limit(
+                    min(
+                        parse_retry_after(err.headers or {}),
+                        RATE_LIMIT_MAX_RETRY_AFTER,
+                    )
+                )
+            raise
 
     @asynccontextmanager
     async def subscribe_devices(  # pragma: no cover
@@ -283,20 +295,14 @@ class ProtectWebSocket:
                 # Cancellation must propagate so the owning task actually
                 # stops instead of silently looping into a reconnect below.
                 raise
-            except aiohttp.ClientError as err:
-                if (
-                    isinstance(err, aiohttp.WSServerHandshakeError)
-                    and err.status == HTTPStatus.TOO_MANY_REQUESTS
-                ):
-                    # The server rejected this handshake. Defer REST calls
-                    # and both subscriptions through the same client limiter.
-                    # Bound the reconnect wait like the existing HTTP 429
-                    # path, including a missing or excessive Retry-After.
+            except aiohttp.WSServerHandshakeError as err:
+                if err.status == HTTPStatus.TOO_MANY_REQUESTS:
+                    # _connect has deferred the shared client limiter. Keep
+                    # this reconnect loop from waking before that cooldown.
                     cooldown = min(
                         parse_retry_after(err.headers or {}),
                         RATE_LIMIT_MAX_RETRY_AFTER,
                     )
-                    self._client._defer_after_rate_limit(cooldown)
                     retry_delay = max(reconnect_delay, cooldown)
                     _LOGGER.debug(
                         "ProtectWebSocket: rate-limited %s handshake; "
@@ -305,8 +311,6 @@ class ProtectWebSocket:
                         cooldown,
                     )
                 else:
-                    # Expected during disconnects; keep non-rate-limit
-                    # failures visible while the reconnect loop recovers.
                     _LOGGER.warning(
                         "ProtectWebSocket: connection error subscribing to "
                         "%s at %s: %s",
@@ -314,6 +318,15 @@ class ProtectWebSocket:
                         path,
                         err,
                     )
+            except aiohttp.ClientError as err:
+                # Expected during disconnects; keep non-rate-limit failures
+                # visible while the reconnect loop recovers.
+                _LOGGER.warning(
+                    "ProtectWebSocket: connection error subscribing to %s at %s: %s",
+                    subscription_type,
+                    path,
+                    err,
+                )
             finally:
                 _report_state(connected=False)
                 if ws is not None and not ws.closed:

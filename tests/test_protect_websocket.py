@@ -92,6 +92,36 @@ async def test_connect_acquires_rate_limit_slot_before_handshake() -> None:
     assert order == ["acquire", "connect"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subscription_type", ["devices", "events"])
+@pytest.mark.parametrize(
+    ("retry_after", "expected_delay"),
+    [("2", 2), ("999", 5), (None, 5)],
+)
+async def test_direct_subscription_429_defers_shared_client(
+    subscription_type: str,
+    retry_after: str | None,
+    expected_delay: int,
+) -> None:
+    """Both context-manager APIs defer later requests after a rejected handshake."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    error = aiohttp.WSServerHandshakeError(MagicMock(), (), status=429, headers=headers)
+    session = MagicMock()
+    session.ws_connect = AsyncMock(side_effect=error)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+    client._defer_after_rate_limit = MagicMock()
+
+    subscribe = getattr(ws_socket, f"subscribe_{subscription_type}")
+    with pytest.raises(aiohttp.WSServerHandshakeError):
+        async with subscribe("nvr1", "default"):
+            pytest.fail("A rejected handshake must not open the subscription")
+
+    client._defer_after_rate_limit.assert_called_once_with(expected_delay)
+
+
 def test_subscribe_path_local_uses_integration_api() -> None:
     """LOCAL WS subscribe path must match the client's own REST convention.
 
@@ -249,7 +279,7 @@ async def test_handshake_429_defers_requests_before_reconnect(
     good_ws = _make_ws([MagicMock(type=aiohttp.WSMsgType.CLOSED)])
     calls = 0
 
-    async def connect(_path: str) -> MagicMock:
+    async def connect(*_args: object, **_kwargs: object) -> MagicMock:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -257,7 +287,10 @@ async def test_handshake_429_defers_requests_before_reconnect(
         ws_socket.stop()
         return good_ws
 
-    ws_socket._connect = AsyncMock(side_effect=connect)
+    session = MagicMock()
+    session.ws_connect = AsyncMock(side_effect=connect)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
     client._defer_after_rate_limit = MagicMock()
 
     with (
