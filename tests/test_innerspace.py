@@ -55,6 +55,26 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("aabbccddeeff", "aa:bb:cc:dd:ee:ff"),
+        ("AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee:ff"),
+        ("aa-bb-cc-dd-ee-ff", "aa:bb:cc:dd:ee:ff"),
+        (" aa.bb.cc.dd.ee.ff ", "aa:bb:cc:dd:ee:ff"),
+        ("0x123456789a", None),
+        ("+123456789ab", None),
+        ("aa:bb:cc:dd:ee:fg", None),
+        ("aabbccddeef", None),
+        (None, None),
+        (123, None),
+    ],
+)
+def test_normalize_innerspace_mac(value: Any, expected: str | None) -> None:
+    """Normalize supported MAC formats and reject malformed input."""
+    assert _normalize_innerspace_mac(value) == expected
+
+
 async def test_diagnostics_includes_redacted_innerspace_and_anonymizes_macs(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,

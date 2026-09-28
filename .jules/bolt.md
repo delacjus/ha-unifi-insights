@@ -1,9 +1,0 @@
-## 2024-11-20 - Fast Hex and Type Checks in Python
-**Learning:** Checking valid hex strings using integer conversion `int(hex_str, 16)` is up to 50% faster than checking each character with `any(ch not in '0123456789abcdef' for ch in hex_str)` or regex `re.match` in Python. Also using exact type matching `if type(x) is not str:` instead of `if not isinstance(x, str):` provides a tiny speed up, though shouldn't be used if subclasses might be expected. Doing manual slices like `f"{s[0:2]}:{s[2:4]}"` is also faster than generator expressions `":".join(s[i:i+2] ...)`.
-**Action:** Use `int(s, 16)` and `ValueError` exception catching to validate hex strings instead of iteration or regex. Use f-strings and slices over join/generators where sizes are statically known (like MAC addresses).
-## 2024-11-20 - Faster Time Formatting
-**Learning:** Using `divmod` instead of sequential `//` and `%` operations, combined with returning early f-strings instead of appending to lists and doing `"".join()`, yields about a 20% performance improvement for time formatting functions.
-**Action:** Use `divmod` and early-return f-strings for mathematical formatting where there are a small, known number of outputs (e.g. days/hours/minutes).
-## 2024-11-20 - Hex String Validation and Type Checks
-**Learning:** Using `int(hex_string, 16)` is an unsafe way to validate purely alphanumeric hex strings because Python's `int` accepts valid numeral prefixes like `0x` and signs like `+` or `-` (e.g., `+123456789ab` and `0x123456789a`). Changing `isinstance(mac, str)` to `type(mac) is str` violates the Liskov substitution principle for minimal performance gains and should be avoided.
-**Action:** Use `set(hex_str).issubset(VALID_HEX)` for fast, safe alphanumeric validation. Ensure we retain `isinstance` for proper inheritance support.

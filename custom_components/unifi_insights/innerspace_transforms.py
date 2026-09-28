@@ -20,15 +20,18 @@ def _to_mapping(record: Any) -> dict[str, Any]:
 
 _VALID_HEX = frozenset("0123456789abcdef")
 
+
 def _normalize_innerspace_mac(mac: Any) -> str | None:
     """Normalize a MAC address to lowercase colon-separated form (aa:bb:cc:dd:ee:ff)."""
     if not isinstance(mac, str):
         return None
     cleaned = mac.strip().lower().replace("-", "").replace(":", "").replace(".", "")
-    # ⚡ Bolt: Fast fail on length and subset instead of generator expr (~40% faster)
-    if len(cleaned) != 12 or not set(cleaned).issubset(_VALID_HEX):
+    if len(cleaned) != _MAC_HEX_LEN or not set(cleaned).issubset(_VALID_HEX):
         return None
-    return f"{cleaned[0:2]}:{cleaned[2:4]}:{cleaned[4:6]}:{cleaned[6:8]}:{cleaned[8:10]}:{cleaned[10:12]}"
+    return (
+        f"{cleaned[0:2]}:{cleaned[2:4]}:{cleaned[4:6]}:"
+        f"{cleaned[6:8]}:{cleaned[8:10]}:{cleaned[10:12]}"
+    )
 
 
 def _valid_number(value: Any) -> float | int | None:
@@ -171,10 +174,7 @@ def transform_innerspace_floor_plan(
     return {
         "id": str(plan_id) if plan_id is not None else None,
         "name": (
-            raw.get("name")
-            or raw.get("title")
-            or proj.get("name")
-            or proj.get("title")
+            raw.get("name") or raw.get("title") or proj.get("name") or proj.get("title")
         ),
         "floor_number": _valid_int(raw.get("floor_number") or raw.get("floorNumber")),
         "site_id": site_id if isinstance(site_id, str) and site_id else None,
