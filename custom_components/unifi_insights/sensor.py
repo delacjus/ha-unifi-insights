@@ -66,8 +66,14 @@ from .innerspace_entity import (
 )
 from .site_internet_activity_sensor import (
     SITE_INTERNET_ACTIVITY_SENSOR_TYPES as SITE_INTERNET_ACTIVITY_SENSOR_TYPES,
+)
+from .site_internet_activity_sensor import (
     UnifiSiteInternetActivitySensor as UnifiSiteInternetActivitySensor,
+)
+from .site_internet_activity_sensor import (
     UnifiSiteInternetActivitySensorEntityDescription as UnifiSiteInternetActivitySensorEntityDescription,
+)
+from .site_internet_activity_sensor import (
     _discover_site_internet_activity_sensors,
 )
 
@@ -113,7 +119,6 @@ def format_uptime(seconds: int | None) -> str | None:
     if seconds is None:
         return None
 
-    # ⚡ Bolt: Fast time formatting using divmod and direct f-strings (~20% faster)
     days, seconds = divmod(seconds, 86400)
     hours, seconds = divmod(seconds, 3600)
     minutes = seconds // 60
