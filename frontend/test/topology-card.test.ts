@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/index";
 import { WS_SUBSCRIBE } from "../src/contract";
 import { BACKOFF_BASE_MS } from "../src/data/subscription";
-import type { UnifiInsightsTopologyCard } from "../src/topology-card";
+import { UnifiInsightsTopologyCard } from "../src/topology-card";
 import type { UitGraphView } from "../src/views/graph-view";
 import {
     SOURCES_MULTI,
@@ -81,6 +81,23 @@ describe("registration", () => {
             min_columns: 6,
             min_rows: 4,
         });
+    });
+
+    it("uses a shrinkable flex basis on .body and min-height: 0 on .content so fixed-height cards do not clip overlays", () => {
+        // jsdom does not compute layout, so verify the CSS contract directly.
+        const cssText = UnifiInsightsTopologyCard.styles
+            .map((s) => s.cssText)
+            .join("\n");
+        expect(cssText).toMatch(
+            /\.body\s*\{[^}]*flex:\s*1 1 280px;[^}]*min-height:\s*0;/s,
+        );
+        expect(cssText).not.toMatch(/\.body\s*\{[^}]*min-height:\s*(280|240)px;/s);
+        expect(cssText).toMatch(
+            /\.content\s*\{[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s,
+        );
+        expect(cssText).toMatch(
+            /@container\s*\(width\s*<\s*600px\)\s*\{[\s\S]*?\.body\s*\{[^}]*flex-basis:\s*240px;/,
+        );
     });
 
     it("builds a stub config from the first source", async () => {

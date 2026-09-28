@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.9.10] - 2026-09-28
+
+### Fixed
+
+- Topology card detail panel popups no longer get truncated at the bottom in narrow bottom-sheet mode or fixed-height Lovelace Sections layouts. `uit-detail-panel` now uses a flex-column host with a shrinkable `.panel` scroll container (`flex: 1 1 auto; min-height: 0`) so narrow panels stay within `max-height: 60%` and scroll internally, while `.body` and `.content` use a shrinkable flex basis (`flex: 1 1 280px` / `240px` below `600px` with `min-height: 0`) so definite-height cards do not overflow and clip the overlay. [#186](https://github.com/ruaan-deysel/ha-unifi-insights/issues/186)
+- Protect WebSocket connections now share the client's request-rate limiter with polling. Rate-limit responses defer further requests without restarting an established events stream, and recovered rate-limit notices are logged at debug level instead of warning. [#185](https://github.com/ruaan-deysel/ha-unifi-insights/issues/185)
+
+## [2026.9.9] - 2026-09-26
+
+### Added
+
+- Historical **Internet Activity** site-level download and upload sensors for rolling **Last Hour** (`1h`), **Last 24 Hours** (`1d`), **Last 7 Days** (`1w`), and **Last 30 Days** (`1m`) windows (`Internet Download (Last Hour)` / `internet_download_1h`, `Internet Upload (Last Hour)` / `internet_upload_1h`, `Internet Download (Last 24 Hours)` / `internet_download_1d`, `Internet Upload (Last 24 Hours)` / `internet_upload_1d`, `Internet Download (Last 7 Days)` / `internet_download_1w`, `Internet Upload (Last 7 Days)` / `internet_upload_1w`, `Internet Download (Last 30 Days)` / `internet_download_1m`, `Internet Upload (Last 30 Days)` / `internet_upload_1m`), matching the UniFi Network **Internet Activity** (`1H`, `1D`, `1W`, `1M`) time ranges. The config coordinator queries the classic `/stat/report/{5minutes|hourly|daily}.site` endpoints every five minutes (`1d` and `1w` share a single `7d` `hourly` query), groups the entities under each site's gateway device (with virtual site fallback), exposes totals in `B` with a `GB` suggested display unit (`SensorDeviceClass.DATA_SIZE`, `SensorStateClass.MEASUREMENT`), and includes `period`, `unifi_window`, `direction`, and `report_interval` attributes. Consoles that do not support `/stat/report/*.site` skip creating the entities cleanly. [#176](https://github.com/ruaan-deysel/ha-unifi-insights/issues/176)
+
+### Fixed
+
+- Consoles without the UniFi InnerSpace application installed (or without classic report endpoints) that answer `/proxy/innerspace/integration/v1/project` with HTTP `200 OK` and the UniFi OS HTML shell (`<!doctype html>...`) no longer log a `WARNING (MainThread) [custom_components.unifi_insights.api.base] Response is not JSON for GET /proxy/innerspace/integration/v1/project` during setup or polling. Expected optional-feature probes now thread `expected_unsupported=True` through `BaseUniFiClient` so non-JSON `2xx` responses on the unredirected target path are logged at `DEBUG` while still raising `UniFiResponseError` for `async_probe_innerspace()` to mark InnerSpace unavailable. Unexpected non-JSON responses and login/SSO redirects continue to log at `WARNING`. [#183](https://github.com/ruaan-deysel/ha-unifi-insights/issues/183)
+- Pinned `frontend` TypeScript devDependency to `6.0.3` to match the `typescript-eslint@8.70.1` peer dependency range (`>=4.8.4 <6.1.0`) and restore `npm ci` in the Frontend CI workflow.
+
 ## [2026.9.8] - 2026-09-26
 
 ### Added

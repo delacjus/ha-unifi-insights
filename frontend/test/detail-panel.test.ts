@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { makeLocalize } from "../src/localize";
-import type { UitDetailPanel } from "../src/views/detail-panel";
-import "../src/views/detail-panel";
+import { UitDetailPanel } from "../src/views/detail-panel";
 import { cleanup, fixtureModel, mount } from "./helpers";
 
 const localize = makeLocalize("en");
@@ -76,4 +75,16 @@ it("closes on request and renders nothing without a selection", async () => {
     expect(closed).toHaveBeenCalledOnce();
     const empty = await panel("dev:gone");
     expect(empty.shadowRoot!.querySelector("section")).toBeNull();
+});
+
+it("constrains .panel as a shrinkable flex child so narrow max-height scrolls instead of truncating", () => {
+    // jsdom does not compute layout, so verify the CSS contract directly.
+    const cssText = UitDetailPanel.styles.map((s) => s.cssText).join("\n");
+    expect(cssText).toMatch(
+        /:host\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
+    );
+    expect(cssText).toMatch(
+        /\.panel\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;/s,
+    );
+    expect(cssText).not.toMatch(/\.panel\s*\{[^}]*height:\s*100%;/s);
 });

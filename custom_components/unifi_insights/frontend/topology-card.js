@@ -139,6 +139,8 @@ var e=[`gateway`,`switch`,`access_point`,`client`,`other`],t=`unifi_insights/top
                 right: 8px;
                 bottom: 8px;
                 width: min(320px, 45%);
+                display: flex;
+                flex-direction: column;
                 z-index: 2;
                 pointer-events: none;
             }
@@ -153,7 +155,8 @@ var e=[`gateway`,`switch`,`access_point`,`client`,`other`],t=`unifi_insights/top
             .panel {
                 pointer-events: auto;
                 box-sizing: border-box;
-                height: 100%;
+                flex: 1 1 auto;
+                min-height: 0;
                 overflow: auto;
                 padding: 4px 16px 16px;
                 background: var(--card-background-color);
@@ -768,14 +771,15 @@ var e=[`gateway`,`switch`,`access_point`,`client`,`other`],t=`unifi_insights/top
             .body {
                 position: relative;
                 display: flex;
-                flex: 1;
-                min-height: 280px;
+                flex: 1 1 280px;
+                min-height: 0;
             }
             .content {
                 position: relative;
                 display: flex;
                 flex: 1;
                 min-width: 0;
+                min-height: 0;
             }
             .content.stale uit-graph-view,
             .content.stale uit-list-view {
@@ -823,7 +827,7 @@ var e=[`gateway`,`switch`,`access_point`,`client`,`other`],t=`unifi_insights/top
                     padding: 8px 12px 0;
                 }
                 .body {
-                    min-height: 240px;
+                    flex-basis: 240px;
                 }
             }
         `]},Ac=`current`,jc=``,Mc={collapsed:`clients.collapsed`,expanded:`clients.expanded`,hidden:`clients.hidden`},Nc={auto:`density.auto`,comfortable:`density.comfortable`,compact:`density.compact`},Pc={vertical:`orientation.vertical`,horizontal:`orientation.horizontal`},Fc={site:`editor.site`,title:`editor.title`,view:`editor.view`,clients:`editor.clients`,kinds:`editor.kinds`,density:`editor.density`,orientation:`editor.orientation`,show_site_selector:`editor.show_site_selector`,show_labels:`editor.show_labels`,max_clients:`editor.max_clients`};function Ic(e,t,n){return e.map(e=>({value:e,label:n(t[e])}))}var Lc=(e,t)=>typeof e==`string`&&t.includes(e);function Rc(e,t){let{entry_id:n,site_id:r}=e;if(n===void 0||r===void 0)return jc;let i=t.findIndex(e=>ae(e.binding,{entry_id:n,site_id:r}));return i>=0?String(i):Ac}function zc(t,n,r){let i=n.map((e,t)=>({value:String(t),label:e.label}));return Rc(t,n)===`current`&&i.push({value:Ac,label:r(`editor.site_unavailable`,{site:t.site_id??``})}),[{name:`site`,selector:{select:{mode:`dropdown`,options:i}}},{name:`title`,selector:{text:{}}},{name:``,type:`grid`,schema:[{name:`view`,selector:{select:{mode:`dropdown`,options:Ic(v,sn,r)}}},{name:`clients`,selector:{select:{mode:`dropdown`,options:Ic(y,Mc,r)}}},{name:`density`,selector:{select:{mode:`dropdown`,options:Ic([`auto`,...b],Nc,r)}}},{name:`orientation`,selector:{select:{mode:`dropdown`,options:Ic(ee,Pc,r)}}}]},{name:`kinds`,selector:{select:{multiple:!0,mode:`list`,options:Ic(e,on,r)}}},{name:`show_site_selector`,selector:{boolean:{}}},{name:`show_labels`,selector:{boolean:{}}},{name:`max_clients`,selector:{number:{min:1,max:500,mode:`box`}}}]}function Bc(t,n){return{site:Rc(t,n),title:t.title??``,view:t.view??`graph`,clients:t.clients??`collapsed`,density:t.density??`auto`,orientation:t.orientation??`vertical`,kinds:t.kinds?[...t.kinds]:[...e],show_site_selector:t.show_site_selector??!1,show_labels:t.show_labels??!0,max_clients:t.max_clients??500}}function Vc(t,n,r){let i={...n},a=t.site??jc;if(a===jc)delete i.entry_id,delete i.site_id;else if(a!==`current`){let e=r[Number(a)];e&&(i.entry_id=e.binding.entry_id,i.site_id=e.binding.site_id)}t.title?i.title=t.title:delete i.title,Lc(t.view,v)&&(i.view=t.view),Lc(t.clients,y)&&(i.clients=t.clients),Lc(t.orientation,ee)&&(i.orientation=t.orientation),Lc(t.density,b)?i.density=t.density:t.density===`auto`&&delete i.density;let o=(t.kinds??[]).filter(t=>Lc(t,e));o.length===e.length?delete i.kinds:o.length>0&&(i.kinds=e.filter(e=>o.includes(e))),typeof t.show_site_selector==`boolean`&&(i.show_site_selector=t.show_site_selector),typeof t.show_labels==`boolean`&&(i.show_labels=t.show_labels);let s=t.max_clients;return s===500?delete i.max_clients:typeof s==`number`&&Number.isInteger(s)&&s>=1&&s<=500&&(i.max_clients=s),i}async function Hc(e=customElements,t=window.loadCardHelpers){e.get(`ha-form`)||await((await t?.())?.createCardElement({type:`entities`,entities:[]})?.constructor)?.getConfigElement?.()}var Uc=class extends N{static properties={hass:{attribute:!1},config:{state:!0},sources:{state:!0},formReady:{state:!0}};sourcesRequested=!1;constructor(){super(),this.formReady=!1}setConfig(e){this.config={...e}}connectedCallback(){super.connectedCallback(),Hc().catch(()=>void 0).then(()=>{this.formReady=!0})}willUpdate(){this.hass&&!this.sourcesRequested&&(this.sourcesRequested=!0,this.hass.callWS({type:t}).then(e=>{this.sources=e},()=>{this.sources=[]}))}render(){let{hass:e,config:t}=this;if(!e||!t)return A;let n=ce(e.locale?.language??e.language);if(!this.formReady)return D`<p>${n(`state.loading`)}</p>`;let r=re(this.sources??[]);return D`<ha-form

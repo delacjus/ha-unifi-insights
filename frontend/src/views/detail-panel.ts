@@ -272,6 +272,8 @@ export class UitDetailPanel extends LitElement {
                 right: 8px;
                 bottom: 8px;
                 width: min(320px, 45%);
+                display: flex;
+                flex-direction: column;
                 z-index: 2;
                 pointer-events: none;
             }
@@ -286,7 +288,8 @@ export class UitDetailPanel extends LitElement {
             .panel {
                 pointer-events: auto;
                 box-sizing: border-box;
-                height: 100%;
+                flex: 1 1 auto;
+                min-height: 0;
                 overflow: auto;
                 padding: 4px 16px 16px;
                 background: var(--card-background-color);

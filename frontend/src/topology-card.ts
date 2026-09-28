@@ -865,14 +865,15 @@ export class UnifiInsightsTopologyCard extends LitElement {
             .body {
                 position: relative;
                 display: flex;
-                flex: 1;
-                min-height: 280px;
+                flex: 1 1 280px;
+                min-height: 0;
             }
             .content {
                 position: relative;
                 display: flex;
                 flex: 1;
                 min-width: 0;
+                min-height: 0;
             }
             .content.stale uit-graph-view,
             .content.stale uit-list-view {
@@ -920,7 +921,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
                     padding: 8px 12px 0;
                 }
                 .body {
-                    min-height: 240px;
+                    flex-basis: 240px;
                 }
             }
         `,

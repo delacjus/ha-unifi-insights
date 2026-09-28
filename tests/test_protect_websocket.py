@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -66,6 +66,60 @@ async def test_connect_passes_heartbeat_to_ws_connect() -> None:
     mock_session.ws_connect.assert_awaited_once()
     _args, kwargs = mock_session.ws_connect.call_args
     assert kwargs.get("heartbeat") == 30
+
+
+@pytest.mark.asyncio
+async def test_connect_acquires_rate_limit_slot_before_handshake() -> None:
+    """The WebSocket handshake shares the Protect client's HTTP budget."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+    order: list[str] = []
+
+    async def acquire_slot() -> None:
+        order.append("acquire")
+
+    async def connect(*_args: object, **_kwargs: object) -> MagicMock:
+        order.append("connect")
+        return MagicMock()
+
+    session = MagicMock()
+    session.ws_connect = AsyncMock(side_effect=connect)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock(side_effect=acquire_slot)
+
+    await ws_socket._connect("/proxy/protect/integration/v1/subscribe/events")
+
+    assert order == ["acquire", "connect"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subscription_type", ["devices", "events"])
+@pytest.mark.parametrize(
+    ("retry_after", "expected_delay"),
+    [("2", 2), ("999", 5), (None, 5)],
+)
+async def test_direct_subscription_429_defers_shared_client(
+    subscription_type: str,
+    retry_after: str | None,
+    expected_delay: int,
+) -> None:
+    """Both context-manager APIs defer later requests after a rejected handshake."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    error = aiohttp.WSServerHandshakeError(MagicMock(), (), status=429, headers=headers)
+    session = MagicMock()
+    session.ws_connect = AsyncMock(side_effect=error)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+    client._defer_after_rate_limit = MagicMock()
+
+    subscribe = getattr(ws_socket, f"subscribe_{subscription_type}")
+    with pytest.raises(aiohttp.WSServerHandshakeError):
+        async with subscribe("nvr1", "default"):
+            pytest.fail("A rejected handshake must not open the subscription")
+
+    client._defer_after_rate_limit.assert_called_once_with(expected_delay)
 
 
 def test_subscribe_path_local_uses_integration_api() -> None:
@@ -205,6 +259,60 @@ async def test_subscribe_with_callback_reconnects_after_client_error(
 
     assert connect_calls == 2
     assert "connection error" in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_after", "expected_delay"),
+    [("2", 2), ("999", 5), (None, 5)],
+)
+async def test_handshake_429_defers_requests_before_reconnect(
+    retry_after: str | None,
+    expected_delay: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A rejected handshake delays the shared client and its next attempt."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    error = aiohttp.WSServerHandshakeError(MagicMock(), (), status=429, headers=headers)
+    good_ws = _make_ws([MagicMock(type=aiohttp.WSMsgType.CLOSED)])
+    calls = 0
+
+    async def connect(*_args: object, **_kwargs: object) -> MagicMock:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise error
+        ws_socket.stop()
+        return good_ws
+
+    session = MagicMock()
+    session.ws_connect = AsyncMock(side_effect=connect)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+    client._defer_after_rate_limit = MagicMock()
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch(
+            "custom_components.unifi_insights.api.protect.websocket.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep,
+    ):
+        await ws_socket.subscribe_with_callback(
+            "nvr1",
+            "default",
+            "events",
+            lambda _msg: None,
+            reconnect_delay=0,
+        )
+
+    assert calls == 2
+    client._defer_after_rate_limit.assert_called_once_with(expected_delay)
+    sleep.assert_awaited_once_with(expected_delay)
+    assert "requests deferred" in caplog.text
+    assert not any(r.levelno == logging.WARNING for r in caplog.records)
 
 
 @pytest.mark.asyncio

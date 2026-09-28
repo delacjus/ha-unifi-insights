@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
@@ -23,6 +24,7 @@ from custom_components.unifi_insights.api import (
     UniFiResponseError,
     UniFiTimeoutError,
 )
+from custom_components.unifi_insights.api.const import PROTECT_RATE_LIMIT_WINDOW
 from custom_components.unifi_insights.const import (
     DEVICE_TYPE_CAMERA,
     DEVICE_TYPE_CHIME,
@@ -1274,6 +1276,30 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # logged at DEBUG afterwards. Reported on its own warned-once flag.
         error: Any = _pick_field(containers, "error")
         if error:
+            error_containers = (
+                [error, *containers] if isinstance(error, dict) else containers
+            )
+            if _pick_field(error_containers, "name") == "TOO_MANY_REQUESTS_ERROR":
+                window_ms = _pick_field(error_containers, "windowMs", "window_ms")
+                cooldown = PROTECT_RATE_LIMIT_WINDOW
+                if isinstance(window_ms, (int, float)) and not isinstance(
+                    window_ms, bool
+                ):
+                    try:
+                        candidate = float(window_ms) / 1000
+                    except OverflowError:
+                        candidate = math.inf
+                    if math.isfinite(candidate) and candidate > 0:
+                        cooldown = candidate
+                if self.protect_client is not None:
+                    self.protect_client._defer_after_rate_limit(cooldown)
+                    _LOGGER.debug(
+                        "Protect coordinator: events stream rate limited "
+                        "(limit=%s, windowMs=%s); requests deferred",
+                        _pick_field(error_containers, "limit"),
+                        window_ms,
+                    )
+                return
             level: int = (
                 logging.DEBUG if self._ws_event_error_warned else logging.WARNING
             )
