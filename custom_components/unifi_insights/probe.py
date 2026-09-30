@@ -87,7 +87,9 @@ def is_transient_error(err: Exception) -> bool:
 async def async_probe_network(client: UniFiNetworkClient) -> ProbeResult:
     """Probe the Network application by listing sites."""
     try:
-        sites = await client.sites.get_all()
+        # A console without the Network application answers with its HTML
+        # page; that is the UNSUPPORTED answer, not a fault worth a warning.
+        sites = await client.sites.get_all(expected_unsupported=True)
     except Exception as err:
         status = classify_error(err)
         _LOGGER.debug("Network API probe: %s (%r)", status, err)
@@ -107,7 +109,8 @@ async def async_probe_protect(client: UniFiProtectClient) -> ProbeResult:
     Protect is usable, a successful response without one means it is empty.
     """
     try:
-        cameras = await client.cameras.get_all()
+        # Likewise for a console without the Protect application (#196).
+        cameras = await client.cameras.get_all(expected_unsupported=True)
     except Exception as err:
         status = classify_error(err)
         _LOGGER.debug("Protect API probe (cameras): %s (%r)", status, err)

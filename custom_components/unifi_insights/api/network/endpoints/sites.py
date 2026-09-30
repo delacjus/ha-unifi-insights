@@ -34,6 +34,7 @@ class SitesEndpoint:
         offset: int | None = None,
         limit: int | None = None,
         filter_str: str | None = None,
+        expected_unsupported: bool = False,
     ) -> list[Site]:
         """
         List all sites.
@@ -42,6 +43,10 @@ class SitesEndpoint:
             offset: Number of sites to skip (pagination).
             limit: Maximum number of sites to return.
             filter_str: Filter string for site properties.
+            expected_unsupported: Whether a non-JSON 2xx response is an
+                expected unsupported-endpoint signal - a console without the
+                Network application. Only lowers the log level of an
+                unredirected response; the call still raises.
 
         Returns:
             List of sites.
@@ -56,7 +61,11 @@ class SitesEndpoint:
             params["filter"] = filter_str
 
         path = self._client.build_api_path("/sites")
-        response = await self._client._get(path, params=params if params else None)
+        response = await self._client._get(
+            path,
+            params=params if params else None,
+            expected_unsupported=expected_unsupported,
+        )
 
         if response is None:
             return []

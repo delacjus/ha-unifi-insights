@@ -352,7 +352,9 @@ async def test_sites_get_all_handles_missing_id_payload() -> None:
     assert result[0].id == "default"
     assert result[0].internal_reference == "default"
     assert result[0].name == "Default"
-    client._get.assert_awaited_once_with(client.build_api_path("/sites"), params=None)
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites"), params=None, expected_unsupported=False
+    )
 
 
 async def test_sites_get_all_skips_malformed_items() -> None:
@@ -1593,6 +1595,62 @@ async def test_handle_response_expected_unsupported_retains_warning_on_redirect(
             request_path=path,
         )
     assert any("Response is not JSON" in r.getMessage() for r in caplog.records)
+
+
+_UNIFI_OS_HTML = "<!doctype html><html lang='en'><title>UniFi OS</title></html>"
+
+
+@pytest.mark.parametrize(
+    ("app", "path"),
+    [
+        ("network", "/proxy/network/integration/v1/sites"),
+        ("protect", "/proxy/protect/integration/v1/cameras"),
+    ],
+)
+@pytest.mark.parametrize("case", ["opted-in", "default", "opted-in-redirected"])
+async def test_probe_listing_expected_unsupported_log_level(
+    caplog: pytest.LogCaptureFixture,
+    app: str,
+    path: str,
+    case: str,
+) -> None:
+    """The listings the setup probes call opt into DEBUG for an HTML page.
+
+    A console without the application answers its path with the UniFi OS
+    HTML page at status 200 (issue #196). Only an opted-in, unredirected
+    response drops to DEBUG; the default call - the one coordinator polling
+    makes - and a redirected response still warn. Every case still raises.
+    """
+    client = _network_client() if app == "network" else _protect_client()
+    response = _make_response(
+        status=200,
+        text=_UNIFI_OS_HTML,
+        json_side_effect=aiohttp.ContentTypeError(MagicMock(), MagicMock()),
+        path=path,
+        history=(MagicMock(),) if case == "opted-in-redirected" else (),
+    )
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=response)
+    context.__aexit__ = AsyncMock(return_value=None)
+    session = MagicMock()
+    session.request = MagicMock(return_value=context)
+    client._ensure_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+    listing = (
+        client.sites.get_all
+        if isinstance(client, UniFiNetworkClient)
+        else client.cameras.get_all
+    )
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(UniFiResponseError) as exc:
+        await listing(expected_unsupported=case != "default")
+
+    assert exc.value.status_code == 200
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    if case == "opted-in":
+        assert warnings == []
+    else:
+        assert warnings == [f"Response is not JSON for GET {path}: {_UNIFI_OS_HTML}"]
 
 
 async def test_handle_response_empty_body_returns_none() -> None:

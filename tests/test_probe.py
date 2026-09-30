@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -20,6 +21,8 @@ from custom_components.unifi_insights.api import (
     UniFiTimeoutError,
 )
 from custom_components.unifi_insights.api.innerspace import UniFiInnerSpaceClient
+from custom_components.unifi_insights.api.network import UniFiNetworkClient
+from custom_components.unifi_insights.api.protect import UniFiProtectClient
 from custom_components.unifi_insights.probe import (
     ProbeStatus,
     async_probe_innerspace,
@@ -95,6 +98,7 @@ async def test_probe_network_statuses() -> None:
     result = await async_probe_network(client)
     assert result.status is ProbeStatus.UNREACHABLE
     assert result.error is error
+    client.sites.get_all.assert_awaited_once_with(expected_unsupported=True)
 
 
 @pytest.mark.parametrize(
@@ -141,6 +145,7 @@ async def test_probe_protect_statuses(
     result = await async_probe_protect(client)
 
     assert result.status is ProbeStatus(expected)
+    client.cameras.get_all.assert_awaited_once_with(expected_unsupported=True)
 
 
 async def test_probe_with_client_classifies_context_errors() -> None:
@@ -290,3 +295,77 @@ async def test_probe_innerspace_html_response_logs_no_warning(
         for r in caplog.records
         if r.levelno == logging.DEBUG
     )
+
+
+@pytest.mark.parametrize(
+    ("client_cls", "probe", "path", "probe_log"),
+    [
+        (
+            UniFiNetworkClient,
+            async_probe_network,
+            "/proxy/network/integration/v1/sites",
+            "Network API probe: unsupported",
+        ),
+        (
+            UniFiProtectClient,
+            async_probe_protect,
+            "/proxy/protect/integration/v1/cameras",
+            "Protect API probe (cameras): unsupported",
+        ),
+    ],
+    ids=["network", "protect"],
+)
+async def test_probe_absent_application_html_logs_no_warning(
+    caplog: pytest.LogCaptureFixture,
+    client_cls: type[UniFiNetworkClient | UniFiProtectClient],
+    probe: Any,
+    path: str,
+    probe_log: str,
+) -> None:
+    """A console without the application does not warn at setup (issue #196).
+
+    It answers the application's path with the UniFi OS HTML page at status
+    200. The probe classifies that as UNSUPPORTED, so setup carries on
+    without the application; the page is expected here, not a fault.
+    """
+    client = client_cls(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    response = MagicMock()
+    response.status = 200
+    response.text = AsyncMock(
+        return_value="<!doctype html><html lang='en'><title>UniFi OS</title></html>"
+    )
+    response.headers = {}
+    response.method = "GET"
+    response.history = ()
+    response.url = MagicMock()
+    response.url.path = path
+    response.json = AsyncMock(
+        side_effect=aiohttp.ContentTypeError(MagicMock(), MagicMock())
+    )
+
+    request_ctx = MagicMock()
+    request_ctx.__aenter__ = AsyncMock(return_value=response)
+    request_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = MagicMock()
+    mock_session.request = MagicMock(return_value=request_ctx)
+    client._ensure_session = AsyncMock(return_value=mock_session)
+    client._throttle = AsyncMock()
+
+    with caplog.at_level(logging.DEBUG):
+        result = await probe(client)
+
+    assert result.status is ProbeStatus.UNSUPPORTED
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    debug_messages = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+    ]
+    assert any(
+        f"Expected unsupported-endpoint non-JSON response for GET {path}" in m
+        for m in debug_messages
+    )
+    assert any(probe_log in m and "200" in m for m in debug_messages)

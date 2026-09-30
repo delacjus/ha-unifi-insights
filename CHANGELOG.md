@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Topology card narrow bottom-sheet detail panel now expands up to the full available canvas height (`max-height: calc(100% - 8px)` instead of `60%`) with a sticky header/close button, allowing full 8-row switch and access point details (including **Open device**) to display without unnecessary scrolling in 1-column Lovelace Sections cards. [#186](https://github.com/ruaan-deysel/ha-unifi-insights/issues/186)
+- A console without UniFi Protect no longer logs `Response is not JSON for GET /proxy/protect/integration/v1/cameras` on every Home Assistant start, and a console without UniFi Network no longer logs the same warning for `/proxy/network/integration/v1/sites`. The setup probes now treat the console's HTML page as the expected "application not installed" answer and log it at DEBUG. Coordinator polling and redirected responses still warn. [#196](https://github.com/ruaan-deysel/ha-unifi-insights/issues/196)
 
 ## [2026.9.10] - 2026-09-28
 
