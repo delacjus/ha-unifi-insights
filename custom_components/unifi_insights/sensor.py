@@ -547,8 +547,9 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         icon="mdi:network",
         # Only show on switch devices (devices with 'switching' feature)
         required_feature="switching",
-        value_fn=lambda stats: len(
-            [c for c in stats.get("clients", []) if _get_client_type(c) == "WIRED"]
+        # Optimization: avoid len([...]) temporary list allocation
+        value_fn=lambda stats: sum(
+            1 for c in stats.get("clients", []) if _get_client_type(c) == "WIRED"
         ),
     ),
     UnifiInsightsSensorEntityDescription(
@@ -558,8 +559,9 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         icon="mdi:wifi",
         # Only show on access point devices (devices with 'accessPoint' feature)
         required_feature="accessPoint",
-        value_fn=lambda stats: len(
-            [c for c in stats.get("clients", []) if _get_client_type(c) == "WIRELESS"]
+        # Optimization: avoid len([...]) temporary list allocation
+        value_fn=lambda stats: sum(
+            1 for c in stats.get("clients", []) if _get_client_type(c) == "WIRELESS"
         ),
     ),
     UnifiInsightsSensorEntityDescription(
@@ -885,8 +887,9 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         name="Wired Clients",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:ethernet",
-        value_fn=lambda clients: len(
-            [c for c in clients.values() if _get_client_type(c) == "WIRED"]
+        # Optimization: avoid len([...]) temporary list allocation
+        value_fn=lambda clients: sum(
+            1 for c in clients.values() if _get_client_type(c) == "WIRED"
         ),
     ),
     UnifiInsightsSensorEntityDescription(
@@ -895,8 +898,9 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         name="Wireless Clients",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:wifi",
-        value_fn=lambda clients: len(
-            [c for c in clients.values() if _get_client_type(c) == "WIRELESS"]
+        # Optimization: avoid len([...]) temporary list allocation
+        value_fn=lambda clients: sum(
+            1 for c in clients.values() if _get_client_type(c) == "WIRELESS"
         ),
     ),
 )
