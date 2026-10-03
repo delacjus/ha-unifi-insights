@@ -21,6 +21,14 @@ from .innerspace_transforms import (
 )
 
 
+# Optimization: Move status_map to module level to avoid reallocating it on every function call.
+_DEVICE_STATUS_MAP = {
+    "online": "connected",
+    "offline": "disconnected",
+    "unknown": "unknown",
+}
+
+
 def map_device_status(lib_status: str | None) -> str:
     """
     Map library device status to internal format.
@@ -35,12 +43,7 @@ def map_device_status(lib_status: str | None) -> str:
     if not lib_status:
         return "unknown"
 
-    status_map = {
-        "online": "connected",
-        "offline": "disconnected",
-        "unknown": "unknown",
-    }
-    return status_map.get(lib_status.lower(), lib_status)
+    return _DEVICE_STATUS_MAP.get(lib_status.lower(), lib_status)
 
 
 def transform_network_device(lib_device: dict) -> dict:
