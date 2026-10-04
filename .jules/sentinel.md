@@ -1,0 +1,4 @@
+## 2025-02-28 - [CRITICAL] Fix partial credential redaction
+**Vulnerability:** The `_redact` function in `custom_components/unifi_insights/api/base.py` used `.rsplit(":", 1)[0]` on the matched regex string to replace sensitive values. This logic only split the string on the *last* colon, meaning if a password, token, or API key contained a colon (e.g., `{"token": "abc:def"}`), the portion before the colon was left unredacted in logs (e.g. `{"token": "abc: "**REDACTED**"`).
+**Learning:** String splitting on formatting characters (like colons) without accounting for the possibility that those characters exist within the user data or secret payload creates a data leakage risk in logging utilities.
+**Prevention:** Use regex capture groups to explicitly isolate the target area (e.g. the key) from the value when performing substitutions or redactions. Avoid relying on simple string manipulations like `rsplit` unless the data structure is rigidly guaranteed.
