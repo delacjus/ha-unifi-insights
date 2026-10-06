@@ -342,6 +342,53 @@ data:
   duration_minutes: 480
 ```
 
+## Carrier Fabric (ISP)
+
+UniFi Insights supports monitoring and service management for UniFi Carrier Fabric (ISP) deployments.
+
+### Getting an API Key
+
+Carrier Fabric requires an ISP API key (type ISP) with the `read:subscribers` and `read:plans` scopes for monitoring. If you plan to use service actions to suspend or resume subscribers, the key also requires the `suspend:service` and `resume:service` scopes.
+
+Refer to the [Carrier Fabric Developer Documentation](https://developer.ui.com/carrier-fabric/v1.0.0/getting-started) for details on creating an ISP API key. Console and Site Manager API keys do not work for Carrier Fabric.
+
+### Configuration
+
+Carrier Fabric is configured as a separate entry type. When adding the integration in Home Assistant (**Settings** → **Devices & Services** → **Add Integration** → **UniFi Insights**), select **Carrier Fabric (ISP)** and provide your ISP API key. Polling runs every 5 minutes.
+
+### Options
+
+The Carrier Fabric configuration entry provides two optional settings (both disabled by default):
+
+- **Track subscribers**: When enabled, creates a device for each subscriber, providing a service state sensor and an assigned plan sensor. Each subscriber device is named after the subscriber's name (or their subscriber number when no name is set), so these names are customer data that anyone with access to your Home Assistant will see.
+- **Enable service actions**: When enabled, permits executing the `carrier_suspend_subscriber` and `carrier_resume_subscriber` service actions to suspend or resume subscriber internet access.
+
+### Entities
+
+By default, the integration creates:
+- **Primary sensors**: Total subscribers, suspended subscribers.
+- **Diagnostic sensors**: Pending assignment subscribers, provisioned subscribers, installed subscribers, unassigned subscribers, active service plans count, and per-plan subscribers on each service plan (archived plans are disabled by default).
+
+When subscriber tracking is enabled, each subscriber device includes:
+- **Primary sensor**: Subscriber service state (`pending_assignment`, `provisioned`, `installed`, `suspended`, or `unknown` when the API reports a state this integration does not recognize).
+- **Diagnostic sensor**: Subscriber service plan (the name of the subscriber's assigned service plan).
+
+### Services
+
+When "Enable service actions" is active and your API key has the required scopes:
+- `unifi_insights.carrier_suspend_subscriber`: Stops a subscriber's internet service (optional `reason`, maximum 1024 characters). Target must be a single Carrier Fabric subscriber device or entity. Requires `suspend:service` scope.
+- `unifi_insights.carrier_resume_subscriber`: Restores a subscriber's internet service. Target must be a single Carrier Fabric subscriber device or entity. Requires `resume:service` scope.
+
+### Privacy & Diagnostics
+
+Subscriber privacy is strictly preserved:
+- Personal data such as email addresses, service addresses, customer notes, custom metadata, and suspension reasons are never exposed in Home Assistant entities or state attributes.
+- Downloadable diagnostics reports contain only an allowlist of fields, and subscriber names and subscriber numbers are redacted from them.
+
+### Out of Scope
+
+The integration does not support plan assignment, subscriber creation or modification, or host attach/detach operations.
+
 ## Network topology card
 
 The integration ships a Lovelace card that draws each site's network: the

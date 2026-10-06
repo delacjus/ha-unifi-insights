@@ -12,6 +12,7 @@ from homeassistant.components.diagnostics import REDACTED, async_redact_data
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 
 from .api import __version__ as api_version
+from .carrier_fabric_data import CarrierFabricData
 from .const import (
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
@@ -22,6 +23,10 @@ from .const import (
     MOBILITY_WORKSPACE_STATUSES,
     SITE_MANAGER_COLLECTIONS,
 )
+from .coordinators.carrier_fabric import (
+    SERVICE_PLAN_ALLOWLIST,
+    SUBSCRIBER_ALLOWLIST,
+)
 from .innerspace_transforms import build_innerspace_diagnostics_summary
 
 if TYPE_CHECKING:
@@ -30,6 +35,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from . import UnifiInsightsConfigEntry
+    from .carrier_fabric_data import CarrierFabricConfigEntry
     from .coordinators.mobility import UnifiInsightsMobilityCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -366,6 +372,11 @@ def _site_manager_summary(
     }
 
 
+# Subscriber name and number identify a customer; they are the only allowlisted
+# Carrier Fabric fields that are personal data.
+CARRIER_REDACT_KEYS = frozenset({"name", "subscriberNumber"})
+
+
 def _count_known(values: Iterable[Any], known: tuple[str, ...]) -> dict[str, int]:
     """Count enum values, folding anything unpublished into "other"."""
     counts: dict[str, int] = {}
@@ -422,11 +433,64 @@ def _mobility_summary(coordinator: UnifiInsightsMobilityCoordinator) -> dict[str
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: UnifiInsightsConfigEntry
+    hass: HomeAssistant, entry: UnifiInsightsConfigEntry | CarrierFabricConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     _ = hass
     _LOGGER.debug("Gathering diagnostics data for UniFi Insights")
+
+    if isinstance(entry.runtime_data, CarrierFabricData):
+        carrier_data = entry.runtime_data
+        carrier_coordinator = carrier_data.coordinator
+        coord_data = carrier_coordinator.data
+
+        summary = (
+            coord_data.get("summary", {})
+            if isinstance(coord_data.get("summary"), dict)
+            else {}
+        )
+
+        last_exc = getattr(carrier_coordinator, "last_exception", None)
+        last_exc_type = last_exc.__class__.__name__ if last_exc is not None else None
+
+        # Only allowlisted keys are exported: a field the API adds later never
+        # reaches a diagnostics file until it has been reviewed for privacy.
+        exported_plans: dict[str, Any] = {
+            plan_id: {
+                key: value
+                for key, value in plan_data.items()
+                if key in SERVICE_PLAN_ALLOWLIST
+            }
+            for plan_id, plan_data in coord_data.get("service_plans", {}).items()
+        }
+        exported_subs: dict[str, Any] = {
+            sub_id: async_redact_data(
+                {
+                    key: value
+                    for key, value in sub_data.items()
+                    if key in SUBSCRIBER_ALLOWLIST
+                },
+                CARRIER_REDACT_KEYS,
+            )
+            for sub_id, sub_data in coord_data.get("subscribers", {}).items()
+        }
+
+        return {
+            "entry": async_redact_data(entry.as_dict(), TO_REDACT),
+            "coordinator": {
+                "last_update_success": getattr(
+                    carrier_coordinator, "last_update_success", True
+                ),
+                "last_exception_type": last_exc_type,
+            },
+            "summary": summary,
+            "data": {
+                "org_id": coord_data.get("org_id"),
+                "summary": summary,
+                "service_plans": exported_plans,
+                "subscribers": exported_subs,
+            },
+        }
 
     data = entry.runtime_data
     coordinator = data.coordinator

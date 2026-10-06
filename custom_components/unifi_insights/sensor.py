@@ -86,8 +86,12 @@ if TYPE_CHECKING:
     from homeassistant.helpers.typing import StateType
 
     from . import UnifiInsightsConfigEntry
+    from .carrier_fabric_data import CarrierFabricConfigEntry
 
 from homeassistant.helpers.entity import DeviceInfo
+
+from .carrier_fabric_data import CarrierFabricData
+from .carrier_fabric_sensor import async_setup_carrier_fabric_sensors
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1375,11 +1379,14 @@ def _discover_protect_sensors(
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: UnifiInsightsConfigEntry,
+    config_entry: UnifiInsightsConfigEntry | CarrierFabricConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors for UniFi Insights integration."""
-    _ = hass
+    if isinstance(config_entry.runtime_data, CarrierFabricData):
+        await async_setup_carrier_fabric_sensors(hass, config_entry, async_add_entities)
+        return
+
     _LOGGER.debug("Setting up UniFi Insights sensors")
 
     # Migrate existing entities to pick up new suggested_unit_of_measurement

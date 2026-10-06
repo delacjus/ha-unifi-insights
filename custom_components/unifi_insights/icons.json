@@ -73,6 +73,36 @@
       "outlet_power_factor": {
         "default": "mdi:angle-acute"
       },
+      "total_subscribers": {
+        "default": "mdi:account-group"
+      },
+      "suspended_subscribers": {
+        "default": "mdi:account-cancel"
+      },
+      "subscribers_pending_assignment": {
+        "default": "mdi:account-clock"
+      },
+      "subscribers_provisioned": {
+        "default": "mdi:account-cog"
+      },
+      "subscribers_installed": {
+        "default": "mdi:account-check"
+      },
+      "unassigned_subscribers": {
+        "default": "mdi:account-question"
+      },
+      "active_service_plans": {
+        "default": "mdi:format-list-bulleted-type"
+      },
+      "plan_subscribers": {
+        "default": "mdi:account-multiple"
+      },
+      "subscriber_state": {
+        "default": "mdi:account-badge"
+      },
+      "subscriber_service_plan": {
+        "default": "mdi:tag-outline"
+      },
       "mobility_state": {
         "default": "mdi:router-wireless"
       },
@@ -267,6 +297,8 @@
     "delete_voucher": "mdi:ticket-outline",
     "trigger_alarm": "mdi:alarm-light",
     "create_liveview": "mdi:view-grid",
-    "set_liveview": "mdi:view-grid-plus"
+    "set_liveview": "mdi:view-grid-plus",
+    "carrier_suspend_subscriber": "mdi:account-cancel",
+    "carrier_resume_subscriber": "mdi:account-check"
   }
 }

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+import uuid
+from http import HTTPStatus
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import (
     config_validation as cv,
@@ -18,6 +21,8 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
+from .api import UniFiAuthenticationError, UniFiError
+from .carrier_fabric_data import CarrierFabricData
 from .const import (
     CHIME_RINGTONE_CHRISTMAS,
     CHIME_RINGTONE_CUSTOM_1,
@@ -26,6 +31,10 @@ from .const import (
     CHIME_RINGTONE_DIGITAL,
     CHIME_RINGTONE_MECHANICAL,
     CHIME_RINGTONE_TRADITIONAL,
+    CONF_CARRIER_ACTIONS,
+    CONF_CONNECTION_TYPE,
+    CONNECTION_TYPE_CARRIER_FABRIC,
+    DEFAULT_CARRIER_ACTIONS,
     DOMAIN,
     HDR_MODE_AUTO,
     HDR_MODE_OFF,
@@ -35,6 +44,8 @@ from .const import (
     LIGHT_MODE_OFF,
     MOBILITY_DEVICE_PREFIX,
     SERVICE_AUTHORIZE_GUEST,
+    SERVICE_CARRIER_RESUME_SUBSCRIBER,
+    SERVICE_CARRIER_SUSPEND_SUBSCRIBER,
     SERVICE_CREATE_LIVEVIEW,
     SERVICE_DELETE_VOUCHER,
     SERVICE_GENERATE_VOUCHER,
@@ -57,6 +68,7 @@ from .const import (
     VIDEO_MODE_SLOW_SHUTTER,
     VIDEO_MODE_SPORT,
 )
+from .coordinators.carrier_fabric import InvalidSubscriberIdError
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -82,13 +94,17 @@ def _get_titled_coordinators(hass: HomeAssistant) -> list[tuple[str, Any]]:
     return [
         (entry.title, entry.runtime_data.coordinator)
         for entry in hass.config_entries.async_entries(DOMAIN)
-        if hasattr(entry, "runtime_data") and entry.runtime_data
+        if hasattr(entry, "runtime_data")
+        and entry.runtime_data
+        and not isinstance(entry.runtime_data, CarrierFabricData)
     ]
 
 
 def _coord_data(entry: Any) -> dict[str, Any] | None:
     """Extract coordinator data dictionary if available and valid."""
     runtime_data = getattr(entry, "runtime_data", None)
+    if isinstance(runtime_data, CarrierFabricData):
+        return None
     coord = getattr(runtime_data, "coordinator", None) if runtime_data else None
     if coord and hasattr(coord, "data") and isinstance(coord.data, dict):
         return coord.data
@@ -657,7 +673,9 @@ def _get_coordinator_for_network_resource(
     entries = [
         entry
         for entry in hass.config_entries.async_entries(DOMAIN)
-        if hasattr(entry, "runtime_data") and entry.runtime_data
+        if hasattr(entry, "runtime_data")
+        and entry.runtime_data
+        and not isinstance(entry.runtime_data, CarrierFabricData)
     ]
     if not entries:
         msg = "No UniFi Insights coordinator found"
@@ -841,6 +859,7 @@ def _get_coordinator_for_protect_resource(
         for entry in hass.config_entries.async_entries(DOMAIN)
         if hasattr(entry, "runtime_data")
         and entry.runtime_data
+        and not isinstance(entry.runtime_data, CarrierFabricData)
         and getattr(entry.runtime_data.coordinator, "protect_client", None) is not None
     ]
     if not protect_entries:
@@ -1254,6 +1273,280 @@ SET_LIVEVIEW_SCHEMA = vol.Schema(
         vol.Required("liveview_id"): cv.string,
     }
 )
+
+
+# Schemas for Carrier Fabric services
+MAX_SUSPEND_REASON_LENGTH: Final = 1024
+
+CARRIER_SUSPEND_SUBSCRIBER_SCHEMA = vol.Schema(
+    {
+        vol.Optional("device_id"): TARGET_SELECTOR_SCHEMA,
+        vol.Optional("entity_id"): TARGET_SELECTOR_SCHEMA,
+        vol.Optional("target"): TARGET_DICT_SCHEMA,
+        vol.Optional("reason"): vol.All(
+            cv.string, vol.Length(max=MAX_SUSPEND_REASON_LENGTH)
+        ),
+    }
+)
+
+CARRIER_RESUME_SUBSCRIBER_SCHEMA = vol.Schema(
+    {
+        vol.Optional("device_id"): TARGET_SELECTOR_SCHEMA,
+        vol.Optional("entity_id"): TARGET_SELECTOR_SCHEMA,
+        vol.Optional("target"): TARGET_DICT_SCHEMA,
+    }
+)
+
+
+def _extract_carrier_targets(call: ServiceCall) -> list[str]:
+    """
+    Extract all target entity or device IDs from a service call.
+
+    Subscribers are devices, so area targets are not supported and are
+    ignored wherever they appear.
+    """
+    targets: list[str] = []
+
+    def _add(val: Any) -> None:
+        if isinstance(val, list):
+            targets.extend(
+                item.strip() for item in val if isinstance(item, str) and item.strip()
+            )
+        elif isinstance(val, str) and val.strip():
+            targets.append(val.strip())
+
+    if "target" in call.data and isinstance(call.data["target"], dict):
+        td = call.data["target"]
+        _add(td.get("entity_id"))
+        _add(td.get("device_id"))
+
+    _add(call.data.get("entity_id"))
+    _add(call.data.get("device_id"))
+
+    deduped: list[str] = []
+    for t in targets:
+        if t not in deduped:
+            deduped.append(t)
+    return deduped
+
+
+def _resolve_carrier_subscriber_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> tuple[Any, str]:
+    """Resolve a service call to a Carrier Fabric coordinator and subscriber ID."""
+    targets = _extract_carrier_targets(call)
+    if not targets:
+        msg = "At least one target must be specified"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_target_required",
+        )
+    if len(targets) > 1:
+        msg = (
+            f"Multiple targets specified for {call.service}; "
+            "action only supports a single target"
+        )
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_multiple_targets",
+            translation_placeholders={"service": call.service},
+        )
+
+    target_id = targets[0]
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    dev_entry: dr.DeviceEntry | dr.ChildDeviceEntry | None = None
+
+    if "." in target_id:
+        ent_entry = ent_reg.async_get(target_id)
+        if ent_entry is None:
+            msg = f"Target entity '{target_id}' not found in entity registry"
+            raise ServiceValidationError(
+                msg,
+                translation_domain=DOMAIN,
+                translation_key="carrier_target_not_found",
+                translation_placeholders={"target": target_id},
+            )
+        if ent_entry.platform != DOMAIN:
+            msg = f"Target '{target_id}' is not a UniFi Insights entity"
+            raise ServiceValidationError(
+                msg,
+                translation_domain=DOMAIN,
+                translation_key="carrier_target_not_subscriber",
+                translation_placeholders={"target": target_id},
+            )
+        if ent_entry.device_id:
+            dev_entry = dev_reg.async_get(ent_entry.device_id)
+    else:
+        dev_entry = dev_reg.async_get(target_id)
+        if dev_entry is None:
+            dev_entry = dev_reg.async_get_device(identifiers={(DOMAIN, target_id)})
+        if dev_entry is None and not target_id.startswith("carrier_subscriber_"):
+            dev_entry = dev_reg.async_get_device(
+                identifiers={(DOMAIN, f"carrier_subscriber_{target_id}")}
+            )
+
+    if dev_entry is None:
+        msg = f"Target '{target_id}' not found in device registry"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_target_not_found",
+            translation_placeholders={"target": target_id},
+        )
+
+    has_domain_identifier = any(ident[0] == DOMAIN for ident in dev_entry.identifiers)
+    if not has_domain_identifier:
+        msg = f"Target '{target_id}' is not a UniFi Insights device"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_target_not_subscriber",
+            translation_placeholders={"target": target_id},
+        )
+
+    matching_entries = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.entry_id in dev_entry.config_entries
+    ]
+    if not matching_entries:
+        msg = "Target config entry is not loaded"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_entry_not_loaded",
+        )
+
+    target_entry = matching_entries[0]
+    if target_entry.data.get(CONF_CONNECTION_TYPE) != CONNECTION_TYPE_CARRIER_FABRIC:
+        msg = f"Target '{target_id}' is not a Carrier Fabric subscriber"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_target_not_subscriber",
+            translation_placeholders={"target": target_id},
+        )
+
+    runtime_data = getattr(target_entry, "runtime_data", None)
+    if target_entry.state is not ConfigEntryState.LOADED or not isinstance(
+        runtime_data, CarrierFabricData
+    ):
+        msg = "Carrier Fabric integration entry is not loaded"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_entry_not_loaded",
+        )
+
+    subscriber_id: str | None = None
+    for domain, ident in dev_entry.identifiers:
+        if domain == DOMAIN and ident.startswith("carrier_subscriber_"):
+            subscriber_id = ident[len("carrier_subscriber_") :]
+            break
+
+    if not subscriber_id:
+        msg = f"Target '{target_id}' is not a Carrier Fabric subscriber"
+        raise ServiceValidationError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_target_not_subscriber",
+            translation_placeholders={"target": target_id},
+        )
+
+    try:
+        uuid.UUID(subscriber_id)
+    except ValueError as err:
+        raise _invalid_carrier_subscriber_id(subscriber_id) from err
+
+    if not target_entry.options.get(CONF_CARRIER_ACTIONS, DEFAULT_CARRIER_ACTIONS):
+        msg = (
+            "Carrier Fabric actions are disabled. Enable 'Enable service actions' "
+            "in the integration options to perform this action."
+        )
+        raise HomeAssistantError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_actions_disabled",
+        )
+
+    return runtime_data.coordinator, subscriber_id
+
+
+def _invalid_carrier_subscriber_id(subscriber_id: str) -> ServiceValidationError:
+    """Build the validation error for a subscriber device id that is no UUID."""
+    msg = f"Invalid subscriber ID format '{subscriber_id}' (valid UUID expected)"
+    return ServiceValidationError(
+        msg,
+        translation_domain=DOMAIN,
+        translation_key="carrier_invalid_subscriber_id",
+        translation_placeholders={"target": subscriber_id},
+    )
+
+
+def _raise_carrier_action_error(
+    err: UniFiError | InvalidSubscriberIdError, action: str, subscriber_id: str
+) -> NoReturn:
+    """Map a Carrier Fabric action failure to a translated Home Assistant error."""
+    if isinstance(err, InvalidSubscriberIdError):
+        raise _invalid_carrier_subscriber_id(subscriber_id) from err
+
+    if isinstance(err, UniFiAuthenticationError) and (
+        err.status_code == HTTPStatus.FORBIDDEN
+        or err.api_error_code == "insufficient_scope"
+    ):
+        required_scope = f"{action}:service"
+        msg = (
+            f"Carrier Fabric API key missing required scope '{required_scope}' "
+            f"to {action} subscriber {subscriber_id}"
+        )
+        raise HomeAssistantError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="carrier_missing_scope",
+            translation_placeholders={
+                "scope": required_scope,
+                "action": action,
+                "subscriber_id": subscriber_id,
+            },
+        ) from err
+
+    # Never surface the raw error: it can carry subscriber data.
+    msg = f"Failed to {action} subscriber"
+    raise HomeAssistantError(
+        msg,
+        translation_domain=DOMAIN,
+        translation_key="carrier_action_failed",
+        translation_placeholders={"action": action},
+    ) from err
+
+
+async def _async_handle_carrier_suspend_subscriber(
+    hass: HomeAssistant, call: ServiceCall
+) -> None:
+    """Handle carrier_suspend_subscriber service call."""
+    carrier_coordinator, subscriber_id = _resolve_carrier_subscriber_target(hass, call)
+    # CARRIER_SUSPEND_SUBSCRIBER_SCHEMA already made this a str of at most
+    # MAX_SUSPEND_REASON_LENGTH characters.
+    reason = call.data.get("reason")
+    try:
+        await carrier_coordinator.async_suspend_subscriber(subscriber_id, reason=reason)
+    except (UniFiError, InvalidSubscriberIdError) as err:
+        _raise_carrier_action_error(err, "suspend", subscriber_id)
+
+
+async def _async_handle_carrier_resume_subscriber(
+    hass: HomeAssistant, call: ServiceCall
+) -> None:
+    """Handle carrier_resume_subscriber service call."""
+    carrier_coordinator, subscriber_id = _resolve_carrier_subscriber_target(hass, call)
+    try:
+        await carrier_coordinator.async_resume_subscriber(subscriber_id)
+    except (UniFiError, InvalidSubscriberIdError) as err:
+        _raise_carrier_action_error(err, "resume", subscriber_id)
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -1838,11 +2131,31 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         schema=CREATE_LIVEVIEW_SCHEMA,
     )
 
+    async def async_handle_carrier_suspend_subscriber(call: ServiceCall) -> None:
+        """Handle carrier_suspend_subscriber service call."""
+        await _async_handle_carrier_suspend_subscriber(hass, call)
+
+    async def async_handle_carrier_resume_subscriber(call: ServiceCall) -> None:
+        """Handle carrier_resume_subscriber service call."""
+        await _async_handle_carrier_resume_subscriber(hass, call)
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_LIVEVIEW,
         async_handle_set_liveview,
         schema=SET_LIVEVIEW_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CARRIER_SUSPEND_SUBSCRIBER,
+        async_handle_carrier_suspend_subscriber,
+        schema=CARRIER_SUSPEND_SUBSCRIBER_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CARRIER_RESUME_SUBSCRIBER,
+        async_handle_carrier_resume_subscriber,
+        schema=CARRIER_RESUME_SUBSCRIBER_SCHEMA,
     )
 
     _LOGGER.info("UniFi Insights services registered successfully")
@@ -1916,5 +2229,11 @@ async def async_unload_services(hass: HomeAssistant) -> None:
 
     if hass.services.has_service(DOMAIN, SERVICE_SET_LIVEVIEW):
         hass.services.async_remove(DOMAIN, SERVICE_SET_LIVEVIEW)
+
+    if hass.services.has_service(DOMAIN, SERVICE_CARRIER_SUSPEND_SUBSCRIBER):
+        hass.services.async_remove(DOMAIN, SERVICE_CARRIER_SUSPEND_SUBSCRIBER)
+
+    if hass.services.has_service(DOMAIN, SERVICE_CARRIER_RESUME_SUBSCRIBER):
+        hass.services.async_remove(DOMAIN, SERVICE_CARRIER_RESUME_SUBSCRIBER)
 
     _LOGGER.info("UniFi Insights services unloaded successfully")
