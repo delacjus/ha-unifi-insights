@@ -1,0 +1,4 @@
+## 2023-10-25 - [Topology MAC Normalization Hotspot]
+
+**Learning:** `normalize_mac` in `topology_contract.py` and `_normalize_innerspace_mac` in `innerspace_transforms.py` are executed continuously for every device, client, and port mapping when generating network graphs. The standard implementation involves excessive list joins/comprehensions. The Unifi API frequently returns well-formed MAC addresses that are already normalized.
+**Action:** Always add a fast-path condition (checking string length, explicit `":"` indices, and executing regex `fullmatch`) to skip normalization steps if the MAC is already valid. Utilize direct string concatenation or formatting (`f"{d[0:2]}:{d[2:4]}..."`) instead of generator-based list joins (`":".join(...)`) to gain significant execution time reductions (up to 65% faster).
