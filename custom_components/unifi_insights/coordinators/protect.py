@@ -8,6 +8,7 @@ import logging
 import math
 import time
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -35,6 +36,9 @@ from custom_components.unifi_insights.const import (
     DEVICE_TYPE_VIEWER,
     DEVICE_TYPE_VIEWPORT,
     DOMAIN,
+    EVENT_TYPE_ALARM_HUB_DEVICE_TAMPER,
+    MODEL_KEY_FOB,
+    MODEL_KEY_LINKSTATION,
     SCAN_INTERVAL_PROTECT,
 )
 from custom_components.unifi_insights.helpers import async_get_device_entry
@@ -137,6 +141,13 @@ MAX_SENSOR_REFRESH_LOOP_ITERATIONS: Final = 2
 # grace window keeps the eviction, just no longer on the strength of a single
 # poll. 3 polls is ~90s at SCAN_INTERVAL_PROTECT (30s).
 MAX_CONSECUTIVE_MISSING_POLLS: Final = 3
+
+# How long a Protect device family whose list endpoint answered 404 before it
+# ever answered successfully (a Protect version that predates it) is left
+# alone before it is probed again. Re-probing at all lets a Protect upgrade
+# be picked up without a reload; doing it hourly rather than every poll keeps
+# an old console from spending a request per family every 30s.
+UNSUPPORTED_RESOURCE_RETRY: Final = timedelta(hours=1)
 
 # Envelope-only keys that must never leak from the raw top-level WebSocket
 # frame into a merged device/event dict - see `_pick_field` and the
@@ -253,6 +264,43 @@ def _pick_field(containers: list[dict[str, Any]], *keys: str) -> Any:
     return None
 
 
+def _deep_merge(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """
+    Merge ``new`` over ``old``, recursing where both sides hold a dict.
+
+    Returns a new dict at every level it touches and never mutates either
+    argument (see the in-place-mutation note in `_on_websocket_message`).
+    Only dict-over-dict recurses: any other value, ``None`` included,
+    replaces the old one, so a frame can still clear a nested object.
+
+    Used for the WebSocket frames of the nested-object families (fobs, link
+    stations, alarm hubs): a partial frame such as
+    ``{"alarmHub": {"deviceTamperStatus": "tampered"}}`` would otherwise
+    wipe the hub's armed/battery state until the next poll.
+    """
+    merged = dict(old)
+    for key, value in new.items():
+        existing = merged.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            merged[key] = _deep_merge(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _event_metadata_text(value: Any) -> str | None:
+    """
+    Read one event metadata value as text.
+
+    Protect wraps most event metadata as ``{"text": ...}`` but sends some
+    fields (``alarmHubDeviceTamper``'s ``userName``) as a plain string, so
+    both are accepted. Anything else reads as None.
+    """
+    if isinstance(value, dict):
+        value = value.get("text")
+    return value if isinstance(value, str) else None
+
+
 def _normalize_epoch_seconds(value: Any) -> float | None:
     """
     Normalize a timestamp payload to a single epoch-seconds float.
@@ -315,6 +363,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
     - Viewers
     - Chimes
     - Liveviews
+    - Fobs, link stations and alarm hubs (Protect 7.3.70 security devices)
     - Real-time events via WebSocket
 
     UNVALIDATED SCHEMA WARNING: the "events" WebSocket subscription
@@ -356,6 +405,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": set(),
             "viewers": set(),
             "chimes": set(),
+            "fobs": set(),
+            "link_stations": set(),
+            "alarm_hubs": set(),
         }
         self._consecutive_empty_fetches: dict[str, int] = {
             "cameras": 0,
@@ -364,6 +416,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": 0,
             "viewers": 0,
             "chimes": 0,
+            "fobs": 0,
+            "link_stations": 0,
+            "alarm_hubs": 0,
         }
         # collection -> consecutive polls whose fetch raised a transient error.
         # Kept separate from `_consecutive_empty_fetches`: an empty response is
@@ -383,7 +438,28 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": {},
             "viewers": {},
             "chimes": {},
+            "fobs": {},
+            "link_stations": {},
+            "alarm_hubs": {},
         }
+        # Families whose list endpoint has answered successfully at least
+        # once. A 404 from one of these is a transient/removed-device signal
+        # for `_update_device_collection`, not "this Protect is too old".
+        self._answered_families: set[str] = set()
+        # family -> monotonic time before which it is not polled again,
+        # after a 404 from a Protect version that predates the endpoint.
+        # See UNSUPPORTED_RESOURCE_RETRY.
+        self._unsupported_until: dict[str, float] = {}
+        # Families already reported once as unsupported (logged at INFO the
+        # first time only, not on every hourly re-probe).
+        self._unsupported_logged: set[str] = set()
+        # alarm hub id -> its latest alarmHubDeviceTamper event: "event_id",
+        # "status", "received" (monotonic time the status arrived) and the
+        # "_lastTamperUser"/"_lastTamperAt" keys written onto the hub dict.
+        # Kept outside `self.data` because the REST poll rebuilds every hub
+        # dict; `_fetch_alarm_hubs` lays it back on top (see
+        # `_with_tamper_record`) so the event outlives the next poll.
+        self._alarm_hub_last_tamper: dict[str, dict[str, Any]] = {}
         self.data: dict[str, Any] = {
             "cameras": {},
             "lights": {},
@@ -391,6 +467,10 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs": {},
             "viewers": {},
             "chimes": {},
+            # Keyed device_type + "s" (see DEVICE_TYPE_FOB and friends).
+            "fobs": {},
+            "link_stations": {},
+            "alarm_hubs": {},
             "doorlocks": {},
             "viewports": {},
             "liveviews": {},
@@ -1165,6 +1245,22 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 **self.data["viewports"].get(device_id, {}),
                 **device_data,
             }
+        elif model_key == MODEL_KEY_FOB:
+            self.data["fobs"][device_id] = _deep_merge(
+                self.data["fobs"].get(device_id, {}), device_data
+            )
+        elif model_key == MODEL_KEY_LINKSTATION:
+            collection = self._linkstation_collection(device_id, device_data)
+            if collection is None:
+                _LOGGER.debug(
+                    "Protect coordinator: dropping WebSocket linkstation update "
+                    "for unknown device %s; the next poll will pick it up",
+                    device_id,
+                )
+                return
+            self.data[collection][device_id] = _deep_merge(
+                self.data[collection].get(device_id, {}), device_data
+            )
 
         # async_set_updated_data (rather than async_update_listeners) also
         # marks the last update as successful and resets the poll timer, so
@@ -1172,6 +1268,26 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         # while WebSocket data is flowing, and the 30s poll fallback re-arms
         # from the last WebSocket message rather than firing needlessly.
         self.async_set_updated_data(self.data)
+
+    def _linkstation_collection(
+        self, device_id: str, device_data: dict[str, Any]
+    ) -> str | None:
+        """
+        Pick the collection a WebSocket "linkstation" frame belongs to.
+
+        Link stations and alarm hubs share the "linkstation" modelKey, so the
+        frame is routed by which collection already holds the id, then by the
+        frame's own isAlarmHub. A partial frame for an id no poll has seen
+        and without isAlarmHub has no safe target: None (drop it).
+        """
+        if device_id in self.data["alarm_hubs"]:
+            return "alarm_hubs"
+        if device_id in self.data["link_stations"]:
+            return "link_stations"
+        is_alarm_hub = device_data.get("isAlarmHub")
+        if isinstance(is_alarm_hub, bool):
+            return "alarm_hubs" if is_alarm_hub else "link_stations"
+        return None
 
     def _normalize_camera_data(self, camera: dict[str, Any]) -> dict[str, Any]:
         """Normalize camera fields across alias and legacy payload shapes."""
@@ -1456,6 +1572,93 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 event_data.get("end"),
             )
 
+        elif (
+            event_type == EVENT_TYPE_ALARM_HUB_DEVICE_TAMPER
+            and device_id in self.data["alarm_hubs"]
+        ):
+            self._apply_alarm_hub_tamper_event(device_id, event_data)
+
+    def _apply_alarm_hub_tamper_event(
+        self, device_id: str, event_data: dict[str, Any]
+    ) -> None:
+        """
+        Apply an alarmHubDeviceTamper event to its hub.
+
+        The status is written into ``alarmHub.deviceTamperStatus`` straight
+        away. ``userName`` is recorded as ``_lastTamperUser`` without assuming
+        whose name it is (the spec does not say whether it is the person who
+        tampered or who restored), and ``start`` (epoch ms) as
+        ``_lastTamperAt``.
+
+        A later frame of the same event (its "end", say) may carry only some
+        fields, so it fills gaps from the earlier frame rather than wiping
+        them. A different event replaces the record outright, so a restore
+        that names nobody does not show the previous event's user.
+        """
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        status = _event_metadata_text(metadata.get("status"))
+        record: dict[str, Any] = {
+            "event_id": event_data.get("id"),
+            "status": status,
+            "received": time.monotonic(),
+            "_lastTamperUser": _event_metadata_text(metadata.get("userName")),
+            "_lastTamperAt": event_data.get("start"),
+        }
+        previous = self._alarm_hub_last_tamper.get(device_id)
+        if previous is not None and previous.get("event_id") == record["event_id"]:
+            if status is None:
+                record["received"] = previous["received"]
+            for key in ("status", "_lastTamperUser", "_lastTamperAt"):
+                if record[key] is None:
+                    record[key] = previous[key]
+        self._alarm_hub_last_tamper[device_id] = record
+        self.data["alarm_hubs"][device_id] = self._with_tamper_record(
+            self.data["alarm_hubs"][device_id], record, requested_at=None
+        )
+        _LOGGER.info(
+            "Protect coordinator: Tamper event for alarm hub %s: status=%s",
+            device_id,
+            status,
+        )
+
+    @staticmethod
+    def _with_tamper_record(
+        hub: dict[str, Any], record: dict[str, Any], *, requested_at: float | None
+    ) -> dict[str, Any]:
+        """
+        Return ``hub`` with its latest tamper event laid on top.
+
+        The event's user and time always apply. Its status applies when
+        ``requested_at`` is None (the event itself is being applied), when the
+        REST payload has no ``deviceTamperStatus`` of its own (Protect 7.2.x
+        sends the event but not the field, and on 7.3.70 the field is
+        optional), or when the event arrived after the poll's request was
+        sent: that REST snapshot predates the tamper and would otherwise read
+        as a false all-clear. Otherwise REST is authoritative. Both times are
+        HA's own monotonic clock, so Protect's clock skew cannot matter.
+        """
+        overlay: dict[str, Any] = {
+            "_lastTamperUser": record["_lastTamperUser"],
+            "_lastTamperAt": record["_lastTamperAt"],
+        }
+        status = record["status"]
+        if status is not None:
+            alarm_hub = hub.get("alarmHub")
+            reported = (
+                alarm_hub.get("deviceTamperStatus")
+                if isinstance(alarm_hub, dict)
+                else None
+            )
+            if (
+                requested_at is None
+                or not isinstance(reported, str)
+                or record["received"] >= requested_at
+            ):
+                overlay["alarmHub"] = {"deviceTamperStatus": status}
+        return _deep_merge(hub, overlay)
+
     def _apply_motion_event(
         self,
         bucket: dict[str, Any],
@@ -1608,6 +1811,11 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             # Fetch liveviews
             await self._fetch_liveviews()
 
+            # Fetch Protect 7.3.70 security devices
+            await self._fetch_fobs()
+            await self._fetch_link_stations()
+            await self._fetch_alarm_hubs()
+
             self._available = True
             self.data["last_update"] = datetime.now(tz=UTC)
 
@@ -1617,7 +1825,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             _LOGGER.debug(
                 "Protect coordinator: Update complete - "
                 "%d cameras, %d lights, %d sensors, %d NVRs, "
-                "%d chimes, %d viewers, %d liveviews",
+                "%d chimes, %d viewers, %d liveviews, "
+                "%d fobs, %d link stations, %d alarm hubs",
                 len(self.data["cameras"]),
                 len(self.data["lights"]),
                 len(self.data["sensors"]),
@@ -1625,6 +1834,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 len(self.data["chimes"]),
                 len(self.data["viewers"]),
                 len(self.data["liveviews"]),
+                len(self.data["fobs"]),
+                len(self.data["link_stations"]),
+                len(self.data["alarm_hubs"]),
             )
 
             return self.data
@@ -2301,6 +2513,104 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         except Exception as err:
             _LOGGER.debug("Protect coordinator: Error fetching liveviews: %s", err)
 
+    async def _fetch_fobs(self) -> None:
+        """Fetch fob data."""
+        await self._fetch_device_family("fobs")
+
+    async def _fetch_link_stations(self) -> None:
+        """Fetch link station data."""
+        await self._fetch_device_family("link_stations")
+
+    async def _fetch_alarm_hubs(self) -> None:
+        """Fetch alarm hub data, keeping the latest tamper event on top."""
+        requested_at = time.monotonic()
+        await self._fetch_device_family("alarm_hubs")
+        hubs = self.data["alarm_hubs"]
+        for hub_id, record in self._alarm_hub_last_tamper.items():
+            hub = hubs.get(hub_id)
+            if isinstance(hub, dict):
+                hubs[hub_id] = self._with_tamper_record(
+                    hub, record, requested_at=requested_at
+                )
+
+    async def _fetch_device_family(self, collection: str) -> None:
+        """
+        Fetch one simple device family into ``self.data[collection]``.
+
+        ``collection`` is both the data key and the protect_client endpoint
+        attribute ("fobs", "link_stations", "alarm_hubs").
+
+        A 404, or a 2xx web page instead of JSON, before the family has ever
+        answered means this Protect version does not have the endpoint (it is
+        not "no devices": an empty family answers ``[]``). That is logged once
+        at INFO and the family is skipped until UNSUPPORTED_RESOURCE_RETRY has
+        passed. A 404 after a successful answer goes through the bounded 404
+        cache path like every other collection. Any other error - including a
+        web page after a successful answer, or a 400 - keeps the cached
+        devices, as for chimes.
+        """
+        if not self.protect_client:
+            return
+
+        retry_at = self._unsupported_until.get(collection)
+        if retry_at is not None and time.monotonic() < retry_at:
+            return
+
+        endpoint = getattr(self.protect_client, collection)
+        answered = collection in self._answered_families
+        _LOGGER.debug("Protect coordinator: Fetching %s", collection)
+        try:
+            models = await endpoint.get_all(expected_unsupported=not answered)
+        except UniFiNotFoundError:
+            if answered:
+                self._update_device_collection(collection, {}, is_404=True)
+                return
+            self._mark_family_unsupported(collection, "HTTP 404")
+            return
+        except UniFiResponseError as err:
+            if answered or err.status_code >= HTTPStatus.MULTIPLE_CHOICES:
+                _LOGGER.warning(
+                    "Protect coordinator: Error fetching %s: %s", collection, err
+                )
+                return
+            self._mark_family_unsupported(collection, "non-JSON response")
+            return
+        except Exception as err:
+            _LOGGER.warning(
+                "Protect coordinator: Error fetching %s: %s", collection, err
+            )
+            return
+
+        self._unsupported_until.pop(collection, None)
+        self._answered_families.add(collection)
+        devices: dict[str, Any] = {}
+        for model in models:
+            device = self._model_to_dict(model)
+            device_id = device.get("id")
+            if device_id:
+                devices[device_id] = device
+        self._update_device_collection(
+            collection, devices, is_partial=not endpoint.last_result_complete
+        )
+        _LOGGER.debug(
+            "Protect coordinator: Successfully fetched %d %s", len(devices), collection
+        )
+
+    def _mark_family_unsupported(self, collection: str, reason: str) -> None:
+        """Skip a family this Protect version lacks until the next re-probe."""
+        self._unsupported_until[collection] = (
+            time.monotonic() + UNSUPPORTED_RESOURCE_RETRY.total_seconds()
+        )
+        if collection not in self._unsupported_logged:
+            self._unsupported_logged.add(collection)
+            _LOGGER.info(
+                "Protect coordinator: this Protect version does not expose "
+                "%s (%s); checking again every %s",
+                collection,
+                reason,
+                UNSUPPORTED_RESOURCE_RETRY,
+            )
+
     def _cleanup_stale_devices(self) -> None:
         """
         Remove stale Protect devices from the device registry (Gold requirement).
@@ -2322,6 +2632,9 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
             "nvrs",
             "viewers",
             "chimes",
+            "fobs",
+            "link_stations",
+            "alarm_hubs",
         ]:
             current_ids: set[str] = set(self.data.get(device_type, {}).keys())
             previous_ids = self._previous_protect_device_ids.get(device_type, set())
@@ -2395,6 +2708,8 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                     self._sensor_ws_recency_preserve_counts.pop(device_id, None)
                     self._sensor_ws_recency_latched.pop(device_id, None)
                     self._sensor_preserve_cap_warned.discard(device_id)
+                elif device_type == "alarm_hubs":
+                    self._alarm_hub_last_tamper.pop(device_id, None)
 
             self._previous_protect_device_ids[device_type] = current_ids | pending_ids
 
