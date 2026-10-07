@@ -935,11 +935,11 @@ export class UnifiInsightsTopologyCard extends LitElement {
                 );
                 background-image: radial-gradient(
                     color-mix(
-                            in srgb,
-                            var(--primary-text-color) 12%,
-                            transparent
-                        )
-                        1px,
+                        in srgb,
+                        var(--primary-text-color) 12%,
+                        transparent
+                    )
+                    1px,
                     transparent 1px
                 );
                 background-size: 18px 18px;

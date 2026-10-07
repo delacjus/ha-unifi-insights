@@ -74,10 +74,7 @@ export class UnifiInsightsTimelineCard extends BaseDashboardCard {
         return html`
             <div class="list">
                 ${items.slice(0, 6).map((item) => {
-                    const source = (item.source ?? {}) as Record<
-                        string,
-                        unknown
-                    >;
+                    const source = (item.source ?? {}) as Record<string, unknown>;
                     const kind = String(item.kind ?? "event");
                     const severity = String(item.severity ?? "info");
                     const timeLabel = formatRelativeTimestamp(item.timestamp);

@@ -374,26 +374,22 @@ The Carrier Fabric configuration entry provides two optional settings (both disa
 ### Entities
 
 By default, the integration creates:
-
 - **Primary sensors**: Total subscribers, suspended subscribers.
 - **Diagnostic sensors**: Pending assignment subscribers, provisioned subscribers, installed subscribers, unassigned subscribers, active service plans count, and per-plan subscribers on each service plan (archived plans are disabled by default).
 
 When subscriber tracking is enabled, each subscriber device includes:
-
 - **Primary sensor**: Subscriber service state (`pending_assignment`, `provisioned`, `installed`, `suspended`, or `unknown` when the API reports a state this integration does not recognize).
 - **Diagnostic sensor**: Subscriber service plan (the name of the subscriber's assigned service plan).
 
 ### Services
 
 When "Enable service actions" is active and your API key has the required scopes:
-
 - `unifi_insights.carrier_suspend_subscriber`: Stops a subscriber's internet service (optional `reason`, maximum 1024 characters). Target must be a single Carrier Fabric subscriber device or entity. Requires `suspend:service` scope.
 - `unifi_insights.carrier_resume_subscriber`: Restores a subscriber's internet service. Target must be a single Carrier Fabric subscriber device or entity. Requires `resume:service` scope.
 
 ### Privacy & Diagnostics
 
 Subscriber privacy is strictly preserved:
-
 - Personal data such as email addresses, service addresses, customer notes, custom metadata, and suspension reasons are never exposed in Home Assistant entities or state attributes.
 - Downloadable diagnostics reports contain only an allowlist of fields, and subscriber names and subscriber numbers are redacted from them.
 

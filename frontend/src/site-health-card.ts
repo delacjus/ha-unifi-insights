@@ -37,8 +37,8 @@ export class UnifiInsightsSiteHealthCard extends BaseDashboardCard {
 
     protected override get headerAccent(): string {
         const level = String(
-            (this.snapshot?.health as Record<string, unknown> | undefined)
-                ?.level ?? "healthy",
+            (this.snapshot?.health as Record<string, unknown> | undefined)?.level ??
+                "healthy",
         );
         if (level === "critical") return "var(--uit-offline)";
         if (level === "degraded") return "var(--uit-warning)";
@@ -101,8 +101,7 @@ export class UnifiInsightsSiteHealthCard extends BaseDashboardCard {
                     <div>
                         <div class="hero-title">${gwName}</div>
                         <div class="hero-meta">
-                            Status:
-                            ${level}${uptime ? ` · Uptime ${uptime}` : ""}
+                            Status: ${level}${uptime ? ` · Uptime ${uptime}` : ""}
                         </div>
                     </div>
                 </div>
@@ -170,8 +169,7 @@ registerDashboardCard({
     card: UnifiInsightsSiteHealthCard,
     editor: UnifiInsightsSiteHealthCardEditor,
     name: "UniFi Site Health",
-    description:
-        "Compact site health summary with WAN, gateway, device, and client status.",
+    description: "Compact site health summary with WAN, gateway, device, and client status.",
 });
 
 export { SITE_HEALTH_CARD_TAG, SITE_HEALTH_EDITOR_TAG };

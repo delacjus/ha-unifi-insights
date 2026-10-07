@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from homeassistant.exceptions import HomeAssistantError
+import pytest
 
 from custom_components.unifi_insights.button import (
     BUTTON_TYPES,
@@ -707,18 +707,10 @@ class TestAsyncSetupEntry:
         assert first_count > 0
 
         ptz_start_before = len(
-            [
-                e
-                for e in added_entities
-                if isinstance(e, UnifiProtectPTZPatrolStartButton)
-            ]
+            [e for e in added_entities if isinstance(e, UnifiProtectPTZPatrolStartButton)]
         )
         ptz_stop_before = len(
-            [
-                e
-                for e in added_entities
-                if isinstance(e, UnifiProtectPTZPatrolStopButton)
-            ]
+            [e for e in added_entities if isinstance(e, UnifiProtectPTZPatrolStopButton)]
         )
         chime_before = len(
             [e for e in added_entities if isinstance(e, UnifiProtectChimePlayButton)]
@@ -729,33 +721,15 @@ class TestAsyncSetupEntry:
 
         assert len(added_entities) == first_count
         assert (
-            len(
-                [
-                    e
-                    for e in added_entities
-                    if isinstance(e, UnifiProtectPTZPatrolStartButton)
-                ]
-            )
+            len([e for e in added_entities if isinstance(e, UnifiProtectPTZPatrolStartButton)])
             == ptz_start_before
         )
         assert (
-            len(
-                [
-                    e
-                    for e in added_entities
-                    if isinstance(e, UnifiProtectPTZPatrolStopButton)
-                ]
-            )
+            len([e for e in added_entities if isinstance(e, UnifiProtectPTZPatrolStopButton)])
             == ptz_stop_before
         )
         assert (
-            len(
-                [
-                    e
-                    for e in added_entities
-                    if isinstance(e, UnifiProtectChimePlayButton)
-                ]
-            )
+            len([e for e in added_entities if isinstance(e, UnifiProtectChimePlayButton)])
             == chime_before
         )
 

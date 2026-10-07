@@ -249,17 +249,11 @@ export abstract class BaseDashboardCard extends LitElement {
         ) {
             this.loading = false;
             if (this.retryTimer) clearTimeout(this.retryTimer);
-            this.retryTimer = setTimeout(
-                () => {
-                    if (
-                        generation === this.syncGeneration &&
-                        this.isConnected
-                    ) {
-                        void this.sync();
-                    }
-                },
-                Math.max(0, this.retryAfterMs - Date.now()),
-            );
+            this.retryTimer = setTimeout(() => {
+                if (generation === this.syncGeneration && this.isConnected) {
+                    void this.sync();
+                }
+            }, Math.max(0, this.retryAfterMs - Date.now()));
             return;
         }
 
@@ -362,9 +356,7 @@ export abstract class BaseDashboardCard extends LitElement {
                                 : nothing}
                         </div>
                     </div>
-                    <div class="header-actions">
-                        ${this.renderHeaderBadge()}
-                    </div>
+                    <div class="header-actions">${this.renderHeaderBadge()}</div>
                 </div>
                 ${this.loading
                     ? html`<div class="state loading-box">
