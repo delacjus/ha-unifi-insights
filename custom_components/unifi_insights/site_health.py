@@ -151,6 +151,17 @@ def build_site_health_snapshot(
     else:
         level = LEVEL_HEALTHY
 
+    # Bolt: O(N) client counting without extra memory allocations
+    wired_count = 0
+    wireless_count = 0
+    for c in clients.values():
+        if isinstance(c, dict):
+            conn_type = enum_str(c.get("type") or c.get("connection_type")).upper()
+            if conn_type == "WIRED":
+                wired_count += 1
+            elif conn_type == "WIRELESS":
+                wireless_count += 1
+
     status = STATUS_OK if devices_available else STATUS_PARTIAL
     payload: dict[str, Any] = {
         "version": 1,
@@ -176,24 +187,8 @@ def build_site_health_snapshot(
         "attention_omitted": omitted,
         "clients": {
             "total": len(clients),
-            "wired": len(
-                [
-                    c
-                    for c in clients.values()
-                    if isinstance(c, dict)
-                    and enum_str(c.get("type") or c.get("connection_type")).upper()
-                    == "WIRED"
-                ]
-            ),
-            "wireless": len(
-                [
-                    c
-                    for c in clients.values()
-                    if isinstance(c, dict)
-                    and enum_str(c.get("type") or c.get("connection_type")).upper()
-                    == "WIRELESS"
-                ]
-            ),
+            "wired": wired_count,
+            "wireless": wireless_count,
         },
         "freshness": "fresh" if devices_available else "stale",
     }

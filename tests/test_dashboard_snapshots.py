@@ -689,4 +689,3 @@ def test_protect_snapshot_handles_str_enums_and_is_connected_fallback() -> None:
     assert enum_str(42) == "42"
     assert is_protect_device_connected({"is_connected": True}) is True
     assert is_protect_device_connected({"isConnected": False}) is False
-
