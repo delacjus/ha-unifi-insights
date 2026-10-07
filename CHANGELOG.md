@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Older Protect versions that lack these endpoints are checked once an hour instead of on every poll, and logged once.
   - Diagnostics redact the tamper user name and the Thread network name and IDs.
 
+### Changed
+
+- The README is reorganized around the supported UniFi products: Network, Protect, InnerSpace, Mobility, Site Manager and Carrier Fabric (ISP). It now has an overview, a product summary, setup steps per connection type, all registered actions and all six dashboard cards. The "How this differs from the official integrations" section is removed. Inaccurate claims are corrected: firmware update entities don't install firmware, there is no PoE port power-cycle action, there is no Recording binary sensor or Recording Mode select, and the topology card is listed as "UniFi Topology". [#230](https://github.com/ruaan-deysel/ha-unifi-insights/issues/230)
+
 ### Fixed
 
 - The chime Play button failed on every press because it passed an extra ringtone argument to the coordinator; it now plays the chime.
