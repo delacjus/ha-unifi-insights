@@ -9,7 +9,7 @@ coverage:
   status:
     project:
       default:
-        target: 90%
+        target: 95%
         threshold: 0.5%
     patch:
       default:
@@ -27,4 +27,3 @@ ignore:
   - "tests/**/*"
   - "script/**/*"
   - "custom_components/unifi_insights/api/**/*"
-  - "custom_components/unifi_insights/coordinator.py"
