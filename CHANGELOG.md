@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A **Power cycle** button for each switch port with PoE enabled, and a `unifi_insights.power_cycle_port` action, to restart a hung PoE device (an access point or camera, for example) by cutting and restoring its power. The buttons are disabled by default. Uses the documented `POST …/devices/{deviceId}/interfaces/ports/{portIdx}/actions` endpoint. [#245](https://github.com/ruaan-deysel/ha-unifi-insights/issues/245)
 - Vendored Site Manager API client coverage for host lookup by ID, interval-based ISP metric querying, and SD-WAN configuration and status endpoints.
 - UniFi Mobility API client coverage for workspace admins, device clients, and device configuration (name, network, wireless).
 - UniFi Mobility support for remote entries. When the cloud API key has Mobility read access, each active Mobility workspace becomes a device with router counts, and each mobile router (UMR, UMR Industrial, UMR Ultra) becomes a device with connectivity, state, clients, WAN source, LTE signal, cellular data usage, VPN and subscription status, and a GPS location tracker, plus diagnostic memory, uptime, firmware, data limit, plan, WAN IP, and ISP sensors. A key without Mobility access is not an error: no re-authentication is requested and no entities are created. Only one remote entry per API key polls Mobility, and diagnostics include a counts-only Mobility summary. [#169](https://github.com/ruaan-deysel/ha-unifi-insights/issues/169)

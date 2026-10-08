@@ -10,6 +10,7 @@ from homeassistant.components.button import (
     ButtonEntity,
     ButtonEntityDescription,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -50,6 +51,66 @@ PARALLEL_UPDATES = 1
 @dataclass
 class UnifiInsightsButtonEntityDescription(ButtonEntityDescription):  # type: ignore[misc]
     """Class describing UniFi Insights button entities."""
+
+
+def get_device_ports(device_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Return the port dictionaries the coordinator emitted for a device.
+
+    The coordinator publishes ports in two places, both with ``idx`` and a
+    ``poe`` dict carrying ``enabled``: ``ports`` (legacy ``port_table``
+    normalised by ``_normalize_legacy_port``) and ``interfaces["ports"]``
+    (v1 API). ``ports`` is read first, as the sensor pipeline does.
+    """
+    ports = device_data.get("ports")
+    if not isinstance(ports, list) or not ports:
+        interfaces = device_data.get("interfaces")
+        ports = interfaces.get("ports") if isinstance(interfaces, dict) else None
+    if not isinstance(ports, list):
+        return []
+    return [p for p in ports if isinstance(p, dict)]
+
+
+def get_device_port(
+    coordinator_data: Any,
+    site_id: str | None,
+    device_id: str | None,
+    port_idx: int,
+) -> dict[str, Any] | None:
+    """Return port dictionary for a device port or None if not found."""
+    if not site_id or not device_id:
+        return None
+    if not isinstance(coordinator_data, dict):
+        return None
+    devices = coordinator_data.get("devices")
+    if not isinstance(devices, dict):
+        return None
+    site_devices = devices.get(site_id)
+    if not isinstance(site_devices, dict):
+        return None
+    device_data = site_devices.get(device_id)
+    if not isinstance(device_data, dict):
+        return None
+    for port in get_device_ports(device_data):
+        if port.get("idx") == port_idx:
+            return port
+    return None
+
+
+def port_can_be_power_cycled(port: dict[str, Any]) -> bool:
+    """Return True if port can be power-cycled (PoE is enabled)."""
+    return isinstance(port.get("poe"), dict) and port["poe"].get("enabled") is True
+
+
+def _get_port_label(port: dict[str, Any], port_idx: int) -> str:
+    """Return user-friendly port label based on port type."""
+    name = port.get("name")
+    if name and name != f"Port {port_idx}":
+        return str(name)
+    media = port.get("media", "")
+    if isinstance(media, str) and media.startswith("SFP"):
+        return f"{media} {port_idx}"
+    return f"Port {port_idx}"
 
 
 BUTTON_TYPES: tuple[UnifiInsightsButtonEntityDescription, ...] = (
@@ -138,6 +199,34 @@ async def async_setup_entry(
                                 description=description,
                                 site_id=site_id,
                                 device_id=device_id,
+                            )
+                        )
+
+                    # Discover PoE power-cycle buttons for PoE-enabled ports
+                    for port in get_device_ports(device_data):
+                        port_idx = port.get("idx")
+                        if not isinstance(port_idx, int):
+                            continue
+                        if not port_can_be_power_cycled(port):
+                            continue
+
+                        poe_btn_key = (
+                            site_id,
+                            device_id,
+                            f"port{port_idx}_poe_power_cycle",
+                        )
+                        if poe_btn_key in known_button_keys:
+                            continue
+                        known_button_keys.add(poe_btn_key)
+
+                        port_label = _get_port_label(port, port_idx)
+                        entities.append(
+                            UnifiInsightsPoePowerCycleButton(
+                                coordinator=coordinator,
+                                site_id=site_id,
+                                device_id=device_id,
+                                port_idx=port_idx,
+                                port_label=port_label,
                             )
                         )
 
@@ -286,6 +375,80 @@ class UnifiInsightsButton(UnifiInsightsEntity, ButtonEntity):
             return False
         state = device_data.get("state")
         return isinstance(state, str) and state == "ONLINE"
+
+
+class UnifiInsightsPoePowerCycleButton(UnifiInsightsEntity, ButtonEntity):
+    """Representation of a UniFi Insights PoE port power-cycle button."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_registry_enabled_default = False
+    _attr_translation_key = "poe_power_cycle"
+
+    def __init__(
+        self,
+        coordinator: UnifiFacadeCoordinator,
+        site_id: str,
+        device_id: str,
+        port_idx: int,
+        port_label: str,
+    ) -> None:
+        """Initialize the PoE power-cycle button."""
+        description = ButtonEntityDescription(
+            key=f"port{port_idx}_poe_power_cycle",
+            translation_key="poe_power_cycle",
+            entity_category=EntityCategory.CONFIG,
+            entity_registry_enabled_default=False,
+        )
+        super().__init__(coordinator, description, site_id, device_id)
+        self._port_idx = port_idx
+        self._port_label = port_label
+        self._attr_unique_id = f"{site_id}_{device_id}_port{port_idx}_poe_power_cycle"
+        self._attr_translation_placeholders = {"port_label": port_label}
+
+    @property
+    def available(self) -> bool:
+        """Return True if device is online, port exists, and PoE is enabled."""
+        if not super().available:
+            return False
+        port = get_device_port(
+            self.coordinator.data,
+            self._site_id,
+            self._device_id,
+            self._port_idx,
+        )
+        return port is not None and port_can_be_power_cycled(port)
+
+    @property
+    def port_idx(self) -> int:
+        """Return the port index."""
+        return self._port_idx
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        _LOGGER.info(
+            "Power cycling PoE port %d on device %s",
+            self._port_idx,
+            self._device_id,
+        )
+        err_msg = (
+            f"Unable to power cycle PoE port {self._port_idx} on device"
+            f" {self._device_id}"
+        )
+        devices_api = self.coordinator.network_client.devices
+        await async_call_coordinator_action(
+            self.coordinator,
+            "async_power_cycle_port",
+            err_msg,
+            self._site_id,
+            self._device_id,
+            self._port_idx,
+            fallback_factory=lambda: devices_api.execute_port_action(
+                self._site_id,
+                self._device_id,
+                self._port_idx,
+                "POWER_CYCLE",
+            ),
+        )
 
 
 class UnifiProtectChimePlayButton(UnifiProtectEntity, ButtonEntity):
