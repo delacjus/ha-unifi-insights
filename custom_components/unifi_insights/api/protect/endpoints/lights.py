@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+MIN_LED_LEVEL = 1
+MAX_LED_LEVEL = 6
+
 
 class LightsEndpoint:
     """Endpoint for managing UniFi Protect lights."""
@@ -132,7 +135,9 @@ class LightsEndpoint:
             The updated light.
 
         """
-        return await self.update(light_id, site_id, lightMode=LightMode.ON.value)
+        return await self.update(
+            light_id, site_id, lightModeSettings={"mode": "always"}
+        )
 
     async def turn_off(self, light_id: str, site_id: str | None = None) -> Light:
         """
@@ -146,12 +151,12 @@ class LightsEndpoint:
             The updated light.
 
         """
-        return await self.update(light_id, site_id, lightMode=LightMode.OFF.value)
+        return await self.update(light_id, site_id, lightModeSettings={"mode": "off"})
 
     async def set_mode(
         self,
         light_id: str,
-        mode: LightMode,
+        mode: LightMode | str,
         site_id: str | None = None,
     ) -> Light:
         """
@@ -166,12 +171,17 @@ class LightsEndpoint:
             The updated light.
 
         """
-        return await self.update(light_id, site_id, lightMode=mode.value)
+        mode_val = mode.value if hasattr(mode, "value") else str(mode)
+        if mode_val == "on":
+            mode_val = "always"
+        return await self.update(
+            light_id, site_id, lightModeSettings={"mode": mode_val}
+        )
 
     async def set_brightness(
         self,
         light_id: str,
-        brightness: int,
+        led_level: int,
         site_id: str | None = None,
     ) -> Light:
         """
@@ -179,13 +189,21 @@ class LightsEndpoint:
 
         Args:
             light_id: The light ID.
-            brightness: Brightness level (0-100).
+            led_level: Brightness level (1-6).
             site_id: The site ID (required for REMOTE connections, ignored for LOCAL).
 
         Returns:
             The updated light.
 
         """
-        if not 0 <= brightness <= 100:
-            raise ValueError("Brightness must be between 0 and 100")
-        return await self.update(light_id, site_id, brightness=brightness)
+        if (
+            not isinstance(led_level, int)
+            or isinstance(led_level, bool)
+            or not (MIN_LED_LEVEL <= led_level <= MAX_LED_LEVEL)
+        ):
+            raise ValueError("led_level must be between 1 and 6")
+        return await self.update(
+            light_id,
+            site_id,
+            lightDeviceSettings={"ledLevel": led_level},
+        )

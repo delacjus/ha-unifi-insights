@@ -3798,3 +3798,74 @@ async def test_protect_pos_ingest_transaction_rejects_unknown_keys(
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         await client.pos.ingest_transaction("cam-1", payload)
     client._post.assert_not_called()
+
+
+async def test_cameras_set_video_mode_patch_body() -> None:
+    """Test set_video_mode sends spec-compliant videoMode PATCH body."""
+    client = _protect_client()
+    client._patch = AsyncMock(return_value={"id": "cam1", "mac": "00:11:22:33:44:55"})
+    await client.cameras.set_video_mode("cam1", "highFps")
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/cameras/cam1"),
+        json_data={"videoMode": "highFps"},
+    )
+
+
+async def test_lights_turn_on_patch_body() -> None:
+    """Test lights.turn_on sends spec-compliant lightModeSettings PATCH body."""
+    client = _protect_client()
+    client._patch = AsyncMock(return_value={"id": "light1", "mac": "00:11:22:33:44:66"})
+    await client.lights.turn_on("light1")
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/lights/light1"),
+        json_data={"lightModeSettings": {"mode": "always"}},
+    )
+
+
+async def test_lights_turn_off_patch_body() -> None:
+    """Test lights.turn_off sends spec-compliant lightModeSettings PATCH body."""
+    client = _protect_client()
+    client._patch = AsyncMock(return_value={"id": "light1", "mac": "00:11:22:33:44:66"})
+    await client.lights.turn_off("light1")
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/lights/light1"),
+        json_data={"lightModeSettings": {"mode": "off"}},
+    )
+
+
+async def test_lights_set_mode_patch_body() -> None:
+    """Test lights.set_mode sends spec-compliant lightModeSettings PATCH body."""
+    client = _protect_client()
+    client._patch = AsyncMock(return_value={"id": "light1", "mac": "00:11:22:33:44:66"})
+    await client.lights.set_mode("light1", "motion")
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/lights/light1"),
+        json_data={"lightModeSettings": {"mode": "motion"}},
+    )
+
+
+async def test_lights_set_brightness_patch_body() -> None:
+    """Test lights.set_brightness sends spec lightDeviceSettings PATCH body."""
+    client = _protect_client()
+    client._patch = AsyncMock(return_value={"id": "light1", "mac": "00:11:22:33:44:66"})
+
+    with pytest.raises(ValueError, match="led_level must be between 1 and 6"):
+        await client.lights.set_brightness("light1", 0)
+    client._patch.assert_not_called()
+
+    with pytest.raises(ValueError, match="led_level must be between 1 and 6"):
+        await client.lights.set_brightness("light1", 7)
+    client._patch.assert_not_called()
+
+    await client.lights.set_brightness("light1", 1)
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/lights/light1"),
+        json_data={"lightDeviceSettings": {"ledLevel": 1}},
+    )
+
+    client._patch.reset_mock()
+    await client.lights.set_brightness("light1", 6)
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/lights/light1"),
+        json_data={"lightDeviceSettings": {"ledLevel": 6}},
+    )
