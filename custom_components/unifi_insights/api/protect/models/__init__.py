@@ -19,10 +19,19 @@ from .link_station import (
 )
 from .liveview import LiveView
 from .nvr import NVR
+from .pos import (
+    PosLineItem,
+    PosLocation,
+    PosTransactionRequest,
+    PosTransactionResponse,
+    PosTransactionType,
+)
 from .relay import Relay
 from .sensor import BatteryStatus, Sensor, SensorType
 from .siren import Siren
 from .speaker import Speaker
+from .ulp_user import UlpUser, UlpUserStatus
+from .user import User
 from .viewer import Viewer, ViewerState
 from .viewport import Viewport
 
@@ -66,6 +75,12 @@ __all__ = [
     "LiveView",
     # NVR
     "NVR",
+    # POS
+    "PosLineItem",
+    "PosLocation",
+    "PosTransactionRequest",
+    "PosTransactionResponse",
+    "PosTransactionType",
     # Relay
     "Relay",
     # Sensor
@@ -76,6 +91,10 @@ __all__ = [
     "Siren",
     # Speaker
     "Speaker",
+    # User / UlpUser
+    "UlpUser",
+    "UlpUserStatus",
+    "User",
     # Viewer
     "Viewer",
     "ViewerState",

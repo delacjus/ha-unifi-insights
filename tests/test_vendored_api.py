@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+from pydantic import ValidationError
 
 from custom_components.unifi_insights.api import (
     ApiKeyAuth,
@@ -45,7 +46,14 @@ from custom_components.unifi_insights.api.network import (
 from custom_components.unifi_insights.api.network.models.firewall import (
     OrderedFirewallPolicyIds,
 )
-from custom_components.unifi_insights.api.protect import UniFiProtectClient
+from custom_components.unifi_insights.api.protect import (
+    PosLineItem,
+    PosLocation,
+    PosTransactionRequest,
+    PosTransactionType,
+    UlpUserStatus,
+    UniFiProtectClient,
+)
 from tests.fixtures.library_responses import (
     SAMPLE_ALARM_HUB,
     SAMPLE_KEYPAD_FOB,
@@ -3346,3 +3354,410 @@ async def test_vouchers_create_pins_required_name_and_duration() -> None:
             "timeLimitMinutes": 120,
         },
     )
+
+
+async def test_protect_users_get_all_and_get() -> None:
+    """Users endpoint should query /users and parse User models."""
+    client = _protect_client()
+    user_payload = {
+        "id": "user-1",
+        "name": "Jane Doe",
+        "firstName": "Jane",
+        "lastName": "Doe",
+        "email": "jane@example.com",
+        "ucoreUserId": "ucore-1",
+        "modelKey": "user",
+    }
+    client._get = AsyncMock(return_value=[user_payload])
+
+    users = await client.users.get_all()
+    assert len(users) == 1
+    assert users[0].id == "user-1"
+    assert users[0].name == "Jane Doe"
+    assert users[0].first_name == "Jane"
+    assert users[0].last_name == "Doe"
+    assert users[0].email == "jane@example.com"
+    assert users[0].ucore_user_id == "ucore-1"
+    assert users[0].display_name == "Jane Doe"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/users"), expected_unsupported=False
+    )
+
+    # get single user
+    client._get = AsyncMock(return_value={"data": user_payload})
+    user = await client.users.get("user-1")
+    assert user.id == "user-1"
+    client._get.assert_awaited_once_with(client.build_api_path("/users/user-1"))
+
+    # get single user not found
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="User user-1 not found"):
+        await client.users.get("user-1")
+
+
+async def test_protect_users_get_all_skips_malformed_and_handles_none() -> None:
+    """Users endpoint should skip malformed items and handle empty response."""
+    client = _protect_client()
+    client._get = AsyncMock(return_value=None)
+    assert await client.users.get_all() == []
+
+    client._get = AsyncMock(return_value="not a list")
+    assert await client.users.get_all() == []
+
+    client._get = AsyncMock(
+        return_value=[
+            {"id": "user-1", "name": "Valid User"},
+            {"id": "bad-user"},  # missing required name
+        ]
+    )
+    users = await client.users.get_all()
+    assert len(users) == 1
+    assert users[0].id == "user-1"
+    assert client.users.last_result_complete is False
+
+
+async def test_protect_ulp_users_get_all_and_get() -> None:
+    """ULP users endpoint should query /ulp-users and parse UlpUser models."""
+    client = _protect_client()
+    ulp_payload = {
+        "id": "ulp-1",
+        "firstName": "John",
+        "lastName": "Smith",
+        "fullName": "John Smith",
+        "email": "john@example.com",
+        "status": "ACTIVE",
+        "modelKey": "ulpUser",
+    }
+    client._get = AsyncMock(return_value=[ulp_payload])
+
+    ulp_users = await client.ulp_users.get_all()
+    assert len(ulp_users) == 1
+    assert ulp_users[0].id == "ulp-1"
+    assert ulp_users[0].first_name == "John"
+    assert ulp_users[0].last_name == "Smith"
+    assert ulp_users[0].full_name == "John Smith"
+    assert ulp_users[0].email == "john@example.com"
+    assert ulp_users[0].status == UlpUserStatus.ACTIVE
+    assert ulp_users[0].display_name == "John Smith"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/ulp-users"), expected_unsupported=False
+    )
+
+    # get single ULP user (wrapped in data)
+    client._get = AsyncMock(return_value={"data": ulp_payload})
+    ulp_user = await client.ulp_users.get("ulp-1")
+    assert ulp_user.id == "ulp-1"
+    assert ulp_user.status == "ACTIVE"
+    client._get.assert_awaited_once_with(client.build_api_path("/ulp-users/ulp-1"))
+
+    # get single ULP user not found
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="ULP user ulp-1 not found"):
+        await client.ulp_users.get("ulp-1")
+
+
+async def test_protect_ulp_users_deactivated_and_malformed() -> None:
+    """ULP users should handle DEACTIVATED status, empty email, and malformed items."""
+    client = _protect_client()
+    ulp_deactivated = {
+        "id": "ulp-2",
+        "firstName": "Old",
+        "lastName": "User",
+        "fullName": "Old User",
+        "status": "DEACTIVATED",
+    }
+    client._get = AsyncMock(return_value=[ulp_deactivated, {"id": "bad"}])
+
+    users = await client.ulp_users.get_all()
+    assert len(users) == 1
+    assert users[0].status == UlpUserStatus.DEACTIVATED
+    assert users[0].email == ""
+    assert client.ulp_users.last_result_complete is False
+
+
+async def test_protect_pos_ingest_transaction() -> None:
+    """POS endpoint should POST to /pos/cameras/{id}/transactions and parse response."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value={"created": True, "eventId": "evt-pos-123"})
+
+    request = PosTransactionRequest(
+        type=PosTransactionType.SALE,
+        external_id="tx-987",
+        amount=19.99,
+        currency="USD",
+        line_items=[PosLineItem(title="Coffee", quantity=2)],
+        location=PosLocation(id="reg-1", name="Main Register"),
+        payment_types=["credit_card"],
+        timestamp=1700000000000,
+    )
+
+    response = await client.pos.ingest_transaction("cam-1", request)
+    assert response.created is True
+    assert response.event_id == "evt-pos-123"
+
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/pos/cameras/cam-1/transactions"),
+        json_data={
+            "type": "sale",
+            "externalId": "tx-987",
+            "amount": 19.99,
+            "currency": "USD",
+            "lineItems": [{"title": "Coffee", "quantity": 2}],
+            "location": {"id": "reg-1", "name": "Main Register"},
+            "paymentTypes": ["credit_card"],
+            "timestamp": 1700000000000,
+        },
+    )
+
+
+async def test_protect_pos_ingest_transaction_dict_and_duplicate() -> None:
+    """POS endpoint should accept dict payload and handle idempotency response."""
+    client = _protect_client()
+    # Duplicate transaction returns created=False with existing eventId
+    client._post = AsyncMock(
+        return_value={"data": {"created": False, "eventId": "evt-existing-1"}}
+    )
+
+    payload = {
+        "type": "refund",
+        "externalId": "tx-dup-1",
+        "amount": 5.0,
+    }
+    response = await client.pos.ingest_transaction("cam-2", payload)
+    assert response.created is False
+    assert response.event_id == "evt-existing-1"
+
+    # Error handling
+    client._post = AsyncMock(return_value=None)
+    with pytest.raises(
+        ValueError, match="Failed to ingest POS transaction for camera cam-2"
+    ):
+        await client.pos.ingest_transaction("cam-2", payload)
+
+
+@pytest.mark.parametrize("invalid_id", ["", "   ", None, 123])
+async def test_protect_users_get_invalid_id_raises(invalid_id: Any) -> None:
+    """Users get should reject invalid or blank user ID without calling _get."""
+    client = _protect_client()
+    client._get = AsyncMock()
+    with pytest.raises(ValueError, match="User ID must be a non-empty string"):
+        await client.users.get(invalid_id)
+    client._get.assert_not_called()
+
+
+async def test_protect_users_get_list_response_raises() -> None:
+    """Users get should raise ValueError if response is a list."""
+    client = _protect_client()
+    user_payload = {"id": "user-1", "name": "Jane"}
+    client._get = AsyncMock(return_value=[user_payload])
+    with pytest.raises(ValueError, match="User user-1 not found"):
+        await client.users.get("user-1")
+
+    client._get = AsyncMock(return_value={"data": [user_payload]})
+    with pytest.raises(ValueError, match="User user-1 not found"):
+        await client.users.get("user-1")
+
+
+@pytest.mark.parametrize("invalid_id", ["", "   ", None, 123])
+async def test_protect_ulp_users_get_invalid_id_raises(invalid_id: Any) -> None:
+    """ULP users get should reject invalid or blank user ID without calling _get."""
+    client = _protect_client()
+    client._get = AsyncMock()
+    with pytest.raises(ValueError, match="ULP user ID must be a non-empty string"):
+        await client.ulp_users.get(invalid_id)
+    client._get.assert_not_called()
+
+
+async def test_protect_ulp_users_get_list_response_raises() -> None:
+    """ULP users get should raise ValueError if response is a list."""
+    client = _protect_client()
+    ulp_payload = {"id": "ulp-1", "fullName": "John"}
+    client._get = AsyncMock(return_value=[ulp_payload])
+    with pytest.raises(ValueError, match="ULP user ulp-1 not found"):
+        await client.ulp_users.get("ulp-1")
+
+    client._get = AsyncMock(return_value={"data": [ulp_payload]})
+    with pytest.raises(ValueError, match="ULP user ulp-1 not found"):
+        await client.ulp_users.get("ulp-1")
+
+
+@pytest.mark.parametrize("invalid_id", ["", "   ", None, 123])
+async def test_protect_pos_ingest_transaction_invalid_camera_id_raises(
+    invalid_id: Any,
+) -> None:
+    """POS ingest should reject invalid or blank camera ID without calling _post."""
+    client = _protect_client()
+    client._post = AsyncMock()
+    with pytest.raises(ValueError, match="Camera ID must be a non-empty string"):
+        await client.pos.ingest_transaction(
+            invalid_id, {"type": "sale", "externalId": "1", "amount": 1.0}
+        )
+    client._post.assert_not_called()
+
+
+async def test_protect_validate_connection() -> None:
+    """Validate connection should query /cameras and return boolean."""
+    client = _protect_client()
+    client._get = AsyncMock(return_value=[])
+    assert await client.validate_connection() is True
+    client._get.assert_awaited_once_with(client.build_api_path("/cameras"))
+
+    client._get = AsyncMock(return_value=None)
+    assert await client.validate_connection() is False
+    client._get.assert_awaited_once_with(client.build_api_path("/cameras"))
+
+
+async def test_protect_pos_ingest_transaction_payload_variants_and_invalid_type() -> (
+    None
+):
+    """POS ingest should produce identical payloads for snake, camel, and model."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value={"created": True, "eventId": "evt-1"})
+
+    model_req = PosTransactionRequest(
+        type=PosTransactionType.SALE,
+        external_id="tx-100",
+        amount=42.50,
+        currency="USD",
+        line_items=[PosLineItem(title="Widget", quantity=3)],
+        location=PosLocation(id="reg-2", name="Counter"),
+        payment_types=["cash"],
+        timestamp=1700000001000,
+    )
+
+    snake_dict = {
+        "type": "sale",
+        "external_id": "tx-100",
+        "amount": 42.50,
+        "currency": "USD",
+        "line_items": [{"title": "Widget", "quantity": 3}],
+        "location": {"id": "reg-2", "name": "Counter"},
+        "payment_types": ["cash"],
+        "timestamp": 1700000001000,
+    }
+
+    camel_dict = {
+        "type": "sale",
+        "externalId": "tx-100",
+        "amount": 42.50,
+        "currency": "USD",
+        "lineItems": [{"title": "Widget", "quantity": 3}],
+        "location": {"id": "reg-2", "name": "Counter"},
+        "paymentTypes": ["cash"],
+        "timestamp": 1700000001000,
+    }
+
+    expected_payload = {
+        "type": "sale",
+        "externalId": "tx-100",
+        "amount": 42.50,
+        "currency": "USD",
+        "lineItems": [{"title": "Widget", "quantity": 3}],
+        "location": {"id": "reg-2", "name": "Counter"},
+        "paymentTypes": ["cash"],
+        "timestamp": 1700000001000,
+    }
+
+    # Model request
+    await client.pos.ingest_transaction("cam-1", model_req)
+    assert client._post.call_args[1]["json_data"] == expected_payload
+
+    # Snake-case dict
+    await client.pos.ingest_transaction("cam-1", snake_dict)
+    assert client._post.call_args[1]["json_data"] == expected_payload
+
+    # Camel-case dict
+    await client.pos.ingest_transaction("cam-1", camel_dict)
+    assert client._post.call_args[1]["json_data"] == expected_payload
+
+    # Invalid type raises TypeError without calling _post
+    client._post.reset_mock()
+    with pytest.raises(
+        TypeError,
+        match="Transaction must be a PosTransactionRequest or dict, got str",
+    ):
+        await client.pos.ingest_transaction(
+            "cam-1",
+            "invalid_string_payload",  # type: ignore[arg-type]
+        )
+    client._post.assert_not_called()
+
+
+async def test_protect_users_malformed_item_log_omits_personal_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed user must be logged by id only, never with email or names."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value=[
+            {
+                "id": "bad-user",
+                "email": "leak.email@example.com",
+                "firstName": "LeakFirst",
+                "lastName": "LeakLast",
+            }
+        ]
+    )
+    with caplog.at_level(logging.WARNING):
+        assert await client.users.get_all() == []
+
+    assert "bad-user" in caplog.text
+    assert "leak.email@example.com" not in caplog.text
+    assert "LeakFirst" not in caplog.text
+    assert "LeakLast" not in caplog.text
+
+
+async def test_protect_ulp_users_malformed_item_log_omits_personal_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed ULP user must be logged by id only, never with email or names."""
+    client = _protect_client()
+    client._get = AsyncMock(
+        return_value=[
+            {
+                "id": "bad-ulp",
+                "email": "leak.email@example.com",
+                "firstName": "LeakFirst",
+                "lastName": "LeakLast",
+                "fullName": "LeakFirst LeakLast",
+            }
+        ]
+    )
+    with caplog.at_level(logging.WARNING):
+        assert await client.ulp_users.get_all() == []
+
+    assert "bad-ulp" in caplog.text
+    assert "leak.email@example.com" not in caplog.text
+    assert "LeakFirst" not in caplog.text
+    assert "LeakLast" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "sale", "externalId": "tx-1", "amount": 1.0, "cashier": "bob"},
+        {
+            "type": "sale",
+            "externalId": "tx-1",
+            "amount": 1.0,
+            "lineItems": [{"title": "A", "quantity": 1, "sku": "X"}],
+        },
+        {
+            "type": "sale",
+            "externalId": "tx-1",
+            "amount": 1.0,
+            "location": {"id": "reg-1", "register": 3},
+        },
+    ],
+    ids=["request", "line-item", "location"],
+)
+async def test_protect_pos_ingest_transaction_rejects_unknown_keys(
+    payload: dict[str, Any],
+) -> None:
+    """Unknown keys must fail validation locally, before any request is sent."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value={"created": True, "eventId": "evt-1"})
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        await client.pos.ingest_transaction("cam-1", payload)
+    client._post.assert_not_called()

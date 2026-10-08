@@ -30,16 +30,18 @@ from .endpoints import (
     BridgesEndpoint,
     CamerasEndpoint,
     ChimesEndpoint,
-    EventsEndpoint,
     FobsEndpoint,
     LightsEndpoint,
     LinkStationsEndpoint,
     LiveViewsEndpoint,
     NVREndpoint,
+    POSEndpoint,
     RelaysEndpoint,
     SensorsEndpoint,
     SirensEndpoint,
     SpeakersEndpoint,
+    UlpUsersEndpoint,
+    UsersEndpoint,
     ViewersEndpoint,
 )
 from .websocket import ProtectWebSocket
@@ -155,8 +157,8 @@ class UniFiProtectClient(BaseUniFiClient):
         self._lights = LightsEndpoint(self)
         self._chimes = ChimesEndpoint(self)
         self._nvr = NVREndpoint(self)
+        self._pos = POSEndpoint(self)
         self._liveviews = LiveViewsEndpoint(self)
-        self._events = EventsEndpoint(self)
         self._viewers = ViewersEndpoint(self)
         self._application = ApplicationEndpoint(self)
         self._alarm_hubs = AlarmHubsEndpoint(self)
@@ -167,6 +169,8 @@ class UniFiProtectClient(BaseUniFiClient):
         self._sirens = SirensEndpoint(self)
         self._speakers = SpeakersEndpoint(self)
         self._link_stations = LinkStationsEndpoint(self)
+        self._users = UsersEndpoint(self)
+        self._ulp_users = UlpUsersEndpoint(self)
         self._websocket = ProtectWebSocket(self)
 
     @property
@@ -240,11 +244,6 @@ class UniFiProtectClient(BaseUniFiClient):
         return self._liveviews
 
     @property
-    def events(self) -> EventsEndpoint:
-        """Access event management endpoints."""
-        return self._events
-
-    @property
     def viewers(self) -> ViewersEndpoint:
         """Access viewer management endpoints."""
         return self._viewers
@@ -295,6 +294,21 @@ class UniFiProtectClient(BaseUniFiClient):
         return self._link_stations
 
     @property
+    def pos(self) -> POSEndpoint:
+        """Access point of sale (POS) transaction ingestion endpoints."""
+        return self._pos
+
+    @property
+    def users(self) -> UsersEndpoint:
+        """Access user management endpoints."""
+        return self._users
+
+    @property
+    def ulp_users(self) -> UlpUsersEndpoint:
+        """Access UniFi Identity (ULP) user management endpoints."""
+        return self._ulp_users
+
+    @property
     def websocket(self) -> ProtectWebSocket:
         """Access WebSocket subscription manager for real-time updates."""
         return self._websocket
@@ -313,26 +327,8 @@ class UniFiProtectClient(BaseUniFiClient):
             UniFiConnectionError: If connection fails.
 
         """
-        response = await self._get(self.build_api_path("/sites"))
+        response = await self._get(self.build_api_path("/cameras"))
         return response is not None
-
-    async def get_sites(self) -> list[dict[str, Any]]:
-        """
-        Get list of available sites.
-
-        Returns:
-            List of site information dictionaries.
-
-        """
-        response = await self._get(self.build_api_path("/sites"))
-        if response is None:
-            return []
-        data = (
-            response.get("data", response) if isinstance(response, dict) else response
-        )
-        if isinstance(data, list):
-            return data
-        return []
 
     async def get_host_id(self) -> str:
         """
@@ -351,7 +347,7 @@ class UniFiProtectClient(BaseUniFiClient):
             ```python
             # Get host_id for WebSocket subscriptions
             host_id = await client.get_host_id()
-            site_id = "your-site-id"  # Or get from client.get_sites()
+            site_id = "your-site-id"  # From the config entry
 
             async with client.websocket.subscribe_events(host_id, site_id) as events:
                 async for event in events:
