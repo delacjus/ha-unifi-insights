@@ -42,6 +42,9 @@ from custom_components.unifi_insights.api.network import (
     VpnClient,
     parse_outlet_metrics,
 )
+from custom_components.unifi_insights.api.network.models.firewall import (
+    OrderedFirewallPolicyIds,
+)
 from custom_components.unifi_insights.api.protect import UniFiProtectClient
 from tests.fixtures.library_responses import (
     SAMPLE_ALARM_HUB,
@@ -380,25 +383,10 @@ async def test_sites_get_all_skips_malformed_items() -> None:
     assert result[0].id == "default"
 
 
-async def test_sites_get_returns_site() -> None:
-    """Sites get should return a parsed Site model."""
+def test_sites_has_no_get_method() -> None:
+    """The OpenAPI spec v10.6.106 has no GET /sites/{id} endpoint."""
     client = _network_client()
-    client._get = AsyncMock(return_value={"data": {"id": "site-1", "name": "Default"}})
-
-    result = await client.sites.get("site-1")
-
-    assert result.id == "site-1"
-    assert result.name == "Default"
-    client._get.assert_awaited_once_with(client.build_api_path("/sites/site-1"))
-
-
-async def test_sites_get_missing_raises_value_error() -> None:
-    """Sites get should raise ValueError if site is not found."""
-    client = _network_client()
-    client._get = AsyncMock(return_value=None)
-
-    with pytest.raises(ValueError, match="not found"):
-        await client.sites.get("missing-site")
+    assert not hasattr(client.sites, "get")
 
 
 async def test_get_legacy_site_devices_returns_device_list() -> None:
@@ -1422,6 +1410,28 @@ async def test_devices_get_pending_adoption_skips_malformed_items() -> None:
 
     assert len(result) == 1
     assert result[0].id == "pend-1"
+
+
+async def test_device_restart_posts_documented_action() -> None:
+    """restart() must use the spec's actions endpoint, not /restart."""
+    client = _network_client()
+    client._post = AsyncMock(return_value=None)
+
+    assert await client.devices.restart("site-1", "dev-1") is True
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/devices/dev-1/actions"),
+        json_data={"action": "RESTART"},
+    )
+
+
+async def test_device_execute_action_rejects_undocumented_action() -> None:
+    """Only actions the spec defines may be sent."""
+    client = _network_client()
+    client._post = AsyncMock(return_value=None)
+
+    with pytest.raises(ValueError, match="RESTART"):
+        await client.devices.execute_action("site-1", "dev-1", "locate")
+    client._post.assert_not_called()
 
 
 def _make_response(
@@ -2958,3 +2968,381 @@ async def test_site_report_bucket_and_endpoint_local_and_remote() -> None:
             start_ms=1000,
             end_ms=2000,
         )
+
+
+def test_devices_has_no_locate_method() -> None:
+    """The OpenAPI spec v10.6.106 has no /locate endpoint."""
+    client = _network_client()
+    assert not hasattr(client.devices, "locate")
+
+
+async def test_devices_adopt_posts_to_spec_endpoint() -> None:
+    """adopt() must post to /sites/{siteId}/devices with macAddress
+    and ignoreDeviceLimit.
+    """
+    client = _network_client()
+    client._post = AsyncMock(return_value={"data": {"macAddress": "00:11:22:33:44:55"}})
+
+    assert await client.devices.adopt("site-1", "00:11:22:33:44:55") is True
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/devices"),
+        json_data={"macAddress": "00:11:22:33:44:55", "ignoreDeviceLimit": False},
+    )
+
+    client._post.reset_mock()
+    assert (
+        await client.devices.adopt(
+            "site-1", "00:11:22:33:44:55", ignore_device_limit=True
+        )
+        is True
+    )
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/devices"),
+        json_data={"macAddress": "00:11:22:33:44:55", "ignoreDeviceLimit": True},
+    )
+
+
+async def test_traffic_get_dpi_categories_unscoped_and_paged() -> None:
+    """get_dpi_categories() is unscoped (/v1/dpi/categories) and accepts paging."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={"data": [{"id": "cat-1", "name": "Streaming"}]}
+    )
+
+    result = await client.traffic.get_dpi_categories(
+        offset=10, limit=50, filter_str="name.eq('Streaming')"
+    )
+    assert len(result) == 1
+    assert result[0].id == "cat-1"
+    assert result[0].name == "Streaming"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/dpi/categories"),
+        params={"offset": 10, "limit": 50, "filter": "name.eq('Streaming')"},
+    )
+
+
+async def test_traffic_get_dpi_applications_unscoped_and_paged() -> None:
+    """get_dpi_applications() is unscoped (/v1/dpi/applications) and accepts paging."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"data": [{"id": "app-1", "name": "YouTube"}]})
+
+    result = await client.traffic.get_dpi_applications(offset=0, limit=25)
+    assert len(result) == 1
+    assert result[0].name == "YouTube"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/dpi/applications"),
+        params={"offset": 0, "limit": 25},
+    )
+
+
+async def test_traffic_get_countries_unscoped_and_paged() -> None:
+    """get_countries() is unscoped (/v1/countries) and accepts paging."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={"data": [{"code": "US", "name": "United States"}]}
+    )
+
+    result = await client.traffic.get_countries()
+    assert len(result) == 1
+    assert result[0].code == "US"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/countries"),
+        params=None,
+    )
+
+
+async def test_firewall_get_policy_ordering() -> None:
+    """get_policy_ordering() queries ordering endpoint with zone ids."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": {
+                "orderedFirewallPolicyIds": {
+                    "beforeSystemDefined": ["p-before"],
+                    "afterSystemDefined": ["p-after"],
+                }
+            }
+        }
+    )
+
+    ordering = await client.firewall.get_policy_ordering(
+        "site-1",
+        source_firewall_zone_id="zone-src",
+        destination_firewall_zone_id="zone-dst",
+    )
+    assert ordering.ordered_firewall_policy_ids.before_system_defined == ["p-before"]
+    assert ordering.ordered_firewall_policy_ids.after_system_defined == ["p-after"]
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/firewall/policies/ordering"),
+        params={
+            "sourceFirewallZoneId": "zone-src",
+            "destinationFirewallZoneId": "zone-dst",
+        },
+    )
+
+
+async def test_firewall_update_policy_ordering() -> None:
+    """update_policy_ordering() puts ordered IDs to ordering endpoint."""
+    client = _network_client()
+    client._put = AsyncMock(
+        return_value={
+            "data": {
+                "orderedFirewallPolicyIds": {
+                    "beforeSystemDefined": ["p1"],
+                    "afterSystemDefined": ["p2"],
+                }
+            }
+        }
+    )
+
+    ordering = await client.firewall.update_policy_ordering(
+        "site-1",
+        source_firewall_zone_id="zone-src",
+        destination_firewall_zone_id="zone-dst",
+        ordered_firewall_policy_ids={
+            "beforeSystemDefined": ["p1"],
+            "afterSystemDefined": ["p2"],
+        },
+    )
+    assert ordering.ordered_firewall_policy_ids.before_system_defined == ["p1"]
+    assert ordering.ordered_firewall_policy_ids.after_system_defined == ["p2"]
+    client._put.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/firewall/policies/ordering"),
+        json_data={
+            "orderedFirewallPolicyIds": {
+                "beforeSystemDefined": ["p1"],
+                "afterSystemDefined": ["p2"],
+            }
+        },
+        params={
+            "sourceFirewallZoneId": "zone-src",
+            "destinationFirewallZoneId": "zone-dst",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "ordered",
+    [
+        {"before_system_defined": ["p1"], "after_system_defined": ["p2"]},
+        {
+            "orderedFirewallPolicyIds": {
+                "beforeSystemDefined": ["p1"],
+                "afterSystemDefined": ["p2"],
+            }
+        },
+        {"beforeSystemDefined": ["p1"], "afterSystemDefined": ["p2"], "x": 1},
+        "model",
+    ],
+    ids=["snake_case", "wrapped", "extra_key", "model"],
+)
+async def test_firewall_update_policy_ordering_sends_only_spec_keys(
+    ordered: object,
+) -> None:
+    """Every accepted input form is validated and sent with the spec's keys."""
+    if ordered == "model":
+        ordered = OrderedFirewallPolicyIds(
+            before_system_defined=["p1"], after_system_defined=["p2"]
+        )
+    client = _network_client()
+    client._put = AsyncMock(return_value={"data": {"orderedFirewallPolicyIds": {}}})
+
+    await client.firewall.update_policy_ordering(
+        "site-1",
+        source_firewall_zone_id="zone-src",
+        destination_firewall_zone_id="zone-dst",
+        ordered_firewall_policy_ids=ordered,  # type: ignore[arg-type]
+    )
+
+    assert client._put.await_args.kwargs["json_data"] == {
+        "orderedFirewallPolicyIds": {
+            "beforeSystemDefined": ["p1"],
+            "afterSystemDefined": ["p2"],
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "ordered",
+    [
+        {"beforeSystemDefined": ["p1"]},
+        {"after_system_defined": ["p2"]},
+        {"orderedFirewallPolicyIds": {"beforeSystemDefined": ["p1"]}},
+    ],
+    ids=["before_only", "after_only_snake_case", "wrapped_before_only"],
+)
+async def test_firewall_update_policy_ordering_rejects_partial_dict(
+    ordered: dict[str, Any],
+) -> None:
+    """A dict missing one list is rejected instead of PUTting it as empty."""
+    client = _network_client()
+    client._put = AsyncMock()
+
+    with pytest.raises(ValueError, match="afterSystemDefined"):
+        await client.firewall.update_policy_ordering(
+            "site-1",
+            source_firewall_zone_id="zone-src",
+            destination_firewall_zone_id="zone-dst",
+            ordered_firewall_policy_ids=ordered,
+        )
+
+    client._put.assert_not_awaited()
+
+
+async def test_resources_get_vpn_tunnels_path() -> None:
+    """get_vpn_tunnels() uses the spec path /vpn/site-to-site-tunnels."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "id": "tun-1",
+                    "name": "Site A",
+                    "type": "IPSEC",
+                    "metadata": {"origin": "USER_DEFINED"},
+                }
+            ]
+        }
+    )
+
+    tunnels = await client.resources.get_vpn_tunnels("site-1", offset=0, limit=25)
+    assert len(tunnels) == 1
+    assert tunnels[0].id == "tun-1"
+    assert tunnels[0].name == "Site A"
+    client._get.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/vpn/site-to-site-tunnels"),
+        params={"offset": 0, "limit": 25},
+    )
+
+
+async def test_networks_update_uses_put() -> None:
+    """networks.update() uses PUT for full object replacement."""
+    client = _network_client()
+    client._put = AsyncMock(
+        return_value={
+            "data": {
+                "id": "net-1",
+                "name": "Updated Network",
+                "enabled": True,
+                "management": "GATEWAY",
+                "vlanId": 10,
+            }
+        }
+    )
+
+    result = await client.networks.update(
+        "site-1",
+        "net-1",
+        name="Updated Network",
+        enabled=True,
+        management="GATEWAY",
+        vlanId=10,
+    )
+    assert result.id == "net-1"
+    assert result.name == "Updated Network"
+    client._put.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/networks/net-1"),
+        json_data={
+            "name": "Updated Network",
+            "enabled": True,
+            "management": "GATEWAY",
+            "vlanId": 10,
+        },
+    )
+
+
+async def test_firewall_patch_rule() -> None:
+    """firewall.patch_rule() patches only loggingEnabled, per the spec."""
+    client = _network_client()
+    client._patch = AsyncMock(
+        return_value={
+            "data": {
+                "id": "rule-1",
+                "name": "Drop Bad Traffic",
+                "action": "DROP",
+                "loggingEnabled": True,
+            }
+        }
+    )
+
+    result = await client.firewall.patch_rule("site-1", "rule-1", logging_enabled=True)
+    assert result.id == "rule-1"
+    client._patch.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/firewall/policies/rule-1"),
+        json_data={"loggingEnabled": True},
+    )
+    with pytest.raises(TypeError):
+        await client.firewall.patch_rule(  # type: ignore[call-arg]
+            "site-1", "rule-1", logging_enabled=True, name="Renamed"
+        )
+    client._patch.assert_awaited_once()
+
+
+async def test_vouchers_delete_by_filter() -> None:
+    """delete_by_filter() deletes vouchers matching a filter expression."""
+    client = _network_client()
+    client._delete = AsyncMock(return_value={"vouchersDeleted": 4})
+
+    deleted = await client.vouchers.delete_by_filter("site-1", "note.eq('Guest')")
+    assert deleted == 4
+    client._delete.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/hotspot/vouchers"),
+        params={"filter": "note.eq('Guest')"},
+    )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param({"vouchers": [{"id": "v-1", "code": "12345-67890"}]}, id="spec"),
+        pytest.param(
+            {"data": {"vouchers": [{"id": "v-1", "code": "12345-67890"}]}},
+            id="data-wrapped",
+        ),
+    ],
+)
+async def test_vouchers_create_reads_the_spec_creation_result(
+    response: dict[str, Any],
+) -> None:
+    """create() unwraps the spec's {"vouchers": [...]} creation result."""
+    client = _network_client()
+    client._post = AsyncMock(return_value=response)
+
+    vouchers = await client.vouchers.create(
+        "site-1", name="Home Assistant", time_limit_minutes=480
+    )
+
+    assert [v.id for v in vouchers] == ["v-1"]
+
+
+async def test_vouchers_create_pins_required_name_and_duration() -> None:
+    """create() pins that name and timeLimitMinutes are sent in the body."""
+    client = _network_client()
+    client._post = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "id": "v-1",
+                    "code": "12345-67890",
+                    "name": "Guest Voucher",
+                    "timeLimitMinutes": 120,
+                }
+            ]
+        }
+    )
+
+    vouchers = await client.vouchers.create(
+        "site-1",
+        name="Guest Voucher",
+        time_limit_minutes=120,
+    )
+    assert len(vouchers) == 1
+    assert vouchers[0].id == "v-1"
+    client._post.assert_awaited_once_with(
+        client.build_api_path("/sites/site-1/hotspot/vouchers"),
+        json_data={
+            "count": 1,
+            "name": "Guest Voucher",
+            "timeLimitMinutes": 120,
+        },
+    )

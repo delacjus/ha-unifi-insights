@@ -386,7 +386,6 @@ API_PATH_NETWORK_DEVICE: Final = "/v1/sites/{siteId}/devices/{deviceId}"
 API_PATH_NETWORK_DEVICE_STATS: Final = (
     "/v1/sites/{siteId}/devices/{deviceId}/statistics/latest"
 )
-API_PATH_NETWORK_DEVICE_ACTION: Final = "/v1/sites/{siteId}/devices/{deviceId}/actions"
 API_PATH_NETWORK_PORT_ACTION: Final = (
     "/v1/sites/{siteId}/devices/{deviceId}/interfaces/ports/{portIdx}/actions"
 )
@@ -462,6 +461,8 @@ SERVICE_AUTHORIZE_GUEST: Final = "authorize_guest"
 SERVICE_GENERATE_VOUCHER: Final = "generate_voucher"
 SERVICE_DELETE_VOUCHER: Final = "delete_voucher"
 SERVICE_LIST_VOUCHERS: Final = "list_vouchers"
+# Default voucher name required by UniFi Network API when note is omitted
+DEFAULT_VOUCHER_NAME: Final = "Home Assistant"
 
 # UniFi Protect Services
 SERVICE_PTZ_GOTO_PRESET: Final = "ptz_goto_preset"

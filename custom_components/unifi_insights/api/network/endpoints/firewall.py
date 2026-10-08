@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ..models import FirewallRule, FirewallZone
-from ..models.firewall import FirewallPolicyOrdering
+from ..models.firewall import (
+    FirewallPolicyOrdering,
+    OrderedFirewallPolicyIds,
+)
 
 if TYPE_CHECKING:
     from ..client import UniFiNetworkClient
@@ -337,8 +340,9 @@ class FirewallEndpoint:
         """
         Update a firewall rule.
 
-        UniFi Network expects a full policy document via PUT rather than
-        a partial PATCH payload on current controller versions.
+        Full policy updates require a complete policy document via PUT.
+        Use ``patch_rule`` for the partial update the spec supports
+        (``loggingEnabled``).
 
         Args:
             site_id: The site ID.
@@ -389,50 +393,60 @@ class FirewallEndpoint:
         self,
         site_id: str,
         rule_id: str,
-        **kwargs: Any,
+        *,
+        logging_enabled: bool,
     ) -> FirewallRule:
         """
-        Partially update a firewall rule.
+        Patch a firewall rule's loggingEnabled, the only field the spec patches.
 
-        Despite the name, this uses GET+PUT internally because UniFi Network
-        rejects PATCH on current controller versions.
+        Use ``update_rule`` for any other change.
 
         Args:
             site_id: The site ID.
             rule_id: The rule ID.
-            **kwargs: Fields to update.
+            logging_enabled: Whether logging is enabled for this policy.
 
         Returns:
             The updated firewall rule.
 
         """
-        return await self.update_rule(site_id, rule_id, **kwargs)
+        data = {"loggingEnabled": logging_enabled}
+
+        path = self._client.build_api_path(
+            f"/sites/{site_id}/firewall/policies/{rule_id}"
+        )
+        response = await self._client._patch(path, json_data=data)
+        result = self._extract_rule_payload(response)
+        if isinstance(result, dict):
+            return FirewallRule.model_validate(result)
+        msg = "Failed to patch firewall rule"
+        raise ValueError(msg)
 
     async def get_policy_ordering(
         self,
         site_id: str,
         *,
-        access_zone_id: str,
-        infrastructure_zone_id: str,
+        source_firewall_zone_id: str,
+        destination_firewall_zone_id: str,
     ) -> FirewallPolicyOrdering:
         """
         Get firewall policy ordering for a zone pair.
 
         Args:
             site_id: The site ID.
-            access_zone_id: The source/access zone ID.
-            infrastructure_zone_id: The destination zone ID.
+            source_firewall_zone_id: The source firewall zone ID.
+            destination_firewall_zone_id: The destination firewall zone ID.
 
         Returns:
             The policy ordering configuration.
 
         """
         params = {
-            "accessZoneId": access_zone_id,
-            "infrastructureZoneId": infrastructure_zone_id,
+            "sourceFirewallZoneId": source_firewall_zone_id,
+            "destinationFirewallZoneId": destination_firewall_zone_id,
         }
         path = self._client.build_api_path(
-            f"/sites/{site_id}/firewall/policy-orderings"
+            f"/sites/{site_id}/firewall/policies/ordering"
         )
         response = await self._client._get(path, params=params)
 
@@ -440,38 +454,61 @@ class FirewallEndpoint:
             data = response.get("data", response)
             if isinstance(data, dict):
                 return FirewallPolicyOrdering.model_validate(data)
-        raise ValueError("Failed to get firewall policy ordering")
+        msg = "Failed to get firewall policy ordering"
+        raise ValueError(msg)
 
     async def update_policy_ordering(
         self,
         site_id: str,
         *,
-        access_zone_id: str,
-        infrastructure_zone_id: str,
-        ordered_policy_ids: list[str],
+        source_firewall_zone_id: str,
+        destination_firewall_zone_id: str,
+        ordered_firewall_policy_ids: dict[str, list[str]] | OrderedFirewallPolicyIds,
     ) -> FirewallPolicyOrdering:
         """
         Update firewall policy ordering for a zone pair.
 
         Args:
             site_id: The site ID.
-            access_zone_id: The source/access zone ID.
-            infrastructure_zone_id: The destination zone ID.
-            ordered_policy_ids: List of user-defined policy IDs in desired order.
+            source_firewall_zone_id: The source firewall zone ID.
+            destination_firewall_zone_id: The destination firewall zone ID.
+            ordered_firewall_policy_ids: Ordered policy IDs around system rules.
 
         Returns:
             The updated policy ordering configuration.
 
         """
         params = {
-            "accessZoneId": access_zone_id,
-            "infrastructureZoneId": infrastructure_zone_id,
+            "sourceFirewallZoneId": source_firewall_zone_id,
+            "destinationFirewallZoneId": destination_firewall_zone_id,
         }
+        if isinstance(ordered_firewall_policy_ids, dict):
+            ordered_firewall_policy_ids = OrderedFirewallPolicyIds.model_validate(
+                ordered_firewall_policy_ids.get(
+                    "orderedFirewallPolicyIds", ordered_firewall_policy_ids
+                )
+            )
+            # The PUT replaces the whole ordering, so a list the caller left
+            # out must not be sent as the model's empty default.
+            if not {"before_system_defined", "after_system_defined"}.issubset(
+                ordered_firewall_policy_ids.model_fields_set
+            ):
+                msg = (
+                    "ordered_firewall_policy_ids needs both beforeSystemDefined "
+                    "and afterSystemDefined"
+                )
+                raise ValueError(msg)
+        # Only the two spec fields; the model allows extra keys on input.
+        payload = ordered_firewall_policy_ids.model_dump(
+            by_alias=True,
+            include={"before_system_defined", "after_system_defined"},
+        )
+
         data = {
-            "orderedPolicyIds": ordered_policy_ids,
+            "orderedFirewallPolicyIds": payload,
         }
         path = self._client.build_api_path(
-            f"/sites/{site_id}/firewall/policy-orderings"
+            f"/sites/{site_id}/firewall/policies/ordering"
         )
         response = await self._client._put(path, json_data=data, params=params)
 
@@ -479,4 +516,5 @@ class FirewallEndpoint:
             result = response.get("data", response)
             if isinstance(result, dict):
                 return FirewallPolicyOrdering.model_validate(result)
-        raise ValueError("Failed to update firewall policy ordering")
+        msg = "Failed to update firewall policy ordering"
+        raise ValueError(msg)

@@ -91,10 +91,10 @@ class VouchersEndpoint:
         self,
         site_id: str,
         *,
+        name: str,
+        time_limit_minutes: int,
         count: int = 1,
-        name: str | None = None,
         authorized_guest_limit: int | None = None,
-        time_limit_minutes: int | None = None,
         data_usage_limit_mbytes: int | None = None,
         rx_rate_limit_kbps: int | None = None,
         tx_rate_limit_kbps: int | None = None,
@@ -104,10 +104,10 @@ class VouchersEndpoint:
 
         Args:
             site_id: The site ID.
-            count: Number of vouchers to create (1-10000).
-            name: Optional voucher note/label.
-            authorized_guest_limit: Maximum guests per voucher.
+            name: Voucher note/label.
             time_limit_minutes: Access duration in minutes.
+            count: Number of vouchers to create (1-10000).
+            authorized_guest_limit: Maximum guests per voucher.
             data_usage_limit_mbytes: Download limit in megabytes.
             rx_rate_limit_kbps: Download speed limit.
             tx_rate_limit_kbps: Upload speed limit.
@@ -117,13 +117,13 @@ class VouchersEndpoint:
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/hotspot/vouchers")
-        data: dict[str, Any] = {"count": count}
-        if name is not None:
-            data["name"] = name
+        data: dict[str, Any] = {
+            "count": count,
+            "name": name,
+            "timeLimitMinutes": time_limit_minutes,
+        }
         if authorized_guest_limit is not None:
             data["authorizedGuestLimit"] = authorized_guest_limit
-        if time_limit_minutes is not None:
-            data["timeLimitMinutes"] = time_limit_minutes
         if data_usage_limit_mbytes is not None:
             data["dataUsageLimitMBytes"] = data_usage_limit_mbytes
         if rx_rate_limit_kbps is not None:
@@ -135,6 +135,9 @@ class VouchersEndpoint:
 
         if isinstance(response, dict):
             result = response.get("data", response)
+            # The spec's creation result wraps the list: {"vouchers": [...]}.
+            if isinstance(result, dict) and isinstance(result.get("vouchers"), list):
+                result = result["vouchers"]
             if isinstance(result, list) and len(result) > 0:
                 return [Voucher.model_validate(item) for item in result]
             if isinstance(result, dict):
@@ -158,6 +161,24 @@ class VouchersEndpoint:
         )
         await self._client._delete(path)
         return True
+
+    async def delete_by_filter(self, site_id: str, filter_str: str) -> int:
+        """
+        Delete vouchers matching a filter expression.
+
+        Args:
+            site_id: The site ID.
+            filter_str: Filter query string using API filter syntax.
+
+        Returns:
+            The number of vouchers deleted.
+
+        """
+        path = self._client.build_api_path(f"/sites/{site_id}/hotspot/vouchers")
+        response = await self._client._delete(path, params={"filter": filter_str})
+        if isinstance(response, dict):
+            return int(response.get("vouchersDeleted", 0))
+        return 0
 
     async def delete_multiple(self, site_id: str, voucher_ids: list[str]) -> bool:
         """

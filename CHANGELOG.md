@@ -28,10 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Aligned the vendored UniFi Network API client with OpenAPI spec v10.6.106: updated device adoption path and limit flag, removed non-spec device locate and site lookup methods, updated DPI categories/applications and country lookups to unscoped endpoints with pagination, corrected firewall policy ordering endpoints and query parameters, enabled firewall policy patching, aligned site-to-site VPN tunnel paths, converted network updates to full-object PUT requests, and added voucher deletion by filter.
 - The README is reorganized around the supported UniFi products: Network, Protect, InnerSpace, Mobility, Site Manager and Carrier Fabric (ISP). It now has an overview, a product summary, setup steps per connection type, all registered actions and all six dashboard cards. The "How this differs from the official integrations" section is removed. Inaccurate claims are corrected: firmware update entities don't install firmware, there is no PoE port power-cycle action, there is no Recording binary sensor or Recording Mode select, and the topology card is listed as "UniFi Topology". [#230](https://github.com/ruaan-deysel/ha-unifi-insights/issues/230)
 
 ### Fixed
 
+- Generating hotspot vouchers (`unifi_insights.generate_voucher`) without a note no longer fails: the voucher name the Network API requires now defaults to "Home Assistant".
+- Generating hotspot vouchers no longer reports "Unable to generate voucher" after the vouchers were created. The client now reads the API's `{"vouchers": [...]}` response, so a false failure no longer prompts a retry that could create duplicate vouchers.
+- Restarting a UniFi Network device (Restart button or `unifi_insights.restart_device`) now uses the documented device-actions endpoint (`POST …/devices/{id}/actions`) instead of the undocumented `…/restart` path.
 - The chime Play button failed on every press because it passed an extra ringtone argument to the coordinator; it now plays the chime.
 - Secrets in logged API responses are now fully redacted. Before, a password, Wi-Fi passphrase, token or API key containing a colon (`:`) or an escaped quote was only partly hidden: debug logs and "Response is not JSON" warnings showed the value up to its last colon, for example `"passphrase": "my:secret: "**REDACTED**"`. Now the whole value is replaced: `"passphrase": "**REDACTED**"`.
 
