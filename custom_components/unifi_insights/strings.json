@@ -896,6 +896,12 @@
     },
     "legacy_site_not_found": {
       "message": "No verified classic site name found for site {site_id}."
+    },
+    "wake_on_lan_unavailable": {
+      "message": "Home Assistant's Wake on LAN service is not available. Check the log for Wake on LAN setup errors, then restart Home Assistant."
+    },
+    "wake_failed": {
+      "message": "Unable to send the Wake-on-LAN packet to {mac}: {error}"
     }
   }
 }
