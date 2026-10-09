@@ -537,7 +537,7 @@ def _entry_with_sites(
         (("protect_camera_site2",), False),
         (("default_device-1",), False),
         (("protect_camera_cam-1",), False),
-        (("client_aa:bb:cc:dd:ee:ff",), False),
+        (("client_aa:bb:cc:dd:ee:ff",), True),
     ],
 )
 async def test_remove_config_entry_device_only_for_deselected_sites(
@@ -1173,3 +1173,40 @@ async def test_setup_entry_innerspace_only_console(
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     mock_innerspace_client.close.assert_awaited()
+
+
+async def test_remove_config_entry_device_offline_client_removable(
+    hass: HomeAssistant,
+) -> None:
+    """An offline client_<mac> device is removable, connected device is not."""
+    entry = MagicMock()
+    coordinator = MagicMock()
+    entry.runtime_data = MagicMock()
+    entry.runtime_data._facade_coordinator = coordinator
+    coordinator.data = {
+        "clients": {
+            "site1": {
+                "c1": {"macAddress": "00:11:22:33:44:01"},
+            }
+        }
+    }
+
+    connected_device = _device_entry("client_00:11:22:33:44:01")
+    assert (
+        await async_remove_config_entry_device(hass, entry, connected_device) is False
+    )
+
+    offline_device = _device_entry("client_00:11:22:33:44:99")
+    assert await async_remove_config_entry_device(hass, entry, offline_device) is True
+
+    # Invalid MAC in client identifier is removable
+    invalid_mac_device = _device_entry("client_not_a_mac")
+    assert (
+        await async_remove_config_entry_device(hass, entry, invalid_mac_device) is True
+    )
+
+    # Empty coordinator data or no coordinator is removable
+    coordinator.data = {}
+    assert await async_remove_config_entry_device(hass, entry, connected_device) is True
+    entry.runtime_data._facade_coordinator = None
+    assert await async_remove_config_entry_device(hass, entry, connected_device) is True

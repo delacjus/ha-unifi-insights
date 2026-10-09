@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
@@ -310,7 +311,12 @@ def test_derive_directed_broadcast_ignores_unusable_networks() -> None:
         {"id": "num", "purpose": "corporate", "ip_subnet": 123},
     ]
     assert derive_directed_broadcast(networks, ip="10.0.0.5") is None
+    assert derive_directed_broadcast(networks, ip="10.0.2.5") is None
+    assert derive_directed_broadcast(networks, ip="10.0.3.1") is None
+    assert derive_directed_broadcast(networks, ip="10.0.4.1") is None
     assert derive_directed_broadcast(networks, network_id="wan1") is None
+    assert derive_directed_broadcast(networks, network_id="dis") is None
+    assert derive_directed_broadcast(networks, network_id="p32") is None
 
 
 def test_derive_directed_broadcast_returns_none_when_unknown_or_ambiguous() -> None:
@@ -539,7 +545,7 @@ async def test_async_wake_client_rejects_invalid_mac(
     assert exc_info.value.translation_domain == DOMAIN
     assert exc_info.value.translation_key == "wake_failed"
     assert exc_info.value.translation_placeholders == {
-        "mac": "not-a-mac",
+        "client_name": "not-a-mac",
         "error": "invalid MAC address",
     }
     assert len(calls) == 0
@@ -579,7 +585,7 @@ async def test_async_wake_client_maps_send_errors(
     assert exc_info.value.translation_domain == DOMAIN
     assert exc_info.value.translation_key == "wake_failed"
     assert exc_info.value.translation_placeholders == {
-        "mac": "00:11:22:33:44:55",
+        "client_name": "Client 00:11:22:33:44:55",
         "error": str(error),
     }
 
@@ -684,3 +690,148 @@ async def test_wake_on_lan_dependency_registers_the_service(
 ) -> None:
     """Loading integration loads wake_on_lan and registers service."""
     assert hass.services.has_service("wake_on_lan", "send_magic_packet")
+
+
+async def test_async_wake_client_broadcast_lookup_timeout_fallback(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """Press-time broadcast lookup times out and sends packet without broadcast."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {
+        "clients": {"site1": {"c1": {"macAddress": mac, "ipAddress": "10.0.0.50"}}}
+    }
+
+    hang_event = asyncio.Event()
+
+    async def hang(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        await hang_event.wait()
+        return []
+
+    facade.network_client.networks.get_legacy_all = AsyncMock(side_effect=hang)
+    calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
+
+    with patch(
+        "custom_components.unifi_insights.coordinators.facade.WAKE_BROADCAST_TIMEOUT_SECONDS",
+        0.01,
+        create=True,
+    ):
+        async with asyncio.timeout(1):
+            await facade.async_wake_client(mac)
+
+    assert len(calls) == 1
+    assert calls[0].data == {"mac": mac}
+
+
+async def test_async_wake_client_skips_lookup_when_coordinator_update_failed(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """Broadcast lookup is skipped when coordinator last update failed."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {
+        "clients": {"site1": {"c1": {"macAddress": mac, "ipAddress": "10.0.0.50"}}}
+    }
+    facade.last_update_success = False
+    calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
+
+    await facade.async_wake_client(mac)
+
+    assert len(calls) == 1
+    assert calls[0].data == {"mac": mac}
+    facade.network_client.networks.get_legacy_all.assert_not_awaited()
+
+
+def test_select_wake_history_30_day_boundary() -> None:
+    """30-day boundary: 30 days and just inside kept, just outside dropped."""
+    now = 1000000.0
+    window = 30 * 86400
+    exact = now - window
+    inside = now - window + 1
+    outside = now - window - 1
+
+    records = [
+        {
+            "mac": "00:11:22:33:44:01",
+            "name": "Exact",
+            "is_wired": True,
+            "last_seen": exact,
+        },
+        {
+            "mac": "00:11:22:33:44:02",
+            "name": "Inside",
+            "is_wired": True,
+            "last_seen": inside,
+        },
+        {
+            "mac": "00:11:22:33:44:03",
+            "name": "Outside",
+            "is_wired": True,
+            "last_seen": outside,
+        },
+    ]
+    res = select_wake_history(records, now=now)
+    assert "00:11:22:33:44:01" in res
+    assert "00:11:22:33:44:02" in res
+    assert "00:11:22:33:44:03" not in res
+
+
+async def test_async_wake_client_press_path_site_name_from_internal_reference_only(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """Press path resolves legacy site name from internalReference only."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {"clients": {}}
+    facade._config_coordinator.get_site_ids.return_value = ["site1", "site2"]
+    facade._config_coordinator.get_site.side_effect = lambda s: (
+        {"internalReference": "alpha"} if s == "site1" else {}
+    )
+    facade.network_client.networks.get_legacy_all = AsyncMock(return_value=[])
+    facade.network_client.clients.get_historical_legacy = AsyncMock(return_value=[])
+    calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
+
+    await facade.async_wake_client(mac)
+
+    assert len(calls) == 1
+    assert facade.network_client.networks.get_legacy_all.await_args_list == [
+        call("alpha")
+    ]
+
+
+async def test_async_wake_client_online_queries_only_own_site(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """An online client queries only its own site, not every site."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {
+        "clients": {"site1": {"c1": {"macAddress": mac, "ipAddress": "10.0.0.50"}}}
+    }
+    facade._config_coordinator.get_site_ids.return_value = ["site1", "site2"]
+    facade._config_coordinator.get_site.side_effect = lambda s: {
+        "internalReference": f"{s}_ref"
+    }
+    facade.network_client.networks.get_legacy_all = AsyncMock(return_value=[])
+    calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
+
+    await facade.async_wake_client(mac)
+
+    assert len(calls) == 1
+    assert facade.network_client.networks.get_legacy_all.await_args_list == [
+        call("site1_ref")
+    ]
+
+
+async def test_async_wake_client_calls_service_blocking(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """Service call to wake_on_lan explicitly passes blocking=True."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {"clients": {}}
+    with patch(
+        "homeassistant.core.ServiceRegistry.async_call", new_callable=AsyncMock
+    ) as mock_call:
+        await facade.async_wake_client(mac)
+        mock_call.assert_awaited_once_with(
+            "wake_on_lan",
+            "send_magic_packet",
+            {"mac": mac},
+            blocking=True,
+        )

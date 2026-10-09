@@ -269,6 +269,9 @@
       },
       "poe_power_cycle": {
         "default": "mdi:power-cycle"
+      },
+      "client_wake": {
+        "default": "mdi:power"
       }
     },
     "switch": {

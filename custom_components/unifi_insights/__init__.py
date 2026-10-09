@@ -28,6 +28,7 @@ from .carrier_fabric_data import (
     CarrierFabricConfigEntry,
     CarrierFabricData,
 )
+from .client_wake import find_client_by_mac
 from .console_identity import (
     first_non_default_site_id,
     is_console_device,
@@ -812,9 +813,24 @@ async def async_remove_config_entry_device(
             or _is_stale_mobility_identifier(
                 identifier, runtime_data.mobility_coordinator
             )
+            or _is_removable_client_identifier(identifier, runtime_data)
         )
         for domain, identifier in device_entry.identifiers
     )
+
+
+def _is_removable_client_identifier(
+    identifier: str, runtime_data: UnifiInsightsData
+) -> bool:
+    """Return True if a client_<mac> device is not currently connected."""
+    if not identifier.startswith("client_"):
+        return False
+    mac = normalize_mac(identifier.removeprefix("client_"))
+    coordinator = getattr(runtime_data, "_facade_coordinator", None)
+    if not mac or coordinator is None or not coordinator.data:
+        return True
+    clients_by_site = coordinator.data.get("clients", {})
+    return find_client_by_mac(clients_by_site, mac) is None
 
 
 def _is_stale_mobility_identifier(
