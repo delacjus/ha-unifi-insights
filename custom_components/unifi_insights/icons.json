@@ -252,6 +252,12 @@
         "state": {
           "off": "mdi:volume-off"
         }
+      },
+      "camera_microphone": {
+        "default": "mdi:microphone",
+        "state": {
+          "off": "mdi:microphone-off"
+        }
       }
     },
     "button": {
@@ -266,20 +272,11 @@
       }
     },
     "switch": {
-      "microphone": {
-        "default": "mdi:microphone",
-        "state": {
-          "off": "mdi:microphone-off"
-        }
-      },
       "outlet": {
         "default": "mdi:power-socket-us"
       }
     },
     "select": {
-      "recording_mode": {
-        "default": "mdi:record-rec"
-      },
       "hdr_mode": {
         "default": "mdi:hdr"
       },
@@ -313,7 +310,6 @@
   "services": {
     "refresh_data": "mdi:refresh",
     "restart_device": "mdi:restart",
-    "set_recording_mode": "mdi:record-rec",
     "set_hdr_mode": "mdi:hdr",
     "set_video_mode": "mdi:video",
     "set_mic_volume": "mdi:microphone",

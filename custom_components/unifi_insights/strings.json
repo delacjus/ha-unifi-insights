@@ -603,6 +603,9 @@
       },
       "fob_keypad_beep": {
         "name": "Keypad Beep"
+      },
+      "camera_microphone": {
+        "name": "Microphone"
       }
     },
     "button": {
@@ -636,12 +639,6 @@
       }
     },
     "switch": {
-      "microphone": {
-        "name": "Microphone"
-      },
-      "privacy_mode": {
-        "name": "Privacy Mode"
-      },
       "status_light": {
         "name": "Status Light"
       },
@@ -694,9 +691,6 @@
       },
       "liveview": {
         "name": "Liveview"
-      },
-      "recording_mode": {
-        "name": "Recording Mode"
       },
       "infrared_mode": {
         "name": "Infrared Mode"
