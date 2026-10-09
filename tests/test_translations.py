@@ -333,5 +333,27 @@ def test_wake_exception_translations_match_in_both_files() -> None:
         assert en_exc[key] == strings_exc[key], (
             f"{key} differs between strings.json and translations/en.json"
         )
-    assert "{mac}" in strings_exc["wake_failed"]["message"]
+    assert "{client_name}" in strings_exc["wake_failed"]["message"]
     assert "{error}" in strings_exc["wake_failed"]["message"]
+
+
+def test_wake_button_translations_and_icon_resolve_in_both_files() -> None:
+    """Wake button translation and icon exist in all files and options match."""
+    en_btn = json.loads(_EN_JSON.read_text())["entity"]["button"]
+    strings_btn = json.loads(_STRINGS_JSON.read_text())["entity"]["button"]
+    icons_btn = json.loads(_ICONS_JSON.read_text())["entity"]["button"]
+
+    assert "client_wake" in strings_btn
+    assert "client_wake" in en_btn
+    assert strings_btn["client_wake"]["name"] == "Wake {client_name}"
+    assert en_btn["client_wake"]["name"] == "Wake {client_name}"
+    assert icons_btn.get("client_wake", {}).get("default") == "mdi:power"
+
+    en_opt = json.loads(_EN_JSON.read_text())["options"]["step"]["init"][
+        "data_description"
+    ]["client_control"]
+    strings_opt = json.loads(_STRINGS_JSON.read_text())["options"]["step"]["init"][
+        "data_description"
+    ]["client_control"]
+    assert en_opt == strings_opt
+    assert "Wake-on-LAN" in en_opt
