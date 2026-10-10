@@ -352,10 +352,12 @@ def test_derive_directed_broadcast_returns_none_when_unknown_or_ambiguous() -> N
 def mock_sub_coordinators() -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
     """Create mock sub-coordinators for facade tests."""
     config_coord = MagicMock()
+    config_coord.last_update_success = True
     config_coord.get_site.return_value = {"internalReference": "default"}
     config_coord.get_site_ids.return_value = ["site1"]
 
     device_coord = MagicMock()
+    device_coord.last_update_success = True
     protect_coord = MagicMock()
     innerspace_coord = MagicMock()
 
@@ -676,6 +678,67 @@ async def test_async_get_wake_history_is_empty_without_sites(
     assert await facade.async_get_wake_history() == {}
 
 
+async def test_async_get_wake_history_keeps_any_age_name_only_for_enabled_buttons(
+    facade: UnifiFacadeCoordinator, freezer: Any
+) -> None:
+    """Enabled Wake rows use old names; new buttons retain the recent-wired rule."""
+    freezer.move_to("2026-10-09T12:00:00Z")
+    mac = "00:11:22:33:44:55"
+    facade.network_client.clients.get_historical_legacy.return_value = [
+        {
+            "mac": mac,
+            "is_wired": True,
+            "name": " ",
+            "hostname": "Old PC",
+            "last_seen": 1_791_547_200.0 - 40 * 86400,
+        }
+    ]
+    assert await facade.async_get_wake_history() == {}
+    assert await facade.async_get_wake_history(enabled_macs={mac}) == {
+        mac: ("Old PC", "site1")
+    }
+
+
+@pytest.mark.parametrize("name", ["", "  "])
+async def test_async_wake_client_error_uses_hostname_after_blank_name(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator, name: str
+) -> None:
+    """Blank names do not hide a useful hostname in translated errors."""
+    mac = "00:11:22:33:44:55"
+    facade.data = {
+        "clients": {
+            "site1": {"c1": {"macAddress": mac, "name": name, "hostname": "Host PC"}}
+        }
+    }
+    with (
+        patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            side_effect=OSError("send failed"),
+        ),
+        pytest.raises(HomeAssistantError) as exc,
+    ):
+        await facade.async_wake_client(mac)
+    assert exc.value.translation_placeholders["client_name"] == "Host PC"
+
+
+async def test_async_wake_client_error_uses_supplied_client_name(
+    hass: HomeAssistant,
+    facade: UnifiFacadeCoordinator,
+    init_integration: MockConfigEntry,
+) -> None:
+    """The caller's name appears in errors even when there is no live client."""
+    with (
+        patch(
+            "homeassistant.core.ServiceRegistry.async_call",
+            side_effect=OSError("send failed"),
+        ),
+        pytest.raises(HomeAssistantError) as exc,
+    ):
+        await facade.async_wake_client("00:11:22:33:44:55", client_name="Saved PC")
+    assert exc.value.translation_placeholders["client_name"] == "Saved PC"
+    assert "Saved PC" in str(exc.value)
+
+
 def test_manifest_declares_wake_on_lan_dependency() -> None:
     """manifest.json must declare wake_on_lan as a dependency."""
     manifest_path = (
@@ -722,15 +785,19 @@ async def test_async_wake_client_broadcast_lookup_timeout_fallback(
     assert calls[0].data == {"mac": mac}
 
 
-async def test_async_wake_client_skips_lookup_when_coordinator_update_failed(
-    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+@pytest.mark.parametrize(
+    "failed_coordinator", ["_config_coordinator", "_device_coordinator"]
+)
+async def test_async_wake_client_skips_lookup_when_sub_coordinator_failed(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator, failed_coordinator: str
 ) -> None:
-    """Broadcast lookup is skipped when coordinator last update failed."""
+    """Broadcast lookup is skipped when either network sub-coordinator fails."""
     mac = "00:11:22:33:44:55"
     facade.data = {
         "clients": {"site1": {"c1": {"macAddress": mac, "ipAddress": "10.0.0.50"}}}
     }
-    facade.last_update_success = False
+    getattr(facade, failed_coordinator).last_update_success = False
+    assert facade.last_update_success is True
     calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
 
     await facade.async_wake_client(mac)

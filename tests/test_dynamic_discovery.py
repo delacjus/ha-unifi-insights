@@ -89,12 +89,16 @@ def mock_config_entry(mock_coordinator: MagicMock) -> MagicMock:
     """Create a mock config entry."""
     entry = MagicMock()
     entry.entry_id = "test_entry_id"
+    entry.options = {CONF_CLIENT_CONTROL: True}
+    entry.async_on_unload = MagicMock()
+    entry.async_create_background_task.side_effect = lambda hass, target, name: (
+        hass.async_create_background_task(target, name)
+    )
+    mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
     entry.runtime_data = MagicMock()
     entry.runtime_data.mobility_coordinator = None
     entry.runtime_data.coordinator = mock_coordinator
     entry.runtime_data.device_coordinator = MagicMock()
-    entry.options = {CONF_CLIENT_CONTROL: True}
-    entry.async_on_unload = MagicMock()
     return entry
 
 

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -30,6 +31,7 @@ from custom_components.unifi_insights.button import (
     get_device_ports,
     port_can_be_power_cycled,
 )
+from custom_components.unifi_insights.client_wake import select_wake_history
 from custom_components.unifi_insights.const import (
     CONF_CLIENT_CONTROL,
     DOMAIN,
@@ -628,11 +630,14 @@ class TestAsyncSetupEntry:
         return coordinator
 
     @pytest.fixture
-    def mock_config_entry(self, mock_coordinator):
-        """Create mock config entry."""
+    def mock_config_entry(self, hass: HomeAssistant, mock_coordinator):
+        """Create a mock entry that schedules its background coroutines."""
         entry = MagicMock()
-        entry.runtime_data = MagicMock()
-        entry.runtime_data.coordinator = mock_coordinator
+        entry.runtime_data = MagicMock(coordinator=mock_coordinator)
+        entry.async_create_background_task.side_effect = lambda hass, target, name: (
+            hass.async_create_background_task(target, name)
+        )
+        mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
         return entry
 
     async def test_setup_entry_creates_buttons(
@@ -1054,11 +1059,14 @@ class TestAsyncSetupEntryWithClients:
         return coordinator
 
     @pytest.fixture
-    def mock_config_entry(self, mock_coordinator):
-        """Create mock config entry."""
+    def mock_config_entry(self, hass: HomeAssistant, mock_coordinator):
+        """Create a mock entry that schedules its background coroutines."""
         entry = MagicMock()
-        entry.runtime_data = MagicMock()
-        entry.runtime_data.coordinator = mock_coordinator
+        entry.runtime_data = MagicMock(coordinator=mock_coordinator)
+        entry.async_create_background_task.side_effect = lambda hass, target, name: (
+            hass.async_create_background_task(target, name)
+        )
+        mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
         return entry
 
     async def test_setup_entry_creates_client_reconnect_buttons(
@@ -1477,6 +1485,10 @@ class TestSetupEntryPoeButtons:
         }
 
         mock_entry = MagicMock()
+        mock_entry.async_create_background_task.side_effect = (
+            lambda hass, target, name: hass.async_create_background_task(target, name)
+        )
+        mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
         mock_entry.entry_id = "test_entry"
         mock_entry.runtime_data = MagicMock()
         mock_entry.runtime_data.coordinator = mock_coordinator
@@ -1593,6 +1605,10 @@ class TestSetupEntryPoeButtons:
         }
 
         mock_entry = MagicMock()
+        mock_entry.async_create_background_task.side_effect = (
+            lambda hass, target, name: hass.async_create_background_task(target, name)
+        )
+        mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
         mock_entry.entry_id = "test_entry"
         mock_entry.runtime_data = MagicMock()
         mock_entry.runtime_data.coordinator = mock_coordinator
@@ -1689,6 +1705,10 @@ class TestGenerateVoucherButton:
 
     async def test_discovery_and_deduplication(self, hass, mock_coordinator):
         mock_entry = MagicMock()
+        mock_entry.async_create_background_task.side_effect = (
+            lambda hass, target, name: hass.async_create_background_task(target, name)
+        )
+        mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
         mock_entry.entry_id = "test_entry"
         mock_entry.runtime_data = MagicMock()
         mock_entry.runtime_data.coordinator = mock_coordinator
@@ -1808,6 +1828,25 @@ class TestGenerateVoucherButton:
 class TestUnifiClientWakeButton:
     """Tests for UnifiClientWakeButton entity."""
 
+    @pytest.mark.parametrize("name", ["", "  "])
+    def test_wake_button_blank_name_uses_hostname(
+        self, hass: HomeAssistant, name: str
+    ) -> None:
+        """Empty and whitespace names fall through to the live hostname."""
+        mac = "00:11:22:33:44:55"
+        coordinator = MagicMock(hass=hass)
+        coordinator.data = {
+            "clients": {
+                "site1": {
+                    "c1": {"macAddress": mac, "name": name, "hostname": "Host PC"}
+                }
+            }
+        }
+        button = UnifiClientWakeButton(
+            coordinator, mac, site_id="site1", fallback_name="History PC"
+        )
+        assert button.translation_placeholders == {"client_name": "Host PC"}
+
     def test_wake_button_identity(self, hass: HomeAssistant) -> None:
         """Wake button identity, unique_id, and device_info attributes."""
         coordinator = MagicMock()
@@ -1815,14 +1854,14 @@ class TestUnifiClientWakeButton:
         coordinator.data = {"clients": {}}
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
 
         assert button.unique_id == f"unifi_insights_{mac}_wake"
         assert button.translation_key == "client_wake"
         assert button.has_entity_name is True
         assert button.translation_placeholders == {"client_name": mac}
         assert button.device_info is not None
-        assert button.device_info["identifiers"] == {(DOMAIN, "site_default")}
+        assert button.device_info["identifiers"] == {(DOMAIN, "site_site1")}
         assert button.device_info["manufacturer"] == MANUFACTURER
         assert button.device_info["model"] == "UniFi Site"
 
@@ -1846,7 +1885,7 @@ class TestUnifiClientWakeButton:
             },
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}},
         }
-        btn_gw = UnifiClientWakeButton(coordinator, mac)
+        btn_gw = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert btn_gw.device_info is not None
         assert btn_gw.device_info["identifiers"] == {(DOMAIN, "site1_gw1")}
 
@@ -1856,7 +1895,7 @@ class TestUnifiClientWakeButton:
             "devices": {"site1": {}},
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}},
         }
-        btn_site = UnifiClientWakeButton(coordinator, mac)
+        btn_site = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert btn_site.device_info is not None
         assert btn_site.device_info["identifiers"] == {(DOMAIN, "site_site1")}
         assert btn_site.device_info["name"] == "UniFi Site (Home Site)"
@@ -1882,13 +1921,13 @@ class TestUnifiClientWakeButton:
             },
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Workstation"}}},
         }
-        btn_gw = UnifiClientWakeButton(coordinator, mac)
+        btn_gw = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         for _, identifier in btn_gw.device_info["identifiers"]:
             assert not identifier.startswith("client_")
 
         # Offline unseeded client
         coordinator.data = {"devices": {}, "clients": {}}
-        btn_offline = UnifiClientWakeButton(coordinator, mac)
+        btn_offline = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         for _, identifier in btn_offline.device_info["identifiers"]:
             assert not identifier.startswith("client_")
 
@@ -1904,23 +1943,25 @@ class TestUnifiClientWakeButton:
         coordinator.data = {
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}}
         }
-        btn_live = UnifiClientWakeButton(coordinator, mac)
+        btn_live = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert btn_live.translation_placeholders == {"client_name": "Gaming PC"}
 
         # Live client hostname fallback
         coordinator.data = {
             "clients": {"site1": {"c1": {"macAddress": mac, "hostname": "pc-host"}}}
         }
-        btn_host = UnifiClientWakeButton(coordinator, mac)
+        btn_host = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert btn_host.translation_placeholders == {"client_name": "pc-host"}
 
         # History-only client
         coordinator.data = {"clients": {}}
-        btn_hist = UnifiClientWakeButton(coordinator, mac, fallback_name="Saved PC")
+        btn_hist = UnifiClientWakeButton(
+            coordinator, mac, fallback_name="Saved PC", site_id="site1"
+        )
         assert btn_hist.translation_placeholders == {"client_name": "Saved PC"}
 
         # MAC-only client (offline and unnamed)
-        btn_mac = UnifiClientWakeButton(coordinator, mac)
+        btn_mac = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert btn_mac.translation_placeholders == {"client_name": mac}
 
     def test_wake_button_offline_seeded_client_attaches_to_seed_site_gateway(
@@ -1960,7 +2001,7 @@ class TestUnifiClientWakeButton:
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}}
         }
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert button.translation_placeholders == {"client_name": "Gaming PC"}
 
     def test_wake_button_name_falls_back_to_hostname(self, hass: HomeAssistant) -> None:
@@ -1972,7 +2013,7 @@ class TestUnifiClientWakeButton:
             "clients": {"site1": {"c1": {"macAddress": mac, "hostname": "pc-host"}}}
         }
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert button.translation_placeholders == {"client_name": "pc-host"}
 
     def test_wake_button_name_uses_history_name_when_not_connected(
@@ -1984,7 +2025,9 @@ class TestUnifiClientWakeButton:
         coordinator.hass = hass
         coordinator.data = {"clients": {}}
 
-        button = UnifiClientWakeButton(coordinator, mac, fallback_name="Saved PC")
+        button = UnifiClientWakeButton(
+            coordinator, mac, fallback_name="Saved PC", site_id="site1"
+        )
         assert button.translation_placeholders == {"client_name": "Saved PC"}
 
     def test_wake_button_name_falls_back_to_mac(self, hass: HomeAssistant) -> None:
@@ -1994,7 +2037,7 @@ class TestUnifiClientWakeButton:
         coordinator.hass = hass
         coordinator.data = {"clients": {}}
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         assert button.translation_placeholders == {"client_name": mac}
 
     def test_wake_button_is_always_available(self, hass: HomeAssistant) -> None:
@@ -2004,7 +2047,9 @@ class TestUnifiClientWakeButton:
         coordinator.data = {"clients": {}}
         coordinator.last_update_success = False
 
-        button = UnifiClientWakeButton(coordinator, "00:11:22:33:44:55")
+        button = UnifiClientWakeButton(
+            coordinator, "00:11:22:33:44:55", site_id="site1"
+        )
         assert button.available is True
 
     async def test_wake_button_press_calls_facade_with_mac(
@@ -2017,7 +2062,7 @@ class TestUnifiClientWakeButton:
         coordinator.async_wake_client = AsyncMock()
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         await button.async_press()
 
         coordinator.async_wake_client.assert_awaited_once_with(mac, client_name=mac)
@@ -2034,7 +2079,7 @@ class TestUnifiClientWakeButton:
         )
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac)
+        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
         with pytest.raises(HomeAssistantError, match=f"Unable to wake client {mac}"):
             await button.async_press()
 
@@ -2048,11 +2093,13 @@ class TestUnifiClientWakeButton:
         err = HomeAssistantError(
             translation_domain=DOMAIN,
             translation_key="wake_failed",
-            translation_placeholders={"mac": "00:11:22:33:44:55", "error": "test"},
+            translation_placeholders={"client_name": "Test PC", "error": "test"},
         )
         coordinator.async_wake_client = AsyncMock(side_effect=err)
 
-        button = UnifiClientWakeButton(coordinator, "00:11:22:33:44:55")
+        button = UnifiClientWakeButton(
+            coordinator, "00:11:22:33:44:55", site_id="site1"
+        )
         with pytest.raises(HomeAssistantError) as exc_info:
             await button.async_press()
 
@@ -2062,6 +2109,176 @@ class TestUnifiClientWakeButton:
 
 class TestWakeButtonSetup:
     """Tests for Wake button platform setup and registry lifecycle."""
+
+    async def test_wake_button_real_platform_device_registry_and_rendered_name(
+        self,
+        hass: HomeAssistant,
+        mock_config_entry: MockConfigEntry,
+        *,
+        mock_network_client: MagicMock,
+        mock_protect_client: MagicMock,
+        mock_local_auth: MagicMock,
+        enable_custom_integrations,
+    ) -> None:
+        """Real platform creates a disabled Wake row on its gateway with its name."""
+        mac = "00:11:22:33:44:55"
+        mock_network_client.sites.get_all.return_value = [
+            {"id": "site1", "name": "Home", "internalReference": "default"}
+        ]
+        mock_network_client.clients.get_all.return_value = [
+            {"id": "c1", "macAddress": mac, "name": "Gaming PC", "type": "WIRED"}
+        ]
+        mock_network_client.clients.get_historical_legacy = AsyncMock(return_value=[])
+        mock_network_client.devices.get_all.return_value = [
+            {
+                "id": "gateway",
+                "name": "Home Gateway",
+                "model": "UniFi Dream Machine Pro",
+                "state": "ONLINE",
+                "features": ["gateway"],
+            }
+        ]
+        mock_config_entry.add_to_hass(hass)
+        hass.config_entries.async_update_entry(
+            mock_config_entry, options={CONF_CLIENT_CONTROL: True}
+        )
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        registry = er.async_get(hass)
+        entity_id = registry.async_get_entity_id(
+            "button", DOMAIN, f"{DOMAIN}_{mac}_wake"
+        )
+        assert entity_id is not None
+        row = registry.async_get(entity_id)
+        assert row.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        assert row.original_name == "Wake Gaming PC"
+        assert row.device_id is not None
+        device = dr.async_get(hass).async_get(row.device_id)
+        assert device.identifiers == {(DOMAIN, "site1_gateway")}
+        assert hass.states.get(entity_id) is None
+        registry.async_update_entity(entity_id, disabled_by=None)
+        mock_network_client.clients.get_all.return_value = []
+        mock_network_client.clients.get_historical_legacy.return_value = [
+            {
+                "mac": mac,
+                "is_wired": True,
+                "name": "Old PC",
+                "last_seen": 1,
+            }
+        ]
+        await hass.config_entries.async_reload(mock_config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.attributes["friendly_name"] == "Home Gateway Wake Old PC"
+        assert registry.async_get(entity_id).device_id == device.id
+
+    async def test_wake_history_seed_cancelled_on_entry_unload(
+        self, hass: HomeAssistant, init_integration: MockConfigEntry
+    ) -> None:
+        """A pending seed is cancelled by config entry unload, not HA shutdown."""
+        entry = init_integration
+        started, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def pending_history(**kwargs) -> dict[str, tuple[str, str]]:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+            return {}
+
+        entry.runtime_data.coordinator.async_get_wake_history = pending_history
+        await async_setup_entry(hass, entry, lambda entities: None)
+        await started.wait()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert cancelled.is_set()
+
+    @pytest.mark.parametrize("history_case", ["unnamed", "old", "raises"])
+    @pytest.mark.parametrize("registry_name", [None, "Wake Registry PC", "Wake   "])
+    @pytest.mark.parametrize("existing_device", [False, True])
+    async def test_setup_restores_enabled_offline_wake_before_history(
+        self,
+        hass: HomeAssistant,
+        history_case: str,
+        *,
+        registry_name: str | None,
+        existing_device: bool,
+    ) -> None:
+        """Enabled offline buttons exist and work before any history response."""
+        mac = "00:11:22:33:44:99"
+        coordinator = MagicMock()
+        coordinator.hass = hass
+        coordinator.data = {
+            "sites": {"site1": {}},
+            "devices": {},
+            "clients": {},
+            "protect": {},
+        }
+        coordinator.protect_client = None
+        coordinator.async_wake_client = AsyncMock()
+        started, proceed = asyncio.Event(), asyncio.Event()
+
+        async def history(**kwargs) -> dict[str, tuple[str, str]]:
+            started.set()
+            await proceed.wait()
+            if history_case == "raises":
+                msg = "history unavailable"
+                raise RuntimeError(msg)
+            records = (
+                [
+                    {
+                        "mac": mac,
+                        "is_wired": True,
+                        "name": "Old PC",
+                        "last_seen": 10_000_000.0 - 40 * 86400,
+                    }
+                ]
+                if history_case == "old"
+                else [{"mac": mac, "is_wired": True}]
+            )
+            names = select_wake_history(
+                records, now=10_000_000.0, enabled_macs=kwargs.get("enabled_macs")
+            )
+            return {mac: (name, "site1") for mac, name in names.items()}
+
+        coordinator.async_get_wake_history = history
+        entry = MockConfigEntry(domain=DOMAIN, options={CONF_CLIENT_CONTROL: True})
+        entry.add_to_hass(hass)
+        entry.runtime_data = MagicMock(coordinator=coordinator)
+        device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, "site1_old_gateway")}
+        )
+        row = er.async_get(hass).async_get_or_create(
+            "button",
+            DOMAIN,
+            f"unifi_insights_{mac}_wake",
+            config_entry=entry,
+            device_id=device.id if existing_device else None,
+            original_name=registry_name,
+        )
+        added: list = []
+        await async_setup_entry(hass, entry, added.extend)
+        wakes = [e for e in added if isinstance(e, UnifiClientWakeButton)]
+        assert len(wakes) == 1
+        button = wakes[0]
+        assert button.device_info["identifiers"] == (
+            device.identifiers if existing_device else {(DOMAIN, "site_site1")}
+        )
+        saved_name = "Registry PC" if registry_name == "Wake Registry PC" else mac
+        assert button.translation_placeholders == {"client_name": saved_name}
+        await button.async_press()
+        coordinator.async_wake_client.assert_awaited_once_with(
+            mac, client_name=saved_name
+        )
+        assert er.async_get(hass).async_get(row.entity_id).disabled_by is None
+        await started.wait()
+        proceed.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert button.translation_placeholders == {
+            "client_name": "Old PC" if history_case == "old" else saved_name
+        }
+        assert len([e for e in added if isinstance(e, UnifiClientWakeButton)]) == 1
 
     async def test_setup_creates_wake_buttons_for_wired_clients_only(
         self, hass: HomeAssistant
@@ -2183,7 +2400,7 @@ class TestWakeButtonSetup:
         assert len(wake_buttons_after) == 1
         assert wake_buttons_after[0].unique_id == f"unifi_insights_{mac}_wake"
 
-    async def test_setup_restores_registered_wake_buttons_for_offline_clients(
+    async def test_setup_keeps_disabled_offline_wake_row_without_creating_entity(
         self, hass: HomeAssistant
     ) -> None:
         """Offline clients outside history seed are not restored as live entities."""
@@ -2208,6 +2425,7 @@ class TestWakeButtonSetup:
             DOMAIN,
             f"unifi_insights_{mac}_wake",
             config_entry=entry,
+            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
         )
 
         added: list = []
@@ -2501,10 +2719,12 @@ class TestWakeButtonSetup:
         coordinator = MagicMock()
         coordinator.hass = hass
         coordinator.data = {"clients": {}}
-        button = UnifiClientWakeButton(coordinator, "00:11:22:33:44:55")
+        button = UnifiClientWakeButton(
+            coordinator, "00:11:22:33:44:55", site_id="site1"
+        )
         assert button.entity_registry_enabled_default is False
 
-    async def test_setup_restores_wake_button_only_if_connected_or_in_history_seed(
+    async def test_setup_restores_disabled_wake_only_if_connected_or_in_history_seed(
         self, hass: HomeAssistant
     ) -> None:
         """Restore registered Wake button only if connected or in history seed."""
@@ -2541,6 +2761,7 @@ class TestWakeButtonSetup:
                 DOMAIN,
                 f"unifi_insights_{mac}_wake",
                 config_entry=entry,
+                disabled_by=er.RegistryEntryDisabler.INTEGRATION,
             )
 
         added: list = []
@@ -2581,7 +2802,7 @@ class TestWakeButtonSetup:
         seed_started = asyncio.Event()
         seed_proceed = asyncio.Event()
 
-        async def slow_history() -> dict[str, tuple[str, str]]:
+        async def slow_history(**kwargs) -> dict[str, tuple[str, str]]:
             seed_started.set()
             await seed_proceed.wait()
             return {mac: ("History PC", "site1")}

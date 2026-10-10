@@ -13,11 +13,17 @@ from homeassistant.components.button import (
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client_wake import find_client_by_mac, mac_from_wake_unique_id, wake_unique_id
+from .client_wake import (
+    find_client_by_mac,
+    first_non_blank_text,
+    mac_from_wake_unique_id,
+    wake_unique_id,
+)
 from .const import (
     ATTR_CHIME_ID,
     ATTR_CHIME_NAME,
@@ -201,40 +207,68 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up buttons for UniFi Insights")
     known_button_keys: set[tuple[Any, ...]] = set()
 
-    # Wake buttons are keyed by MAC across all sites. At startup, buttons already
-    # in the registry are restored only if currently connected. Recently seen
-    # named wired clients from console history are seeded in the background.
+    # Restore enabled buttons immediately, even without a history response.
+    # Disabled buttons qualify only while connected or in the recent named seed.
     known_wake_macs: set[str] = set()
     if client_control:
         registered_macs = _registered_wake_macs(registry, config_entry.entry_id)
         connected_macs = _connected_client_macs(coordinator)
-        wake_macs = sorted(registered_macs & connected_macs)
-        known_wake_macs.update(wake_macs)
-        if wake_macs:
-            async_add_entities(
-                [UnifiClientWakeButton(coordinator, mac) for mac in wake_macs]
+        restored: dict[str, UnifiClientWakeButton] = {}
+        enabled_macs: set[str] = set()
+        coord_data = coordinator.data or {}
+        for row in er.async_entries_for_config_entry(registry, config_entry.entry_id):
+            mac = mac_from_wake_unique_id(row.unique_id)
+            if row.domain != "button" or row.platform != DOMAIN or mac is None:
+                continue
+            if row.disabled_by is None:
+                enabled_macs.add(mac)
+            elif mac not in registered_macs & connected_macs:
+                continue
+            live = find_client_by_mac(coord_data.get("clients"), mac)
+            site_id = live[0] if live else next(iter(coord_data.get("sites", {})), "")
+            device = (
+                dr.async_get(hass).async_get(row.device_id) if row.device_id else None
             )
+            saved_name = first_non_blank_text(
+                {"name": row.name, "original_name": row.original_name},
+                "name",
+                "original_name",
+            )
+            if saved_name:
+                saved_name = (
+                    "" if saved_name == "Wake" else saved_name.removeprefix("Wake ")
+                )
+            restored[mac] = UnifiClientWakeButton(
+                coordinator,
+                mac,
+                site_id=site_id,
+                fallback_name=saved_name,
+                device_info=DeviceInfo(identifiers=device.identifiers)
+                if device
+                else None,
+            )
+        known_wake_macs.update(restored)
+        if restored:
+            async_add_entities(list(restored.values()))
 
         async def _async_seed_wake_history() -> None:
             """Fetch console history in background and seed Wake buttons."""
             try:
-                history = await coordinator.async_get_wake_history()
+                history = await coordinator.async_get_wake_history(
+                    enabled_macs=enabled_macs
+                )
             except Exception as err:
                 _LOGGER.debug("Wake-on-LAN client history seed failed: %s", err)
                 return
             if not isinstance(history, dict) or not history:
                 return
-            new_macs = [mac for mac in sorted(history) if mac not in known_wake_macs]
-            if not new_macs:
-                return
-            known_wake_macs.update(new_macs)
             entities: list[UnifiClientWakeButton] = []
-            for mac in new_macs:
-                info: Any = history.get(mac)
-                if isinstance(info, tuple):
-                    fallback_name, seed_site = info[0], info[1]
-                else:
-                    fallback_name, seed_site = info, None
+            for mac, (fallback_name, seed_site) in sorted(history.items()):
+                if mac in restored:
+                    restored[mac].async_update_history_name(fallback_name)
+                if mac in known_wake_macs:
+                    continue
+                known_wake_macs.add(mac)
                 entities.append(
                     UnifiClientWakeButton(
                         coordinator,
@@ -243,18 +277,12 @@ async def async_setup_entry(
                         site_id=seed_site,
                     )
                 )
-            async_add_entities(entities)
+            if entities:
+                async_add_entities(entities)
 
-        if type(config_entry).__name__ != "MagicMock" and hasattr(
-            config_entry, "async_create_background_task"
-        ):
-            config_entry.async_create_background_task(
-                hass, _async_seed_wake_history(), name=f"{DOMAIN}_wake_seed"
-            )
-        elif hasattr(hass, "async_create_background_task"):
-            hass.async_create_background_task(
-                _async_seed_wake_history(), name=f"{DOMAIN}_wake_seed"
-            )
+        config_entry.async_create_background_task(
+            hass, _async_seed_wake_history(), name=f"{DOMAIN}_wake_seed"
+        )
 
     @callback
     def async_discover_buttons() -> None:
@@ -721,52 +749,46 @@ class UnifiClientWakeButton(ButtonEntity):
         coordinator: UnifiFacadeCoordinator,
         mac: str,
         *,
+        site_id: str,
         fallback_name: str | None = None,
-        site_id: str | None = None,
+        device_info: DeviceInfo | None = None,
     ) -> None:
         """
         Initialize the button.
 
         mac is the lower-case colon MAC. fallback_name is the name the
         console's client history holds, used only while the client is not connected.
-        site_id is the client's site, falling back to live site or history seed site.
+        site_id is the client's site. Registry restoration preserves its device.
         """
         self.coordinator = coordinator
         self._mac = mac
         self._attr_unique_id = wake_unique_id(mac)
 
         coord_data = coordinator.data if isinstance(coordinator.data, dict) else {}
-        clients_data = coord_data.get("clients")
-        live = find_client_by_mac(clients_data, mac)
+        if device_info is not None:
+            self._attr_device_info = device_info
+        elif site_id:
+            site_info = build_site_device_info(coord_data, site_id)
+            self._attr_device_info = DeviceInfo(**site_info)  # type: ignore[typeddict-item]
+        self.async_update_history_name(fallback_name)
 
-        resolved_site_id = site_id
-        if resolved_site_id is None and live is not None:
-            resolved_site_id = live[0]
-        if resolved_site_id is None:
-            sites = coord_data.get("sites")
-            if isinstance(sites, dict) and sites:
-                resolved_site_id = str(next(iter(sites.keys())))
-            else:
-                resolved_site_id = "default"
-
-        site_info = build_site_device_info(coord_data, resolved_site_id)
-        self._attr_device_info = DeviceInfo(**site_info)  # type: ignore[typeddict-item]
-
-        live_name: str | None = None
-        if live is not None:
-            raw_name = get_field(live[1], "name", "hostname")
-            if isinstance(raw_name, str) and raw_name.strip():
-                live_name = raw_name.strip()
-
-        if live_name:
-            client_name = live_name
-        elif fallback_name and fallback_name.strip():
-            client_name = fallback_name.strip()
-        else:
-            client_name = mac
-
+    @callback
+    def async_update_history_name(self, fallback_name: str | None) -> None:
+        """Apply a history name while preferring the current live client name."""
+        live = find_client_by_mac(
+            (self.coordinator.data or {}).get("clients"), self._mac
+        )
+        live_name = first_non_blank_text(live[1], "name", "hostname") if live else None
+        client_name = live_name or (
+            fallback_name.strip()
+            if fallback_name and fallback_name.strip()
+            else self._mac
+        )
         self._client_name = client_name
         self._attr_translation_placeholders = {"client_name": client_name}
+        self.__dict__.pop("name", None)
+        if self.hass is not None:
+            self.async_write_ha_state()
 
     async def async_press(self) -> None:
         """Send the Wake-on-LAN magic packet."""
