@@ -506,6 +506,23 @@ async def test_async_wake_client_omits_broadcast_when_lookup_fails(
     assert calls[0].data == {"mac": mac}
 
 
+async def test_async_wake_client_omits_broadcast_when_derivation_raises(
+    hass: HomeAssistant, facade: UnifiFacadeCoordinator
+) -> None:
+    """A derivation failure still sends the magic packet without a broadcast."""
+    mac = "00:11:22:33:44:55"
+    facade._async_derive_wake_broadcast = AsyncMock(
+        side_effect=RuntimeError("Unexpected derivation failure")
+    )
+    calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
+
+    await facade.async_wake_client(mac)
+
+    facade._async_derive_wake_broadcast.assert_awaited_once_with(mac)
+    assert len(calls) == 1
+    assert calls[0].data == {"mac": mac}
+
+
 async def test_async_wake_client_skips_sites_without_a_verified_name(
     hass: HomeAssistant, facade: UnifiFacadeCoordinator
 ) -> None:

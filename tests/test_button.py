@@ -24,6 +24,7 @@ from custom_components.unifi_insights.button import (
     UnifiProtectChimePlayButton,
     UnifiProtectPTZPatrolStartButton,
     UnifiProtectPTZPatrolStopButton,
+    _connected_client_macs,
     _get_port_label,
     _registered_wake_macs,
     async_setup_entry,
@@ -1865,6 +1866,17 @@ class TestUnifiClientWakeButton:
         assert button.device_info["manufacturer"] == MANUFACTURER
         assert button.device_info["model"] == "UniFi Site"
 
+    def test_wake_button_without_site_does_not_attach_a_device(
+        self, hass: HomeAssistant
+    ) -> None:
+        """A restored button without site metadata remains unattached."""
+        coordinator = MagicMock(hass=hass)
+        coordinator.data = {"clients": {}}
+
+        button = UnifiClientWakeButton(coordinator, "00:11:22:33:44:55", site_id=None)
+
+        assert button.device_info is None
+
     def test_wake_button_device_info_attaches_to_gateway_or_site_when_no_gateway(
         self, hass: HomeAssistant
     ) -> None:
@@ -2713,6 +2725,23 @@ class TestWakeButtonSetup:
 
         macs = _registered_wake_macs(ent_reg, entry.entry_id)
         assert macs == {"00:11:22:33:44:55"}
+
+    def test_connected_client_macs_ignores_malformed_site_and_client_data(
+        self,
+    ) -> None:
+        """Malformed coordinator records do not hide valid connected clients."""
+        coordinator = MagicMock()
+        coordinator.data = {
+            "clients": {
+                "malformed_site": ["not-a-client-map"],
+                "site1": {
+                    "valid": {"macAddress": "AA:BB:CC:DD:EE:FF"},
+                    "malformed_client": "not-a-client",
+                },
+            }
+        }
+
+        assert _connected_client_macs(coordinator) == {"aa:bb:cc:dd:ee:ff"}
 
     async def test_wake_button_disabled_by_default(self, hass: HomeAssistant) -> None:
         """Wake button is disabled by default for every client."""
