@@ -96,12 +96,12 @@ You can add more than one entry, for example one per console.
 
 To change these settings after setup, go to **Settings** → **Devices & services** → **UniFi Insights** → **Configure**:
 
-| Option                | Default | Description                                                                                                                                                                                                                                    |
-| --------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Track WiFi Clients    | Off     | Creates a device tracker for each wireless client. This can add many entities on busy networks.                                                                                                                                                |
-| Track Wired Clients   | Off     | Creates a device tracker for each wired client.                                                                                                                                                                                                |
-| Enable Client Control | On      | Creates allow/block switches and reconnect buttons for connected clients, and Wake-on-LAN buttons (disabled by default) for wired clients on the site gateway. Turn it off for read-only monitoring; this removes the client and Wake buttons. |
-| Sites                 | All     | Only shown when the console has more than one site. Choose the sites to poll. Sites you don't choose are not queried at all, which reduces API traffic. Leave empty for all sites.                                                             |
+| Option                | Default | Description                                                                                                                                                                        |
+| --------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Track WiFi Clients    | Off     | Creates a device tracker for each wireless client. This can add many entities on busy networks.                                                                                    |
+| Track Wired Clients   | Off     | Creates a device tracker for each wired client.                                                                                                                                    |
+| Enable Client Control | On      | Creates client allow/block switches, reconnect buttons and disabled-by-default Wake-on-LAN buttons for wired clients. Turn off for read-only monitoring.                           |
+| Sites                 | All     | Only shown when the console has more than one site. Choose the sites to poll. Sites you don't choose are not queried at all, which reduces API traffic. Leave empty for all sites. |
 
 Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carrier-fabric-setup).
 
@@ -148,7 +148,7 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 | _Outlet name_ Power Cycle                           | Switch         | Automatic modem power cycling for an outlet, disabled by default                       |
 | _Client name_ Allow                                 | Switch         | Block or allow a client (needs **Enable Client Control**)                              |
 | _Client name_ Reconnect                             | Button         | Reconnect a client (needs **Enable Client Control**)                                   |
-| Wake _<client>_                                     | Button         | Send a Wake-on-LAN packet, disabled by default (needs **Enable Client Control**)       |
+| Wake _Client name_                                  | Button         | Send a Wake-on-LAN packet, disabled by default (needs **Enable Client Control**)       |
 | Restart                                             | Button         | Restart a device                                                                       |
 | _Port_ PoE Power Cycle                              | Button         | Cut and restore power on a port with PoE enabled, disabled by default                  |
 | WiFi QR code                                        | Image          | Scan to join a Wi-Fi network                                                           |
@@ -202,12 +202,13 @@ The integration creates entities to configure, generate, and monitor UniFi Hotsp
 
 ### Wake-on-LAN buttons
 
-UniFi has no Wake-on-LAN function, so the **Wake** buttons send the packet from Home Assistant, using Home Assistant's built-in Wake on LAN integration. You don't set that integration up: this integration loads it for you. Wake buttons attach to your site's gateway device (or the site device if there is no gateway) and do not create client devices.
+UniFi has no Wake-on-LAN function, so the **Wake** buttons send the packet from Home Assistant, using Home Assistant's built-in Wake on LAN integration. You don't set that integration up: this integration loads it for you. Wake buttons sit on the site's gateway device, or on the site device when the site has no gateway.
 
-- **Which clients:** every wired client gets a **Wake <client>** button on its site's gateway device (disabled by default), and it stays when the client goes offline. At startup, a background task also seeds buttons for wired clients that have a name on the console and were seen in the last 30 days, so you can wake a device that is already off. Enable the buttons you want in Home Assistant. Turning off **Enable Client Control** removes the Wake button entity registry rows.
+- **Which clients:** every wired client gets a **Wake _Client name_** button, disabled by default. Enable the buttons you want in Home Assistant. A button you have enabled is always restored after a restart, even if its client is offline, unnamed or absent from history, or history cannot be fetched. At startup, a background task also seeds buttons for wired clients with a name or hostname on the console that were seen in the last 30 days. Turning off **Enable Client Control** removes the client controls, including Wake buttons, for read-only monitoring.
 - **Same network:** Home Assistant must be on the same network (VLAN) as the device. UniFi gateways usually don't forward wake packets between VLANs. The packet goes to the broadcast address of the client's network when the console reports it, and to 255.255.255.255 otherwise.
 - **The device:** it needs Wake-on-LAN enabled in its BIOS/UEFI and in its operating system or network adapter settings. The button can't tell whether the device woke up.
 - **Home Assistant:** it must use host networking (Home Assistant OS does). In a Docker bridge network the packet doesn't reach your network.
+- **Debug logging:** turn on debug logging for `homeassistant.components.wake_on_lan` to see each packet.
 - Remote (cloud) entries work the same way: the packet is sent from Home Assistant, not through the console.
 
 ### Network actions
@@ -525,17 +526,17 @@ action: unifi_insights.refresh_data
 
 ### Common problems
 
-| Problem                       | Solution                                                                                                                                                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Cannot connect                | Check that Home Assistant can reach the console URL. For self-signed certificates, turn off **Verify SSL Certificate** (reconfigure the entry to change it).                                                                                           |
-| Authentication failed         | Check that the API key is valid and was not revoked on the console or in UniFi Site Manager.                                                                                                                                                           |
-| Integration API not available | Self-hosted UniFi Network Application installs don't provide the official Integration API. Use a UniFi OS console.                                                                                                                                     |
-| No Protect entities           | UniFi Protect must run on the same console, and the API key must have access to it.                                                                                                                                                                    |
-| Entities missing              | Check that the devices are adopted and online in UniFi.                                                                                                                                                                                                |
-| Storage sensors unavailable   | The public Protect API does not report NVR storage on all firmware versions.                                                                                                                                                                           |
-| Many orphaned client entities | Turn off the **Enable Client Control** option.                                                                                                                                                                                                         |
-| Wake button does nothing      | Check that Wake-on-LAN is enabled in the device's BIOS and operating system, that Home Assistant is on the same VLAN, and that Home Assistant uses host networking. Turn on debug logging for homeassistant.components.wake_on_lan to see each packet. |
-| Duplicate entities            | If you also use the official UniFi Network or UniFi Protect integration, both create entities for the same devices. Disable the duplicates you don't need so automations don't act on two entities for one device.                                     |
+| Problem                       | Solution                                                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Cannot connect                | Check that Home Assistant can reach the console URL. For self-signed certificates, turn off **Verify SSL Certificate** (reconfigure the entry to change it).                                                       |
+| Authentication failed         | Check that the API key is valid and was not revoked on the console or in UniFi Site Manager.                                                                                                                       |
+| Integration API not available | Self-hosted UniFi Network Application installs don't provide the official Integration API. Use a UniFi OS console.                                                                                                 |
+| No Protect entities           | UniFi Protect must run on the same console, and the API key must have access to it.                                                                                                                                |
+| Entities missing              | Check that the devices are adopted and online in UniFi.                                                                                                                                                            |
+| Storage sensors unavailable   | The public Protect API does not report NVR storage on all firmware versions.                                                                                                                                       |
+| Many orphaned client entities | Turn off the **Enable Client Control** option.                                                                                                                                                                     |
+| Wake button does nothing      | Check Wake-on-LAN in the device settings, Home Assistant host networking and VLAN. See the Wake-on-LAN section for details and debug logging.                                                                      |
+| Duplicate entities            | If you also use the official UniFi Network or UniFi Protect integration, both create entities for the same devices. Disable the duplicates you don't need so automations don't act on two entities for one device. |
 
 ### Diagnostics
 
