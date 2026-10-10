@@ -14,9 +14,9 @@ body:
       label: Affected area
       description: Which part of the project is affected most directly?
       options:
-        - Coordinator and data refresh
+        - Coordinator and data updates
         - Entity platforms (sensors, binary sensors, switches, buttons, etc.)
-        - Config flow and options
+        - Config flow and options flow
         - Upstream API client and authentication
         - Diagnostics and repairs
         - Services and actions
@@ -43,9 +43,9 @@ body:
   - type: input
     id: environment-version
     attributes:
-      label: Device or upstream environment details
-      description: Device firmware version, Unraid version, or upstream API version (if applicable).
-      placeholder: "e.g. Unraid 7.2.0, Firmware 2.1.0"
+      label: Environment details
+      description: Device firmware version, hardware model, or upstream system details (if applicable).
+      placeholder: "e.g. Firmware 2.1.0, Hardware Model X"
     validations:
       required: false
   - type: textarea
