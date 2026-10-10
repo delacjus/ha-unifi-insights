@@ -109,6 +109,7 @@ _GATEWAY_LEGACY_TYPES: Final = frozenset({"udm", "uxg", "ugw", "udr", "ucg"})
 _ONLINE_STATES: Final = frozenset({"ONLINE", "CONNECTED", "UP"})
 _OFFLINE_STATES: Final = frozenset({"OFFLINE", "DISCONNECTED", "DOWN"})
 _MAC_RE: Final = re.compile(r"[0-9a-f]{2}(?:[:-]?[0-9a-f]{2}){5}")
+_NORMALIZED_MAC_LENGTH: Final = 17
 
 
 def first_present(data: Mapping[str, Any], *keys: str) -> Any:
@@ -125,6 +126,16 @@ def normalize_mac(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     candidate = value.strip().lower()
+    if len(candidate) == _NORMALIZED_MAC_LENGTH:
+        if candidate[2] == ":":
+            if _MAC_RE.fullmatch(candidate):
+                return candidate
+            return None
+        if candidate[2] == "-":
+            if _MAC_RE.fullmatch(candidate):
+                return candidate.replace("-", ":")
+            return None
+
     if not _MAC_RE.fullmatch(candidate):
         return None
     digits = candidate.replace(":", "").replace("-", "")
