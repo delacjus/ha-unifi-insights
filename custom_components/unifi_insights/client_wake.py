@@ -66,7 +66,7 @@ def find_client_by_mac(
     return None
 
 
-def _first_text(record: dict[str, Any], *keys: str) -> str | None:
+def first_non_blank_text(record: dict[str, Any], *keys: str) -> str | None:
     """Return the first non-blank string value among ``keys``."""
     for key in keys:
         value = record.get(key)
@@ -86,23 +86,30 @@ def _seen_within(last_seen: Any, *, now: float) -> bool:
     return math.isfinite(age) and age <= WAKE_HISTORY_MAX_AGE_SECONDS
 
 
-def select_wake_history(records: Iterable[Any], *, now: float) -> dict[str, str]:
+def select_wake_history(
+    records: Iterable[Any], *, now: float, enabled_macs: set[str] | None = None
+) -> dict[str, str]:
     """
     Pick the historical clients that deserve a Wake button, as MAC -> name.
 
     A classic ``stat/alluser`` record qualifies when it is wired, has a valid
     MAC and a name or hostname, and was last seen within the history window.
+    Enabled buttons may use names from any age, including wireless history.
     The first record wins when a MAC repeats.
     """
     selected: dict[str, str] = {}
     for record in records:
-        if not isinstance(record, dict) or record.get("is_wired") is not True:
+        if not isinstance(record, dict):
             continue
         mac = normalize_mac(record.get("mac"))
-        name = _first_text(record, "name", "hostname")
+        name = first_non_blank_text(record, "name", "hostname")
         if mac is None or name is None or mac in selected:
             continue
-        if not _seen_within(record.get("last_seen"), now=now):
+        enabled = enabled_macs is not None and mac in enabled_macs
+        if not enabled and (
+            record.get("is_wired") is not True
+            or not _seen_within(record.get("last_seen"), now=now)
+        ):
             continue
         selected[mac] = name
     return selected
@@ -116,8 +123,8 @@ def history_network_hint(
         if not isinstance(record, dict) or normalize_mac(record.get("mac")) != mac:
             continue
         return (
-            _first_text(record, "last_ip", "fixed_ip", "ip"),
-            _first_text(record, "last_connection_network_id", "network_id"),
+            first_non_blank_text(record, "last_ip", "fixed_ip", "ip"),
+            first_non_blank_text(record, "last_connection_network_id", "network_id"),
         )
     return None, None
 

@@ -43,6 +43,7 @@ from custom_components.unifi_insights.client_wake import (
     WAKE_ON_LAN_SERVICE,
     derive_directed_broadcast,
     find_client_by_mac,
+    first_non_blank_text,
     history_network_hint,
     select_wake_history,
 )
@@ -908,9 +909,11 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             macs,
         )
 
-    async def async_get_wake_history(self) -> dict[str, tuple[str, str]]:
+    async def async_get_wake_history(
+        self, *, enabled_macs: set[str] | None = None
+    ) -> dict[str, tuple[str, str]]:
         """
-        Return recently seen wired clients from the classic history.
+        Return recent wired clients and any-age names for enabled Wake buttons.
 
         Returns MAC -> (name, site_id). Best effort: a site whose history
         cannot be read is skipped, so this never raises. Costs one request
@@ -931,7 +934,9 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     err,
                 )
                 continue
-            for mac, name in select_wake_history(records, now=now).items():
+            for mac, name in select_wake_history(
+                records, now=now, enabled_macs=enabled_macs
+            ).items():
                 history.setdefault(mac, (name, str(site_id)))
         return history
 
@@ -941,9 +946,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         live = find_client_by_mac((self.data or {}).get("clients"), mac)
         if live:
-            name = first_present(live[1], "name", "hostname")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
+            return first_non_blank_text(live[1], "name", "hostname")
         return None
 
     async def _async_derive_wake_broadcast(self, mac: str) -> str | None:
@@ -1023,7 +1026,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         broadcast: str | None = None
-        if self.last_update_success:
+        if self.config_available and self.device_available:
             try:
                 async with asyncio.timeout(WAKE_BROADCAST_TIMEOUT_SECONDS):
                     broadcast = await self._async_derive_wake_broadcast(normalized)
