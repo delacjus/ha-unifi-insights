@@ -142,6 +142,10 @@ CLIENT_TO_REDACT = TO_REDACT | PERSONAL_NAMES
 # WiFi records: the SSID is also carried in the record's "name" field.
 WIFI_TO_REDACT = TO_REDACT | {"name"}
 
+# Hotspot vouchers: voucher codes are guest credentials; the note ("name" or
+# "note") can name a guest.
+VOUCHER_TO_REDACT = TO_REDACT | {"code", "name", "note"}
+
 # Port forwards: the forward target, the allowed source and the WAN-side
 # destination locate hosts inside and outside the network.
 PORT_FORWARD_TO_REDACT = TO_REDACT | {
@@ -280,6 +284,8 @@ def _redact_coordinator_data(data: Any) -> Any:
     for section, to_redact in (
         ("clients", CLIENT_TO_REDACT),
         ("wifi", WIFI_TO_REDACT),
+        ("vouchers", VOUCHER_TO_REDACT),
+        ("latest_vouchers", VOUCHER_TO_REDACT),
         ("port_forwards", PORT_FORWARD_TO_REDACT),
         ("traffic_rules", TRAFFIC_RULE_TO_REDACT),
     ):
