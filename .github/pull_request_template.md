@@ -1,61 +1,113 @@
-<!--
-  Thank you for contributing to UniFi Insights!
-  Please fill out this template to help reviewers understand your changes.
-
-  Note for contributors and coding agents:
-  Consult https://developer.ui.com/ for the latest official information,
-  API references, and capabilities offered to UniFi developers.
--->
+# Pull Request
 
 ## Description
 
-<!-- Provide a clear and concise description of what this pull request does. If this PR adds or updates API endpoints, models, or features, ensure you have checked https://developer.ui.com/ for latest specifications. -->
-
-Closes # <!-- Link any related issues, e.g. Closes #123 -->
+<!-- Provide a clear and concise description of what this PR does -->
 
 ## Type of Change
 
-<!-- Mark the appropriate option with an [x] -->
+<!-- Check all that apply -->
 
-- [ ] 🐛 **Bug fix** (non-breaking change fixing an issue)
-- [ ] ✨ **New feature** (non-breaking change adding functionality)
-- [ ] 💥 **Breaking change** (fix or feature causing existing functionality/automations to break)
-- [ ] ♻️ **Refactoring** (code organization, no functional change)
-- [ ] 📝 **Documentation** (documentation updates only)
-- [ ] 🧪 **Tests** (adding or improving test coverage)
-- [ ] 🔧 **Maintenance / Chore** (dependency updates, tool config, CI)
+- [ ] Bug fix (non-breaking change fixing an issue)
+- [ ] New sensor or entity platform
+- [ ] New feature or enhancement
+- [ ] Breaking change (change that causes existing automations or setups to fail)
+- [ ] Documentation update
+- [ ] Code refactoring (no functional changes)
+- [ ] Test additions or improvements
+- [ ] Frontend topology card or UI update
 
-## Architecture & Home Assistant Quality Scale Checklist
+## Pre-Submission Governance
 
-<!-- Mark all items that apply to your changes -->
+<!--
+  REQUIRED for everyone, including AI agents and automation.
+  Every box below is mandatory. If any box is left unchecked, the automated
+  "PR Governance" check fails and the PR will not be reviewed or merged.
+  Do not open multiple overlapping or back-to-back PRs for the same work;
+  batch related changes together to avoid wasting CI runner capacity.
+-->
 
-- [ ] **UniFi Developer Portal**: Checked [developer.ui.com](https://developer.ui.com/) for the latest official UniFi API documentation, endpoints, and schema capabilities to ensure alignment with what UniFi offers to developers.
-- [ ] **Data Flow**: Entities read solely from `coordinator.data` (no direct HTTP/network calls in entity properties).
-- [ ] **API Encapsulation**: Actions and endpoints route through coordinator methods or vendored API clients (`custom_components/unifi_insights/api/`).
-- [ ] **Base Entities**: Inherits from `UnifiInsightsEntity` or `UnifiProtectEntity` with `_attr_has_entity_name = True`.
-- [ ] **Parallel Updates**: `PARALLEL_UPDATES = 0` for coordinator/read-only platforms, `1` for action platforms.
-- [ ] **Error Handling**: API errors wrapped into user-friendly `HomeAssistantError` or `ServiceValidationError`.
-- [ ] **Unique IDs & Device Info**: Unique IDs are deterministic and devices properly attached to `DeviceInfo`.
-- [ ] **Translations**: New UI strings added to `strings.json` with appropriate translation keys.
+- [ ] I built and ran the project locally and verified this change actually works (not just that it compiles)
+- [ ] I ran `pytest` locally and all tests pass
+- [ ] I ran `./script/lint` locally and it passes
+- [ ] I pasted real local verification output under **Testing Performed** below (no placeholder text)
+- [ ] This PR is self-contained and is not a duplicate; I have not opened other overlapping or back-to-back PRs for the same change
+- [ ] If an AI agent created or assisted with this PR, a human reviewed and verified the changes before submission
 
-## Validation Checklist
+## Related Issues
 
-<!-- Run these commands before submitting -->
+<!-- Link to related issues, or specify "None" for self-contained changes -->
+<!-- Examples: Fixes #123, Closes https://github.com/..., Related to #456, or None -->
 
-- [ ] `script/lint` (or `ruff check .` and `ruff format .`) passed with 0 errors.
-- [ ] `mypy custom_components/unifi_insights` passed with 0 errors.
-- [ ] `bandit -r custom_components/unifi_insights` passed with 0 vulnerabilities.
-- [ ] `pytest` passed with ≥ 95% branch coverage (`pytest --cov=custom_components/unifi_insights`) and Codecov coverage targets met.
-- [ ] `CHANGELOG.md` updated under `[Unreleased]` with clear user-facing descriptions.
-- [ ] Tested on a live local Home Assistant instance (`./script/develop`) without errors in logs.
+Fixes #
 
-## Breaking Changes (if applicable)
+## Changes Made
 
-<!-- If this change breaks backwards compatibility (e.g., changes entity IDs, unique IDs, config entry data, or services), describe the impact and migration path below. -->
+<!-- List the main changes in this PR -->
 
-- [ ] No breaking changes
-- [ ] Breaking change: <!-- Describe breaking change and rationale -->
+-
+-
+-
 
-## Additional Context
+## Home Assistant Quality Scale & Standards
 
-<!-- Add any other context, screenshots, or logs about the pull request here. Reference relevant documentation or endpoints from https://developer.ui.com/ where applicable. -->
+<!-- Check all that apply to confirm compliance with modern Home Assistant development standards -->
+
+- [ ] Verified against the [Home Assistant Developer Docs](https://developers.home-assistant.io/) and Quality Scale rules
+- [ ] Checked [developer.ui.com](https://developer.ui.com/) for endpoint/schema alignment where API behavior changed
+- [ ] Uses `entry.runtime_data` patterns where applicable (no new `hass.data[DOMAIN]` usage)
+- [ ] All entities read from coordinator state (`coordinator.data`) and avoid direct API/network calls
+- [ ] New/updated entities use `UnifiInsightsEntity` or `UnifiProtectEntity` appropriately
+- [ ] Sensor implementations use modern native properties (no `unit_of_measurement`)
+- [ ] Uses Home Assistant session helpers (no direct `aiohttp.ClientSession()` instantiation)
+- [ ] Diagnostics redaction handled when sensitive fields are exposed
+- [ ] Not applicable (documentation-only or metadata-only change)
+
+## Testing Performed
+
+<!-- Check all that apply and describe what you tested -->
+
+- [ ] Ran unit tests (`pytest`)
+- [ ] Ran linter (`./script/lint`)
+- [ ] Ran type checking (`mypy custom_components/unifi_insights`)
+- [ ] Ran pre-commit checks (`pre-commit run --all-files`)
+- [ ] Tested live in local Home Assistant (`./script/develop`)
+- [ ] Frontend checks passed (`npm run lint`, `npm run typecheck`, `npm test` in `frontend/`) (if applicable)
+- [ ] Not applicable (documentation-only or metadata-only change)
+
+### Test Results
+
+```text
+[Paste relevant local command output and verification notes]
+```
+
+## Documentation
+
+<!-- Check all that apply -->
+
+- [ ] Code comments added/updated where needed
+- [ ] README.md updated (if needed)
+- [ ] CHANGELOG.md updated under [Unreleased]
+- [ ] AGENTS.md / developer documentation updated (if architecture or process changed)
+- [ ] No documentation needed
+
+## Breaking Changes
+
+<!-- If this PR introduces breaking changes, describe them and provide migration instructions -->
+
+## Checklist
+
+<!-- Ensure you've completed all required items before submitting -->
+
+- [ ] I have updated CHANGELOG.md under [Unreleased] with details of this change
+- [ ] I verified my code against Home Assistant integration quality rules and used no deprecated APIs
+- [ ] I linked related issues or noted "None" in **Related Issues**
+- [ ] I completed all required sections in this template and removed placeholder-only content
+- [ ] My code follows the project's coding standards and Home Assistant patterns
+- [ ] I have performed a self-review of my own code
+- [ ] I have commented my code, particularly in hard-to-understand areas (if applicable)
+- [ ] My changes generate no new warnings
+- [ ] I have added tests that prove my fix is effective or that my feature works (if applicable)
+- [ ] New and existing unit tests pass locally with my changes
+- [ ] Any dependent changes have been merged and published (if applicable)
+- [ ] No sensitive information (tokens, passwords, personal data) is included

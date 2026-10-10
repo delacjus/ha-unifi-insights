@@ -1,0 +1,108 @@
+integration:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/__init__.py
+          - custom_components/unifi_insights/const.py
+          - custom_components/unifi_insights/icons.json
+          - custom_components/unifi_insights/manifest.json
+          - custom_components/unifi_insights/py.typed
+          - custom_components/unifi_insights/services.py
+          - custom_components/unifi_insights/services.yaml
+
+api:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/api/**
+
+coordinator:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/coordinator.py
+          - custom_components/unifi_insights/coordinators/**
+
+entities:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/entity.py
+          - custom_components/unifi_insights/sensor.py
+          - custom_components/unifi_insights/binary_sensor.py
+          - custom_components/unifi_insights/switch.py
+          - custom_components/unifi_insights/button.py
+          - custom_components/unifi_insights/device_tracker.py
+          - custom_components/unifi_insights/camera.py
+          - custom_components/unifi_insights/light.py
+          - custom_components/unifi_insights/number.py
+          - custom_components/unifi_insights/select.py
+          - custom_components/unifi_insights/event.py
+          - custom_components/unifi_insights/update.py
+
+config-flow:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/config_flow.py
+
+diagnostics:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/diagnostics.py
+
+repairs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/repairs.py
+
+translations:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/unifi_insights/strings.json
+          - custom_components/unifi_insights/translations/**
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - frontend/**
+          - custom_components/unifi_insights/frontend.py
+          - custom_components/unifi_insights/www/**
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - CHANGELOG.md
+          - README.md
+          - CONTRIBUTING.md
+          - docs/**
+          - .github/ISSUE_TEMPLATE/**
+          - .github/prompts/**
+          - .github/instructions/**
+          - "**/*.md"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .python-version
+          - pyproject.toml
+          - pyrightconfig.json
+          - requirements.txt
+          - frontend/package.json
+          - frontend/package-lock.json
+
+python:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/**/*.py
+          - tests/**/*.py
+          - script/**
+
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/dependabot.yml
+          - .github/labeler.yml
+          - .github/labels.yml
+          - .github/FUNDING.yml
