@@ -1336,10 +1336,10 @@ async def test_console_identity_extra_coverage_branches(
 ) -> None:
     """Cover edge cases in _first_site_id, device parsing, setup fallbacks and protect coordinator."""
     from custom_components.unifi_insights import async_setup_entry
-    from custom_components.unifi_insights.probe import ProbeResult, ProbeStatus
     from custom_components.unifi_insights.coordinators.protect import (
         UnifiProtectCoordinator,
     )
+    from custom_components.unifi_insights.probe import ProbeResult, ProbeStatus
 
     # 1. _first_site_id when sites is not a dict
     coord = MagicMock()

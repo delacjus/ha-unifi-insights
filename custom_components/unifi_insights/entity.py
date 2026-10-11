@@ -38,8 +38,8 @@ def get_field(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
     Skips keys whose value is None so that fallback keys are still checked.
     """
     for key in keys:
-        if key in data and data[key] is not None:
-            return data[key]
+        if (value := data.get(key)) is not None:
+            return value
     return default
 
 
