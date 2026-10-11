@@ -43,7 +43,7 @@ class Viewer(BaseModel):
     @property
     def display_name(self) -> str:
         """Get display name, falling back to MAC if no name set."""
-        return self.name if self.name else self.mac
+        return self.name or self.mac
 
     @property
     def is_connected(self) -> bool:

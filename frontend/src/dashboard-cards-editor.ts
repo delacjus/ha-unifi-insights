@@ -1,8 +1,4 @@
-import {
-    mdiBellRingOutline,
-    mdiCctv,
-    mdiDoorbellVideo,
-} from "@mdi/js";
+import { mdiBellRingOutline, mdiCctv, mdiDoorbellVideo } from "@mdi/js";
 import { LitElement, css, html } from "lit";
 
 import { allSites } from "./config";
@@ -55,15 +51,18 @@ export function formatBytesCompact(bytes: number): string {
 export function formatBps(bps: unknown): string | undefined {
     if (typeof bps !== "number" || !Number.isFinite(bps) || bps < 0)
         return undefined;
-    if (bps >= 1_000_000_000)
-        return `${(bps / 1_000_000_000).toFixed(1)} Gbps`;
+    if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(1)} Gbps`;
     if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
     if (bps >= 1_000) return `${Math.round(bps / 1_000)} Kbps`;
     return `${Math.round(bps)} bps`;
 }
 
 export function formatUptime(seconds: unknown): string | undefined {
-    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+    if (
+        typeof seconds !== "number" ||
+        !Number.isFinite(seconds) ||
+        seconds <= 0
+    ) {
         return undefined;
     }
     const days = Math.floor(seconds / 86400);
@@ -125,7 +124,11 @@ export class GenericEditor extends LitElement {
 
     protected cardType: string;
     protected sourceCommand: string;
-    protected options: Array<{ entryId: string; siteId: string; label: string }>;
+    protected options: Array<{
+        entryId: string;
+        siteId: string;
+        label: string;
+    }>;
     private optionsRequested = false;
 
     constructor(cardType: string, sourceCommand: string) {
@@ -150,7 +153,9 @@ export class GenericEditor extends LitElement {
     private async loadOptions(): Promise<void> {
         if (!this.hass) return;
         try {
-            const payload = await this.hass.callWS({ type: this.sourceCommand });
+            const payload = await this.hass.callWS({
+                type: this.sourceCommand,
+            });
             this.options =
                 this.sourceCommand === "unifi_insights/protect/sources"
                     ? (payload as ProtectSource[]).map((s) => ({

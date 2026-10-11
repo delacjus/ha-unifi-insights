@@ -62,7 +62,7 @@ class ClientsEndpoint:
                 params["limit"] = limit
             if filter_str:
                 params["filter"] = filter_str
-            return await self._fetch_page(path, params if params else None)
+            return await self._fetch_page(path, params or None)
 
         # Auto-paginate: fetch all pages
         page_size = 100

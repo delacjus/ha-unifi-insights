@@ -13,7 +13,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _TolerantStrEnum(str, Enum):
-    """String enum that maps unknown values to ``UNKNOWN`` instead of raising.
+    """
+    String enum that maps unknown values to ``UNKNOWN`` instead of raising.
 
     UniFi Protect periodically introduces new camera states, models, and modes
     (for example with the 7.1 release). Without this fallback a single

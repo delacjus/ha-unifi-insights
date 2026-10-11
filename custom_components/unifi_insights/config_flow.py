@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import inspect
 import logging
 from typing import Any
@@ -475,7 +476,11 @@ class UnifiInsightsConfigFlow(ConfigFlow, domain=DOMAIN):
                 if probe_res.org_id:
                     unique_id = f"carrier_{probe_res.org_id}"
                 else:
-                    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+                    key_hash = hmac.new(
+                        b"unifi_insights_carrier_key",
+                        api_key.encode(),
+                        hashlib.sha256,
+                    ).hexdigest()[:16]
                     unique_id = f"carrier_key_{key_hash}"
 
                 await self.async_set_unique_id(unique_id)

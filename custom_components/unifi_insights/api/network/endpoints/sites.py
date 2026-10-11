@@ -63,7 +63,7 @@ class SitesEndpoint:
         path = self._client.build_api_path("/sites")
         response = await self._client._get(
             path,
-            params=params if params else None,
+            params=params or None,
             expected_unsupported=expected_unsupported,
         )
 

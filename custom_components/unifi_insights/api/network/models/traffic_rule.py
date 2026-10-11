@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TrafficRule(BaseModel):
-    """Traffic rule configuration in UniFi Network.
+    """
+    Traffic rule configuration in UniFi Network.
 
     Reference shape derived from aiounifi v96 TypedTrafficRule (the Home Assistant core
     unifi dependency); not observed on a live console (0 records on Network 11, 2026-10-09).

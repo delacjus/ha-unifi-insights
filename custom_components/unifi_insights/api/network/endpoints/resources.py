@@ -149,7 +149,7 @@ class ResourcesEndpoint:
             params["filter"] = filter_str
 
         path = self._client.build_api_path(f"/sites/{site_id}/vpn/servers")
-        response = await self._client._get(path, params=params if params else None)
+        response = await self._client._get(path, params=params or None)
 
         if response is None:
             return []
@@ -193,7 +193,7 @@ class ResourcesEndpoint:
             params["filter"] = filter_str
 
         path = self._client.build_api_path(f"/sites/{site_id}/radius/profiles")
-        response = await self._client._get(path, params=params if params else None)
+        response = await self._client._get(path, params=params or None)
 
         if response is None:
             return []
@@ -237,7 +237,7 @@ class ResourcesEndpoint:
             params["filter"] = filter_str
 
         path = self._client.build_api_path(f"/sites/{site_id}/device-tags")
-        response = await self._client._get(path, params=params if params else None)
+        response = await self._client._get(path, params=params or None)
 
         if response is None:
             return []
