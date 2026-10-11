@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `get_field` now uses the walrus operator and `dict.get()` for improved performance by reducing double dictionary lookups.
+
 ### Added
 
 - Hotspot voucher management entities and QR code ([#279](https://github.com/ruaan-deysel/ha-unifi-insights/issues/279)):

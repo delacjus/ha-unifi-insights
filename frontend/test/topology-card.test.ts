@@ -91,9 +91,7 @@ describe("registration", () => {
         expect(cssText).toMatch(
             /\.body\s*\{[^}]*flex:\s*1 1 280px;[^}]*min-height:\s*0;/s,
         );
-        expect(cssText).not.toMatch(
-            /\.body\s*\{[^}]*min-height:\s*(280|240)px;/s,
-        );
+        expect(cssText).not.toMatch(/\.body\s*\{[^}]*min-height:\s*(280|240)px;/s);
         expect(cssText).toMatch(
             /\.content\s*\{[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s,
         );

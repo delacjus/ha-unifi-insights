@@ -49,10 +49,7 @@ export class UnifiInsightsProtectStatusCard extends BaseDashboardCard {
             return undefined;
         }
         const first = this.sources[0] as ProtectSource;
-        return {
-            entry_id: first.entry_id,
-            site_id: this.config.site_id ?? "*",
-        };
+        return { entry_id: first.entry_id, site_id: this.config.site_id ?? "*" };
     }
 
     protected override renderHeaderBadge(): TemplateResult | typeof nothing {
@@ -78,9 +75,7 @@ export class UnifiInsightsProtectStatusCard extends BaseDashboardCard {
         const devices = Array.isArray(snapshot.devices)
             ? (snapshot.devices as Record<string, unknown>[])
             : [];
-        const offline = devices.filter(
-            (device) => device.connected === false,
-        ).length;
+        const offline = devices.filter((device) => device.connected === false).length;
         const online = devices.length - offline;
 
         return html`
@@ -146,9 +141,7 @@ export class UnifiInsightsProtectStatusCard extends BaseDashboardCard {
                                               ? html`<span>● Recording</span>`
                                               : nothing}
                                           ${device.motion_active
-                                              ? html`<span
-                                                    >· Motion detected</span
-                                                >`
+                                              ? html`<span>· Motion detected</span>`
                                               : nothing}
                                       </div>`
                                     : nothing}
@@ -173,8 +166,7 @@ registerDashboardCard({
     card: UnifiInsightsProtectStatusCard,
     editor: UnifiInsightsProtectStatusCardEditor,
     name: "UniFi Protect Status",
-    description:
-        "Live UniFi Protect camera, doorbell, chime, and NVR status summary.",
+    description: "Live UniFi Protect camera, doorbell, chime, and NVR status summary.",
 });
 
 export { PROTECT_CARD_TAG, PROTECT_EDITOR_TAG };

@@ -66,10 +66,7 @@ export class UnifiInsightsInternetActivityCard extends BaseDashboardCard {
     }
 
     protected override renderHeaderBadge(): TemplateResult | typeof nothing {
-        const windows = (this.snapshot?.windows ?? {}) as Record<
-            string,
-            unknown
-        >;
+        const windows = (this.snapshot?.windows ?? {}) as Record<string, unknown>;
         const { keys, activeWindow } = this.resolveActiveWindow(windows);
         if (keys.length <= 1) {
             return nothing;
@@ -114,10 +111,7 @@ export class UnifiInsightsInternetActivityCard extends BaseDashboardCard {
         const downPct = total > 0 ? Math.round((down / total) * 100) : 50;
         const upPct = total > 0 ? 100 - downPct : 50;
 
-        const throughput = (snapshot.throughput ?? {}) as Record<
-            string,
-            unknown
-        >;
+        const throughput = (snapshot.throughput ?? {}) as Record<string, unknown>;
         const rxRate = formatBps(throughput.rx_bps);
         const txRate = formatBps(throughput.tx_bps);
         const entityIds = (snapshot.entity_ids ?? {}) as Record<string, string>;
@@ -132,8 +126,7 @@ export class UnifiInsightsInternetActivityCard extends BaseDashboardCard {
                           <div>
                               <div class="hero-title">Live Throughput</div>
                               <div class="hero-meta">
-                                  ↓ ${rxRate ?? "0 bps"} · ↑
-                                  ${txRate ?? "0 bps"}
+                                  ↓ ${rxRate ?? "0 bps"} · ↑ ${txRate ?? "0 bps"}
                               </div>
                           </div>
                       </div>
@@ -185,7 +178,10 @@ export class UnifiInsightsInternetActivityCard extends BaseDashboardCard {
                     </span>
                 </div>
                 <div class="bar-track" aria-hidden="true">
-                    <div class="bar-fill" style=${`width: ${downPct}%`}></div>
+                    <div
+                        class="bar-fill"
+                        style=${`width: ${downPct}%`}
+                    ></div>
                     <div
                         class="bar-fill secondary"
                         style=${`width: ${upPct}%`}
@@ -208,8 +204,7 @@ registerDashboardCard({
     card: UnifiInsightsInternetActivityCard,
     editor: UnifiInsightsInternetActivityCardEditor,
     name: "UniFi Internet Activity",
-    description:
-        "Historical WAN download/upload activity and live gateway throughput.",
+    description: "Historical WAN download/upload activity and live gateway throughput.",
 });
 
 export { INTERNET_ACTIVITY_CARD_TAG, INTERNET_ACTIVITY_EDITOR_TAG };
