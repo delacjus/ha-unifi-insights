@@ -496,7 +496,7 @@ async def test_async_wake_client_omits_broadcast_when_lookup_fails(
         "clients": {"site1": {"c1": {"macAddress": mac, "ipAddress": "10.0.0.50"}}}
     }
     facade.network_client.networks.get_legacy_all = AsyncMock(
-        side_effect=RuntimeError("Network lookup failed")
+        side_effect=UniFiResponseError("Network lookup failed", status_code=500)
     )
     calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
 
@@ -509,18 +509,18 @@ async def test_async_wake_client_omits_broadcast_when_lookup_fails(
 async def test_async_wake_client_omits_broadcast_when_derivation_raises(
     hass: HomeAssistant, facade: UnifiFacadeCoordinator
 ) -> None:
-    """A derivation failure still sends the magic packet without a broadcast."""
+    """Unexpected derivation failures propagate instead of being swallowed."""
     mac = "00:11:22:33:44:55"
     facade._async_derive_wake_broadcast = AsyncMock(
         side_effect=RuntimeError("Unexpected derivation failure")
     )
     calls = async_mock_service(hass, "wake_on_lan", "send_magic_packet")
 
-    await facade.async_wake_client(mac)
+    with pytest.raises(RuntimeError, match="Unexpected derivation failure"):
+        await facade.async_wake_client(mac)
 
     facade._async_derive_wake_broadcast.assert_awaited_once_with(mac)
-    assert len(calls) == 1
-    assert calls[0].data == {"mac": mac}
+    assert calls == []
 
 
 async def test_async_wake_client_skips_sites_without_a_verified_name(
@@ -630,7 +630,7 @@ async def test_async_wake_client_passes_home_assistant_errors_through(
 async def test_async_get_wake_history_merges_sites_and_ignores_failures(
     facade: UnifiFacadeCoordinator, freezer: Any
 ) -> None:
-    """async_get_wake_history merges records from multiple sites and skips errors."""
+    """History fetches run concurrently, retain site order, and isolate errors."""
     freezer.move_to("2026-10-09T12:00:00Z")
     now = 1_791_547_200.0  # epoch corresponding to fixed time
 
@@ -668,17 +668,21 @@ async def test_async_get_wake_history_merges_sites_and_ignores_failures(
         },
     ]
 
+    concurrent_requests = asyncio.Barrier(3)
+
     async def get_history(site_name: str) -> list[dict[str, Any]]:
+        await concurrent_requests.wait()
         if site_name == "site1_ref":
             return records_site1
         if site_name == "site2_ref":
             return records_site2
         msg = "API failure"
-        raise UniFiResponseError(msg)
+        raise UniFiResponseError(msg, status_code=500)
 
     facade.network_client.clients.get_historical_legacy.side_effect = get_history
 
-    history = await facade.async_get_wake_history()
+    async with asyncio.timeout(1):
+        history = await facade.async_get_wake_history()
 
     assert history == {
         "00:11:22:33:44:01": ("PC 1", "site1"),

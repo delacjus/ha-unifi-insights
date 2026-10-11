@@ -921,17 +921,24 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         now = dt_util.utcnow().timestamp()
         history: dict[str, tuple[str, str]] = {}
-        for site_id in self._config_coordinator.get_site_ids():
-            try:
-                site_name = self._require_verified_legacy_site_name(site_id)
-                records = await self.network_client.clients.get_historical_legacy(
-                    site_name
-                )
-            except Exception as err:
+
+        async def _site_records(site_id: str) -> list[dict[str, Any]]:
+            site_name = self._require_verified_legacy_site_name(site_id)
+            return await self.network_client.clients.get_historical_legacy(site_name)
+
+        site_ids = self._config_coordinator.get_site_ids()
+        results = await asyncio.gather(
+            *(_site_records(site_id) for site_id in site_ids),
+            return_exceptions=True,
+        )
+        for site_id, records in zip(site_ids, results, strict=True):
+            if isinstance(records, BaseException):
+                if isinstance(records, asyncio.CancelledError):
+                    raise records
                 _LOGGER.debug(
                     "Wake-on-LAN: no client history for site %s: %s",
                     site_id,
-                    err,
+                    records,
                 )
                 continue
             for mac, name in select_wake_history(
@@ -981,7 +988,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     ip, network_id = history_network_hint(records, mac)
                 return derive_directed_broadcast(networks, ip=ip, network_id=network_id)
-            except Exception:
+            except UniFiError, HomeAssistantError, ValueError:
                 _LOGGER.debug(
                     "Wake-on-LAN: no broadcast address from site %s",
                     site_id,
@@ -1032,8 +1039,6 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     broadcast = await self._async_derive_wake_broadcast(normalized)
             except TimeoutError:
                 _LOGGER.debug("Wake-on-LAN: broadcast address derivation timed out")
-            except Exception:
-                _LOGGER.debug("Wake-on-LAN: broadcast address derivation failed")
 
         service_data: dict[str, str] = {"mac": normalized}
         if broadcast is not None:

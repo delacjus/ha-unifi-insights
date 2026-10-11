@@ -2801,8 +2801,8 @@ class TestWakeButtonSetup:
         assert f"unifi_insights_{mac_connected}_wake" in wake_ids
         assert f"unifi_insights_{mac_offline_unseeded}_wake" not in wake_ids
 
-        # Await the background seed task
-        await asyncio.sleep(0)
+        # Wait for the background seed task to complete before asserting discovery.
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         wake_ids_after = [
             e.unique_id for e in added if isinstance(e, UnifiClientWakeButton)
@@ -2855,7 +2855,7 @@ class TestWakeButtonSetup:
         assert len(wake_buttons) == 0
 
         seed_proceed.set()
-        await asyncio.sleep(0)
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         wake_buttons_after = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons_after) == 1
