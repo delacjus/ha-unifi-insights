@@ -1,5 +1,4 @@
-"""
-Door lock models for UniFi Protect API.
+"""Door lock models for UniFi Protect API.
 
 The 7.1.87 integration REST API does not expose a dedicated ``/doorlocks``
 resource; door locks are surfaced through the ``doorlock`` WebSocket

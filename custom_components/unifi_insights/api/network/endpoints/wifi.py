@@ -102,7 +102,7 @@ class WifiEndpoint:
             params["filter"] = filter_str
 
         path = self._client.build_api_path(f"/sites/{site_id}/wifi/broadcasts")
-        response = await self._client._get(path, params=params or None)
+        response = await self._client._get(path, params=params if params else None)
 
         if response is None:
             return []

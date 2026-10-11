@@ -21,8 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class PortForwardsEndpoint:
-    """
-    Endpoint for managing port forwarding configurations.
+    """Endpoint for managing port forwarding configurations.
 
     Targets the classic controller endpoint:
     ``/proxy/network/api/s/{site_name}/rest/portforward``

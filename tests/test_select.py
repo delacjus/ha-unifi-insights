@@ -264,7 +264,11 @@ class TestAsyncSetupEntry:
         )
         assert (
             len(
-                [e for e in entities if isinstance(e, UnifiProtectViewerLiveviewSelect)]
+                [
+                    e
+                    for e in entities
+                    if isinstance(e, UnifiProtectViewerLiveviewSelect)
+                ]
             )
             == liveview_before
         )

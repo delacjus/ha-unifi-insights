@@ -1,5 +1,4 @@
-"""
-Viewport models for UniFi Protect API.
+"""Viewport models for UniFi Protect API.
 
 The 7.1.87 integration REST API does not expose a dedicated ``/viewports``
 resource; viewports are surfaced through the ``viewport`` WebSocket

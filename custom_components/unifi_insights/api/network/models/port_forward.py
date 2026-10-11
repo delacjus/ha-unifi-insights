@@ -6,8 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PortForward(BaseModel):
-    """
-    Port forward configuration in UniFi Network.
+    """Port forward configuration in UniFi Network.
 
     Keys observed live on Network 11 (2026-10-09):
     _id, destination_ip, destination_ips, dst_port, enabled, fwd, fwd_port, log,

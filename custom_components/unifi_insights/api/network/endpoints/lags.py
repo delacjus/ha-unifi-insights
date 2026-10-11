@@ -160,7 +160,7 @@ async def _list_paginated(
             params["limit"] = limit
         if filter_str:
             params["filter"] = filter_str
-        response = await client._get(path, params=params or None)
+        response = await client._get(path, params=params if params else None)
         return _parse_items(response, model)
 
     page_size = 100

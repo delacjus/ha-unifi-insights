@@ -21,8 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class TrafficRulesEndpoint:
-    """
-    Endpoint for managing traffic rule configurations.
+    """Endpoint for managing traffic rule configurations.
 
     Targets the legacy v2 controller endpoint:
     ``/proxy/network/v2/api/site/{site_name}/trafficrules``
