@@ -8,7 +8,7 @@ name: Sync and Apply Labels
       - .github/labels.yml
       - .github/workflows/labels.yml
       - .github/labeler.yml
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - synchronize
@@ -18,13 +18,14 @@ name: Sync and Apply Labels
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 jobs:
   sync:
     name: Sync repository labels
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request_target'
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -39,11 +40,14 @@ jobs:
 
   apply:
     name: Apply labels from changed files
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request_target'
+    permissions:
+      contents: read
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Apply labels
-        uses: actions/labeler@v5
+        uses: actions/labeler@v7
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/labeler.yml
