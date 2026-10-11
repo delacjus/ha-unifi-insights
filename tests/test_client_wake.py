@@ -39,10 +39,12 @@ if TYPE_CHECKING:
 
 def test_wake_unique_id_round_trips_through_mac_from_wake_unique_id() -> None:
     """wake_unique_id generates IDs that mac_from_wake_unique_id parses back."""
+    entry_id = "entry_123"
     mac = "00:11:22:33:44:55"
-    uid = wake_unique_id(mac)
-    assert uid == f"{DOMAIN}_{mac}_wake"
-    assert mac_from_wake_unique_id(uid) == mac
+    uid = wake_unique_id(entry_id, mac)
+    assert uid == f"{DOMAIN}_{entry_id}_{mac}_wake"
+    assert mac_from_wake_unique_id(uid, entry_id) == mac
+    assert mac_from_wake_unique_id(uid, "other_entry") is None
 
 
 @pytest.mark.parametrize(
@@ -58,7 +60,7 @@ def test_wake_unique_id_round_trips_through_mac_from_wake_unique_id() -> None:
 )
 def test_mac_from_wake_unique_id_rejects_other_ids(invalid_id: str) -> None:
     """mac_from_wake_unique_id returns None for non-wake or non-normalized IDs."""
-    assert mac_from_wake_unique_id(invalid_id) is None
+    assert mac_from_wake_unique_id(invalid_id, "entry_123") is None
 
 
 def test_find_client_by_mac_matches_any_spelling_and_field_name() -> None:

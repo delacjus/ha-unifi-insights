@@ -390,7 +390,8 @@ class TestDynamicOptionsAndCapabilities:
         wake_buttons = [
             e
             for e in added
-            if getattr(e, "unique_id", None) == "unifi_insights_00:11:22:33:44:55_wake"
+            if getattr(e, "unique_id", None)
+            == f"unifi_insights_{mock_config_entry.entry_id}_00:11:22:33:44:55_wake"
         ]
         reconnect_buttons = [
             e

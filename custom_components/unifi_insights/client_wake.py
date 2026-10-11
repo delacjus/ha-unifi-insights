@@ -34,14 +34,14 @@ _WAKE_NETWORK_PURPOSES: Final = frozenset({"corporate", "guest"})
 _MAX_BROADCAST_PREFIXLEN: Final = 30
 
 
-def wake_unique_id(mac: str) -> str:
-    """Return the entity unique ID of the Wake button for a normalized MAC."""
-    return f"{DOMAIN}_{mac}{WAKE_UNIQUE_ID_SUFFIX}"
+def wake_unique_id(entry_id: str, mac: str) -> str:
+    """Return this config entry's Wake button unique ID for a normalized MAC."""
+    return f"{DOMAIN}_{entry_id}_{mac}{WAKE_UNIQUE_ID_SUFFIX}"
 
 
-def mac_from_wake_unique_id(unique_id: str) -> str | None:
-    """Return the MAC a Wake button unique ID identifies, or None if it is not one."""
-    prefix = f"{DOMAIN}_"
+def mac_from_wake_unique_id(unique_id: str, entry_id: str) -> str | None:
+    """Return this entry's Wake-button MAC, or None for any other unique ID."""
+    prefix = f"{DOMAIN}_{entry_id}_"
     if not (unique_id.startswith(prefix) and unique_id.endswith(WAKE_UNIQUE_ID_SUFFIX)):
         return None
     mac = unique_id[len(prefix) : -len(WAKE_UNIQUE_ID_SUFFIX)]

@@ -32,7 +32,10 @@ from custom_components.unifi_insights.button import (
     get_device_ports,
     port_can_be_power_cycled,
 )
-from custom_components.unifi_insights.client_wake import select_wake_history
+from custom_components.unifi_insights.client_wake import (
+    select_wake_history,
+    wake_unique_id,
+)
 from custom_components.unifi_insights.const import (
     CONF_CLIENT_CONTROL,
     DOMAIN,
@@ -1844,7 +1847,11 @@ class TestUnifiClientWakeButton:
             }
         }
         button = UnifiClientWakeButton(
-            coordinator, mac, site_id="site1", fallback_name="History PC"
+            coordinator,
+            mac,
+            entry_id="wake_entry",
+            site_id="site1",
+            fallback_name="History PC",
         )
         assert button.translation_placeholders == {"client_name": "Host PC"}
 
@@ -1855,9 +1862,11 @@ class TestUnifiClientWakeButton:
         coordinator.data = {"clients": {}}
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
 
-        assert button.unique_id == f"unifi_insights_{mac}_wake"
+        assert button.unique_id == f"unifi_insights_wake_entry_{mac}_wake"
         assert button.translation_key == "client_wake"
         assert button.has_entity_name is True
         assert button.translation_placeholders == {"client_name": mac}
@@ -1873,7 +1882,12 @@ class TestUnifiClientWakeButton:
         coordinator = MagicMock(hass=hass)
         coordinator.data = {"clients": {}}
 
-        button = UnifiClientWakeButton(coordinator, "00:11:22:33:44:55", site_id=None)
+        button = UnifiClientWakeButton(
+            coordinator,
+            "00:11:22:33:44:55",
+            entry_id="wake_entry",
+            site_id=None,
+        )
 
         assert button.device_info is None
 
@@ -1897,7 +1911,9 @@ class TestUnifiClientWakeButton:
             },
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}},
         }
-        btn_gw = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_gw = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert btn_gw.device_info is not None
         assert btn_gw.device_info["identifiers"] == {(DOMAIN, "site1_gw1")}
 
@@ -1907,7 +1923,9 @@ class TestUnifiClientWakeButton:
             "devices": {"site1": {}},
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}},
         }
-        btn_site = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_site = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert btn_site.device_info is not None
         assert btn_site.device_info["identifiers"] == {(DOMAIN, "site_site1")}
         assert btn_site.device_info["name"] == "UniFi Site (Home Site)"
@@ -1933,13 +1951,17 @@ class TestUnifiClientWakeButton:
             },
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Workstation"}}},
         }
-        btn_gw = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_gw = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         for _, identifier in btn_gw.device_info["identifiers"]:
             assert not identifier.startswith("client_")
 
         # Offline unseeded client
         coordinator.data = {"devices": {}, "clients": {}}
-        btn_offline = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_offline = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         for _, identifier in btn_offline.device_info["identifiers"]:
             assert not identifier.startswith("client_")
 
@@ -1955,25 +1977,35 @@ class TestUnifiClientWakeButton:
         coordinator.data = {
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}}
         }
-        btn_live = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_live = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert btn_live.translation_placeholders == {"client_name": "Gaming PC"}
 
         # Live client hostname fallback
         coordinator.data = {
             "clients": {"site1": {"c1": {"macAddress": mac, "hostname": "pc-host"}}}
         }
-        btn_host = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_host = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert btn_host.translation_placeholders == {"client_name": "pc-host"}
 
         # History-only client
         coordinator.data = {"clients": {}}
         btn_hist = UnifiClientWakeButton(
-            coordinator, mac, fallback_name="Saved PC", site_id="site1"
+            coordinator,
+            mac,
+            entry_id="wake_entry",
+            fallback_name="Saved PC",
+            site_id="site1",
         )
         assert btn_hist.translation_placeholders == {"client_name": "Saved PC"}
 
         # MAC-only client (offline and unnamed)
-        btn_mac = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        btn_mac = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert btn_mac.translation_placeholders == {"client_name": mac}
 
     def test_wake_button_offline_seeded_client_attaches_to_seed_site_gateway(
@@ -1997,6 +2029,7 @@ class TestUnifiClientWakeButton:
         button = UnifiClientWakeButton(
             coordinator,
             mac,
+            entry_id="wake_entry",
             fallback_name="Offline Seeded PC",
             site_id="remote_site",
         )
@@ -2013,7 +2046,9 @@ class TestUnifiClientWakeButton:
             "clients": {"site1": {"c1": {"macAddress": mac, "name": "Gaming PC"}}}
         }
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert button.translation_placeholders == {"client_name": "Gaming PC"}
 
     def test_wake_button_name_falls_back_to_hostname(self, hass: HomeAssistant) -> None:
@@ -2025,7 +2060,9 @@ class TestUnifiClientWakeButton:
             "clients": {"site1": {"c1": {"macAddress": mac, "hostname": "pc-host"}}}
         }
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert button.translation_placeholders == {"client_name": "pc-host"}
 
     def test_wake_button_name_uses_history_name_when_not_connected(
@@ -2038,7 +2075,11 @@ class TestUnifiClientWakeButton:
         coordinator.data = {"clients": {}}
 
         button = UnifiClientWakeButton(
-            coordinator, mac, fallback_name="Saved PC", site_id="site1"
+            coordinator,
+            mac,
+            entry_id="wake_entry",
+            fallback_name="Saved PC",
+            site_id="site1",
         )
         assert button.translation_placeholders == {"client_name": "Saved PC"}
 
@@ -2049,7 +2090,9 @@ class TestUnifiClientWakeButton:
         coordinator.hass = hass
         coordinator.data = {"clients": {}}
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         assert button.translation_placeholders == {"client_name": mac}
 
     def test_wake_button_is_always_available(self, hass: HomeAssistant) -> None:
@@ -2060,7 +2103,10 @@ class TestUnifiClientWakeButton:
         coordinator.last_update_success = False
 
         button = UnifiClientWakeButton(
-            coordinator, "00:11:22:33:44:55", site_id="site1"
+            coordinator,
+            "00:11:22:33:44:55",
+            entry_id="wake_entry",
+            site_id="site1",
         )
         assert button.available is True
 
@@ -2074,7 +2120,9 @@ class TestUnifiClientWakeButton:
         coordinator.async_wake_client = AsyncMock()
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         await button.async_press()
 
         coordinator.async_wake_client.assert_awaited_once_with(mac, client_name=mac)
@@ -2091,7 +2139,9 @@ class TestUnifiClientWakeButton:
         )
         mac = "00:11:22:33:44:55"
 
-        button = UnifiClientWakeButton(coordinator, mac, site_id="site1")
+        button = UnifiClientWakeButton(
+            coordinator, mac, entry_id="wake_entry", site_id="site1"
+        )
         with pytest.raises(HomeAssistantError, match=f"Unable to wake client {mac}"):
             await button.async_press()
 
@@ -2110,7 +2160,10 @@ class TestUnifiClientWakeButton:
         coordinator.async_wake_client = AsyncMock(side_effect=err)
 
         button = UnifiClientWakeButton(
-            coordinator, "00:11:22:33:44:55", site_id="site1"
+            coordinator,
+            "00:11:22:33:44:55",
+            entry_id="wake_entry",
+            site_id="site1",
         )
         with pytest.raises(HomeAssistantError) as exc_info:
             await button.async_press()
@@ -2158,7 +2211,7 @@ class TestWakeButtonSetup:
         await hass.async_block_till_done(wait_background_tasks=True)
         registry = er.async_get(hass)
         entity_id = registry.async_get_entity_id(
-            "button", DOMAIN, f"{DOMAIN}_{mac}_wake"
+            "button", DOMAIN, wake_unique_id(mock_config_entry.entry_id, mac)
         )
         assert entity_id is not None
         row = registry.async_get(entity_id)
@@ -2264,7 +2317,7 @@ class TestWakeButtonSetup:
         row = er.async_get(hass).async_get_or_create(
             "button",
             DOMAIN,
-            f"unifi_insights_{mac}_wake",
+            wake_unique_id(entry.entry_id, mac),
             config_entry=entry,
             device_id=device.id if existing_device else None,
             original_name=registry_name,
@@ -2327,7 +2380,9 @@ class TestWakeButtonSetup:
 
         wake_buttons = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons) == 1
-        assert wake_buttons[0].unique_id == "unifi_insights_00:11:22:33:44:01_wake"
+        assert wake_buttons[0].unique_id == wake_unique_id(
+            entry.entry_id, "00:11:22:33:44:01"
+        )
 
     async def test_setup_dedupes_wake_buttons_across_sites_and_rediscovery(
         self, hass: HomeAssistant
@@ -2410,7 +2465,7 @@ class TestWakeButtonSetup:
 
         wake_buttons_after = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons_after) == 1
-        assert wake_buttons_after[0].unique_id == f"unifi_insights_{mac}_wake"
+        assert wake_buttons_after[0].unique_id == wake_unique_id(entry.entry_id, mac)
 
     async def test_setup_keeps_disabled_offline_wake_row_without_creating_entity(
         self, hass: HomeAssistant
@@ -2435,7 +2490,7 @@ class TestWakeButtonSetup:
         reg_entry = ent_reg.async_get_or_create(
             "button",
             DOMAIN,
-            f"unifi_insights_{mac}_wake",
+            wake_unique_id(entry.entry_id, mac),
             config_entry=entry,
             disabled_by=er.RegistryEntryDisabler.INTEGRATION,
         )
@@ -2477,7 +2532,7 @@ class TestWakeButtonSetup:
         ent_reg.async_get_or_create(
             "button",
             DOMAIN,
-            f"unifi_insights_{mac}_wake",
+            wake_unique_id(entry.entry_id, mac),
             config_entry=entry,
         )
 
@@ -2486,7 +2541,7 @@ class TestWakeButtonSetup:
 
         wake_buttons = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons) == 1
-        assert wake_buttons[0].unique_id == f"unifi_insights_{mac}_wake"
+        assert wake_buttons[0].unique_id == wake_unique_id(entry.entry_id, mac)
 
     async def test_setup_creates_wake_buttons_from_history(
         self, hass: HomeAssistant
@@ -2518,7 +2573,7 @@ class TestWakeButtonSetup:
 
         wake_buttons = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons) == 1
-        assert wake_buttons[0].unique_id == f"unifi_insights_{mac}_wake"
+        assert wake_buttons[0].unique_id == wake_unique_id(entry.entry_id, mac)
         assert wake_buttons[0].translation_placeholders == {"client_name": "History PC"}
         assert wake_buttons[0].device_info is not None
         assert wake_buttons[0].device_info["identifiers"] == {(DOMAIN, "site1_gw1")}
@@ -2554,7 +2609,7 @@ class TestWakeButtonSetup:
         ent_reg.async_get_or_create(
             "button",
             DOMAIN,
-            f"unifi_insights_{mac}_wake",
+            wake_unique_id(entry.entry_id, mac),
             config_entry=entry,
         )
 
@@ -2638,7 +2693,7 @@ class TestWakeButtonSetup:
         r_wake = ent_reg.async_get_or_create(
             "button",
             DOMAIN,
-            "unifi_insights_00:11:22:33:44:01_wake",
+            wake_unique_id(entry.entry_id, "00:11:22:33:44:01"),
             config_entry=entry,
         )
         r_reconnect = ent_reg.async_get_or_create(
@@ -2682,6 +2737,87 @@ class TestWakeButtonSetup:
 
         coordinator.async_get_wake_history.assert_not_awaited()
 
+    async def test_wake_buttons_with_the_same_mac_are_scoped_to_each_entry(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Two config entries can expose Wake buttons for the same client MAC."""
+        mac = "00:11:22:33:44:55"
+
+        def make_entry(entry_id: str) -> tuple[MockConfigEntry, MagicMock]:
+            coordinator = MagicMock(hass=hass)
+            coordinator.data = {
+                "devices": {},
+                "protect": {},
+                "clients": {"site1": {"client": {"type": "WIRED", "macAddress": mac}}},
+            }
+            coordinator.protect_client = None
+            coordinator.async_get_wake_history = AsyncMock(return_value={})
+            entry = MockConfigEntry(
+                domain=DOMAIN,
+                entry_id=entry_id,
+                options={CONF_CLIENT_CONTROL: True},
+            )
+            entry.add_to_hass(hass)
+            entry.runtime_data = MagicMock(coordinator=coordinator)
+            return entry, coordinator
+
+        first_entry, _ = make_entry("first_entry")
+        second_entry, _ = make_entry("second_entry")
+        added: list[UnifiClientWakeButton] = []
+
+        await async_setup_entry(hass, first_entry, added.extend)
+        await async_setup_entry(hass, second_entry, added.extend)
+
+        wake_ids = {
+            button.unique_id
+            for button in added
+            if isinstance(button, UnifiClientWakeButton)
+        }
+        assert wake_ids == {
+            wake_unique_id(first_entry.entry_id, mac),
+            wake_unique_id(second_entry.entry_id, mac),
+        }
+
+    async def test_client_control_cleanup_does_not_remove_another_entries_wake(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Disabling controls removes only the current entry's scoped Wake button."""
+        mac = "00:11:22:33:44:55"
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            entry_id="cleanup_entry",
+            options={CONF_CLIENT_CONTROL: False},
+        )
+        other_entry = MockConfigEntry(
+            domain=DOMAIN,
+            entry_id="other_entry",
+            options={CONF_CLIENT_CONTROL: True},
+        )
+        entry.add_to_hass(hass)
+        other_entry.add_to_hass(hass)
+
+        coordinator = MagicMock(hass=hass)
+        coordinator.data = {"devices": {}, "protect": {}, "clients": {}}
+        coordinator.protect_client = None
+        coordinator.async_get_wake_history = AsyncMock(return_value={})
+        entry.runtime_data = MagicMock(coordinator=coordinator)
+
+        registry = er.async_get(hass)
+        own = registry.async_get_or_create(
+            "button", DOMAIN, wake_unique_id(entry.entry_id, mac), config_entry=entry
+        )
+        other = registry.async_get_or_create(
+            "button",
+            DOMAIN,
+            wake_unique_id(other_entry.entry_id, mac),
+            config_entry=other_entry,
+        )
+
+        await async_setup_entry(hass, entry, lambda entities, **kwargs: None)
+
+        assert registry.async_get(own.entity_id) is None
+        assert registry.async_get(other.entity_id) is not None
+
     def test_registered_wake_macs_ignores_foreign_entries(
         self, hass: HomeAssistant
     ) -> None:
@@ -2694,7 +2830,7 @@ class TestWakeButtonSetup:
         ent_reg.async_get_or_create(
             "button",
             DOMAIN,
-            "unifi_insights_00:11:22:33:44:55_wake",
+            wake_unique_id(entry.entry_id, "00:11:22:33:44:55"),
             config_entry=entry,
         )
         # Foreign platform
@@ -2708,7 +2844,7 @@ class TestWakeButtonSetup:
         ent_reg.async_get_or_create(
             "switch",
             DOMAIN,
-            "unifi_insights_00:11:22:33:44:77_wake",
+            wake_unique_id(entry.entry_id, "00:11:22:33:44:77"),
             config_entry=entry,
         )
         # Reconnect button
@@ -2749,7 +2885,10 @@ class TestWakeButtonSetup:
         coordinator.hass = hass
         coordinator.data = {"clients": {}}
         button = UnifiClientWakeButton(
-            coordinator, "00:11:22:33:44:55", site_id="site1"
+            coordinator,
+            "00:11:22:33:44:55",
+            entry_id="wake_entry",
+            site_id="site1",
         )
         assert button.entity_registry_enabled_default is False
 
@@ -2788,7 +2927,7 @@ class TestWakeButtonSetup:
             ent_reg.async_get_or_create(
                 "button",
                 DOMAIN,
-                f"unifi_insights_{mac}_wake",
+                wake_unique_id(entry.entry_id, mac),
                 config_entry=entry,
                 disabled_by=er.RegistryEntryDisabler.INTEGRATION,
             )
@@ -2798,8 +2937,8 @@ class TestWakeButtonSetup:
 
         # At synchronous setup time: only mac_connected is added
         wake_ids = [e.unique_id for e in added if isinstance(e, UnifiClientWakeButton)]
-        assert f"unifi_insights_{mac_connected}_wake" in wake_ids
-        assert f"unifi_insights_{mac_offline_unseeded}_wake" not in wake_ids
+        assert wake_unique_id(entry.entry_id, mac_connected) in wake_ids
+        assert wake_unique_id(entry.entry_id, mac_offline_unseeded) not in wake_ids
 
         # Wait for the background seed task to complete before asserting discovery.
         await hass.async_block_till_done(wait_background_tasks=True)
@@ -2807,13 +2946,15 @@ class TestWakeButtonSetup:
         wake_ids_after = [
             e.unique_id for e in added if isinstance(e, UnifiClientWakeButton)
         ]
-        assert f"unifi_insights_{mac_offline_seeded}_wake" in wake_ids_after
-        assert f"unifi_insights_{mac_offline_unseeded}_wake" not in wake_ids_after
+        assert wake_unique_id(entry.entry_id, mac_offline_seeded) in wake_ids_after
+        assert (
+            wake_unique_id(entry.entry_id, mac_offline_unseeded) not in wake_ids_after
+        )
 
         # The unseeded offline row remains in entity registry untouched
         assert (
             ent_reg.async_get_entity_id(
-                "button", DOMAIN, f"unifi_insights_{mac_offline_unseeded}_wake"
+                "button", DOMAIN, wake_unique_id(entry.entry_id, mac_offline_unseeded)
             )
             is not None
         )
@@ -2859,4 +3000,4 @@ class TestWakeButtonSetup:
 
         wake_buttons_after = [e for e in added if isinstance(e, UnifiClientWakeButton)]
         assert len(wake_buttons_after) == 1
-        assert wake_buttons_after[0].unique_id == f"unifi_insights_{mac}_wake"
+        assert wake_buttons_after[0].unique_id == wake_unique_id(entry.entry_id, mac)

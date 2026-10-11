@@ -158,7 +158,7 @@ def _registered_wake_macs(registry: er.EntityRegistry, entry_id: str) -> set[str
     for reg_entry in er.async_entries_for_config_entry(registry, entry_id):
         if reg_entry.domain != "button" or reg_entry.platform != DOMAIN:
             continue
-        if (mac := mac_from_wake_unique_id(reg_entry.unique_id)) is not None:
+        if (mac := mac_from_wake_unique_id(reg_entry.unique_id, entry_id)) is not None:
             macs.add(mac)
     return macs
 
@@ -195,7 +195,10 @@ async def async_setup_entry(
                 and reg_entry.platform == DOMAIN
                 and (
                     reg_entry.unique_id.endswith("_reconnect")
-                    or mac_from_wake_unique_id(reg_entry.unique_id) is not None
+                    or mac_from_wake_unique_id(
+                        reg_entry.unique_id, config_entry.entry_id
+                    )
+                    is not None
                 )
             ):
                 _LOGGER.debug(
@@ -217,7 +220,7 @@ async def async_setup_entry(
         enabled_macs: set[str] = set()
         coord_data = coordinator.data or {}
         for row in er.async_entries_for_config_entry(registry, config_entry.entry_id):
-            mac = mac_from_wake_unique_id(row.unique_id)
+            mac = mac_from_wake_unique_id(row.unique_id, config_entry.entry_id)
             if row.domain != "button" or row.platform != DOMAIN or mac is None:
                 continue
             if row.disabled_by is None:
@@ -241,6 +244,7 @@ async def async_setup_entry(
             restored[mac] = UnifiClientWakeButton(
                 coordinator,
                 mac,
+                entry_id=config_entry.entry_id,
                 site_id=site_id,
                 fallback_name=saved_name,
                 device_info=DeviceInfo(identifiers=device.identifiers)
@@ -273,6 +277,7 @@ async def async_setup_entry(
                     UnifiClientWakeButton(
                         coordinator,
                         mac,
+                        entry_id=config_entry.entry_id,
                         fallback_name=fallback_name,
                         site_id=seed_site,
                     )
@@ -401,7 +406,10 @@ async def async_setup_entry(
                         known_wake_macs.add(wake_mac)
                         entities.append(
                             UnifiClientWakeButton(
-                                coordinator, wake_mac, site_id=str(site_id)
+                                coordinator,
+                                wake_mac,
+                                entry_id=config_entry.entry_id,
+                                site_id=str(site_id),
                             )
                         )
 
@@ -749,6 +757,7 @@ class UnifiClientWakeButton(ButtonEntity):
         coordinator: UnifiFacadeCoordinator,
         mac: str,
         *,
+        entry_id: str,
         site_id: str,
         fallback_name: str | None = None,
         device_info: DeviceInfo | None = None,
@@ -756,13 +765,14 @@ class UnifiClientWakeButton(ButtonEntity):
         """
         Initialize the button.
 
-        mac is the lower-case colon MAC. fallback_name is the name the
-        console's client history holds, used only while the client is not connected.
-        site_id is the client's site. Registry restoration preserves its device.
+        mac is the lower-case colon MAC and entry_id scopes its entity identity.
+        fallback_name is the name the console's client history holds, used only
+        while the client is not connected. site_id is the client's site.
+        Registry restoration preserves its device.
         """
         self.coordinator = coordinator
         self._mac = mac
-        self._attr_unique_id = wake_unique_id(mac)
+        self._attr_unique_id = wake_unique_id(entry_id, mac)
 
         coord_data = coordinator.data if isinstance(coordinator.data, dict) else {}
         if device_info is not None:
