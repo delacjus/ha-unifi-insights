@@ -48,7 +48,7 @@ asyncio: mode=Mode.AUTO, default_loop_scope=None
 collected 4315 items
 
 ...
-================= 4304 passed, 11 xfailed in 225.18s (0:03:45) =================
+================= 4304 passed, 11 xfailed in 208.26s (0:03:28) =================
 ```
 
 ## Documentation

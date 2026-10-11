@@ -1,0 +1,3 @@
+⚡ Bolt: [performance improvement] Optimize get_field lookup
+
+Replace the double lookup in the heavily-used `get_field` helper with a single `dict.get()` call and the walrus operator. This prevents looking up the key twice per check, improving the efficiency of data extraction throughout the integration.
