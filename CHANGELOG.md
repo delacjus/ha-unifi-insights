@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Older Protect versions that lack these endpoints are checked once an hour instead of on every poll, and logged once.
   - Diagnostics redact the tamper user name and the Thread network name and IDs.
 - UniFi Protect sirens appear as siren entities. Turning one on sounds it for 5, 10, 20 or 30 seconds (Protect's default is 5) and can set its volume first. Turning it off stops it right away. Protect versions without sirens are checked once an hour and logged once. [#219](https://github.com/ruaan-deysel/ha-unifi-insights/issues/219)
+- Changed Carrier Fabric configuration flow to derive `unique_id` using an HMAC of the API key instead of a bare SHA-256 hash.
 
 ### Changed
 
