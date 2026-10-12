@@ -395,3 +395,54 @@ async def test_conditional_discovery_and_availability(
     await mock_config_entry._async_process_on_unload(hass)
     assert remove_listener.call_count == 2
     assert not mock_coordinator.protect_client.nvr.get.called
+
+
+@pytest.mark.parametrize(
+    "inventory",
+    [
+        None,
+        [],
+        [{"id": "nvr1", "storageInfo": {"healthy": False}}],
+        "invalid",
+        42,
+    ],
+)
+async def test_malformed_nvr_inventory_waits_for_valid_discovery(
+    hass: HomeAssistant, mock_coordinator, mock_config_entry, inventory: object
+) -> None:
+    """Malformed inventories cannot invent diagnostics or prevent later discovery."""
+    protect = mock_coordinator.data["protect"]
+    protect["nvrs"] = inventory
+    mock_config_entry.runtime_data = MagicMock(coordinator=mock_coordinator)
+    binaries: list = []
+
+    await setup_binary_sensors(hass, mock_config_entry, binaries.extend)
+    discover = mock_coordinator.async_add_listener.call_args[0][0]
+    discover()
+    assert not binaries
+
+    valid_inventory = {
+        "nvr1": {
+            "id": "nvr1",
+            "name": "Recorder",
+            "storageInfo": {"healthy": False, "usedSize": 90, "totalSize": 100},
+        }
+    }
+    protect["nvrs"] = valid_inventory
+    discover()
+    assert {entity.unique_id for entity in binaries} == {
+        "unifi_insights_nvr_nvr1_storage_degraded",
+        "unifi_insights_nvr_nvr1_storage_nearly_full",
+    }
+    assert all(entity.available and entity.is_on for entity in binaries)
+
+    protect["nvrs"] = inventory
+    discover()
+    protect["nvrs"] = valid_inventory
+    discover()
+    assert len(binaries) == 2
+    assert not mock_coordinator.protect_client.nvr.get.called
+
+    remove_listener = mock_coordinator.async_add_listener.return_value
+    await mock_config_entry._async_process_on_unload(hass)
+    remove_listener.assert_called_once_with()
