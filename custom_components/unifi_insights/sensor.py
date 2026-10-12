@@ -317,7 +317,12 @@ def _has_storage_info(nvr_data: dict[str, Any]) -> bool:
 
 def _get_storage_bytes(nvr_data: dict[str, Any], field: str) -> int | None:
     """Read a validated byte signal from the shared normalizer."""
-    return getattr(normalize_nvr_storage(nvr_data), f"{field}_bytes", None)
+    storage = normalize_nvr_storage(nvr_data)
+    return {
+        "used": storage.used_bytes,
+        "total": storage.total_bytes,
+        "available": storage.available_bytes,
+    }.get(field)
 
 
 def _calculate_storage_percent(nvr_data: dict[str, Any]) -> float | None:

@@ -47,7 +47,7 @@ class UnifiInsightsStorageTelemetry:
         return self.used_percent >= STORAGE_NEARLY_FULL_PERCENT
 
 
-def _number(value: Any) -> float | int | None:
+def _number(value: object) -> float | int | None:
     """Reject malformed, negative, non-finite and boolean readings."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
