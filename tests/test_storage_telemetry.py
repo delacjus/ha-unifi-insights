@@ -465,3 +465,41 @@ async def test_malformed_nvr_inventory_waits_for_valid_discovery(
     remove_listener = mock_coordinator.async_add_listener.return_value
     await mock_config_entry._async_process_on_unload(hass)
     remove_listener.assert_called_once_with()
+
+
+@pytest.mark.parametrize("protect", [None, [], "invalid"])
+async def test_malformed_protect_data_waits_for_valid_discovery(
+    hass: HomeAssistant, mock_coordinator, mock_config_entry, protect: object
+) -> None:
+    """A non-dict Protect payload is skipped; later valid data is discovered."""
+    valid_protect = mock_coordinator.data["protect"]
+    valid_protect["nvrs"] = {
+        "nvr1": {
+            "id": "nvr1",
+            "name": "Recorder",
+            "storageInfo": {"healthy": False, "usedSize": 90, "totalSize": 100},
+        }
+    }
+    mock_coordinator.data["protect"] = protect
+    mock_config_entry.runtime_data = MagicMock(coordinator=mock_coordinator)
+    binaries: list = []
+
+    await setup_binary_sensors(hass, mock_config_entry, binaries.extend)
+    discover = mock_coordinator.async_add_listener.call_args[0][0]
+    discover()
+    assert not [
+        e for e in binaries if isinstance(e, UnifiInsightsNVRStorageBinarySensor)
+    ]
+
+    mock_coordinator.data["protect"] = valid_protect
+    discover()
+    nvr_binaries = [
+        e for e in binaries if isinstance(e, UnifiInsightsNVRStorageBinarySensor)
+    ]
+    assert len(nvr_binaries) == 2
+    assert all(entity.available and entity.is_on for entity in nvr_binaries)
+
+    # The NVR vanishing, or arriving empty, makes the diagnostics unavailable.
+    for missing in ({}, {"nvr1": {}}):
+        valid_protect["nvrs"] = missing
+        assert [entity.available for entity in nvr_binaries] == [False, False]

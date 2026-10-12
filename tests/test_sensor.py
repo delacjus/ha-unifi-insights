@@ -1678,9 +1678,26 @@ class TestHasStorageInfo:
         assert _has_storage_info({"storageInfo": "not a dict"}) is False
         assert _has_storage_info({"storageInfo": None}) is False
 
+    def test_has_storage_info_with_percentage_only(self):
+        """Test _has_storage_info when the NVR reports only a used percentage."""
+        assert _has_storage_info({"storage": {"used": 42}}) is True
+        assert _calculate_storage_percent({"storage": {"used": 42}}) == 42.0
+
+    def test_has_storage_info_with_available_only(self):
+        """Test _has_storage_info when the NVR reports only available bytes."""
+        assert _has_storage_info({"storageAvailableBytes": 500}) is True
+        assert _has_storage_info({"storageInfo": {"availableSize": 500}}) is True
+
 
 class TestGetStorageBytes:
     """Tests for _get_storage_bytes helper function."""
+
+    def test_get_storage_bytes_available_explicit(self):
+        """Test _get_storage_bytes prefers a reported available value."""
+        data = {"storageInfo": {"usedSize": 50, "totalSize": 100, "availableSize": 30}}
+        assert _get_storage_bytes(data, "available") == 30
+        assert _get_storage_bytes({"storageAvailableBytes": 500}, "available") == 500
+        assert _get_storage_bytes(data, "unknown") is None
 
     def test_get_storage_bytes_used_direct(self):
         """Test _get_storage_bytes for 'used' with direct fields."""
