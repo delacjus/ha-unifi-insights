@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Ruaan Deysel
+
 """
 Per-mount storage entities for UniFi consoles.
 

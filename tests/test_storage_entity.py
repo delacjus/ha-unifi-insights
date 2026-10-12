@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Ruaan Deysel
+
 """Tests for console per-mount storage entities and nearly-full binary sensor."""
 
 from __future__ import annotations
