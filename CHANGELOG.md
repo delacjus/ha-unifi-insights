@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Improved performance of polling by optimizing client lookups in coordinators.
 - Updated repository and documentation URLs to `tinkerologie` organization
 - Configured Codecov GitHub Actions workflow for tokenless coverage uploads
 
@@ -691,3 +692,5 @@ Thanks @delacjus
 [2026.3.0]: https://github.com/tinkerologie/ha-unifi-insights/compare/v2026.2.0...v2026.3.0
 [2026.2.0]: https://github.com/tinkerologie/ha-unifi-insights/compare/v2025.06.05...v2026.2.0
 [2025.06.05]: https://github.com/tinkerologie/ha-unifi-insights/releases/tag/v2025.06.05
+## [Unreleased]
+- Improved performance of polling by optimizing client lookups in coordinators.
