@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory, UnitOfInformation
+from homeassistant.helpers.translation import async_get_translations
 from pydantic import ValidationError
 
 from custom_components.unifi_insights.api.protect.models.nvr import NVR, StorageInfo
@@ -35,6 +36,18 @@ from custom_components.unifi_insights.storage_telemetry import normalize_nvr_sto
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
+
+async def test_nvr_diagnostic_english_name_loads_at_runtime(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Custom integration labels must resolve from HA's English translation file."""
+    translations = await async_get_translations(
+        hass, "en", "entity", {"unifi_insights"}
+    )
+    key = "component.unifi_insights.entity.binary_sensor.storage_degraded.name"
+    assert translations[key] == "Storage degraded"
 
 
 def test_console_arbitrary_size_integer_does_not_abort_normalization() -> None:

@@ -636,6 +636,9 @@
       },
       "camera_microphone": {
         "name": "Microphone"
+      },
+      "storage_degraded": {
+        "name": "Storage degraded"
       }
     },
     "button": {
