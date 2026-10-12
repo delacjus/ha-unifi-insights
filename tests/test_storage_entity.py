@@ -479,6 +479,30 @@ def test_binary_sensor_availability_and_discovery(
     assert binary.available is False
 
 
+def test_storage_entities_unavailable_when_device_coordinator_fails(
+    mock_coordinator: MagicMock,
+) -> None:
+    """A failed device coordinator overrides mounts that are still cached."""
+    device_data = mock_coordinator.data["devices"]["site1"]["udm"]
+    storage_sensors = discover_storage_sensors(
+        mock_coordinator, "site1", "udm", device_data, set()
+    )
+    nearly_full = discover_storage_binary_sensors(
+        mock_coordinator, "site1", "udm", device_data, set()
+    )[0]
+    assert all(entity.available for entity in storage_sensors)
+    assert nearly_full.available is True
+
+    mock_coordinator.device_available = False
+
+    # The cached mounts are untouched, so only the coordinator gate applies.
+    assert device_data["storage_mounts"] == UDM_STORAGE
+    assert [entity.available for entity in storage_sensors] == [False] * len(
+        storage_sensors
+    )
+    assert nearly_full.available is False
+
+
 def test_helpers_tolerate_bad_shapes() -> None:
     """Test helper robustness with None, non-dicts, and malformed mounts."""
     assert get_storage_mounts(None) == []

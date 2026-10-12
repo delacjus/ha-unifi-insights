@@ -230,6 +230,25 @@ def test_explicit_storage_model_serialization() -> None:
         assert normalize_nvr_storage(nvr.model_dump(by_alias=True)).used_bytes is None
 
 
+@pytest.mark.parametrize(
+    ("alias", "field"),
+    [
+        ("totalSize", "total_size"),
+        ("usedSize", "used_size"),
+        ("availableSize", "available_size"),
+    ],
+)
+@pytest.mark.parametrize("invalid", ["100", True, 1.5, None])
+def test_storage_info_rejects_non_integer_sizes(
+    alias: str, field: str, invalid: object
+) -> None:
+    """Strict size fields reject coercible values instead of guessing a number."""
+    with pytest.raises(ValidationError) as excinfo:
+        StorageInfo.model_validate({alias: invalid})
+    assert [error["loc"] for error in excinfo.value.errors()] == [(alias,)]
+    assert getattr(StorageInfo.model_validate({alias: 100}), field) == 100
+
+
 def test_targeted_serializer_preserves_caller_filters() -> None:
     """Stripping defaults must not restore excluded/null nested fields."""
     nvr = NVR(
