@@ -679,7 +679,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
         self,
         site_id: str,
         device_dict: dict[str, Any],
-        clients: list[dict[str, Any]],
+        clients_by_uplink: dict[str, list[dict[str, Any]]],
         legacy_site_name: str | None = None,
         legacy_device: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -774,13 +774,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
 
             # Add client data to stats
             if stats:
-                # Use camelCase uplinkDeviceId as returned by model_dump(by_alias=True)
-                stats["clients"] = [
-                    c
-                    for c in clients
-                    if (c.get("uplinkDeviceId") or c.get("uplink_device_id"))
-                    == device_id
-                ]
+                stats["clients"] = clients_by_uplink.get(device_id, [])
                 stats["id"] = device_id
 
             self._stats_failures.pop(device_id, None)
@@ -995,12 +989,19 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                 list(sample_device.keys()),
             )
 
+        # Create O(1) lookup for clients by uplink device
+        clients_by_uplink: dict[str, list[dict[str, Any]]] = {}
+        for c in clients:
+            uplink_id = c.get("uplinkDeviceId") or c.get("uplink_device_id")
+            if uplink_id:
+                clients_by_uplink.setdefault(uplink_id, []).append(c)
+
         # Process devices in parallel (get stats)
         tasks = [
             self._process_device(
                 site_id,
                 device,
-                clients,
+                clients_by_uplink,
                 legacy_site_name=legacy_site_name,
                 legacy_device=self._legacy_device_for(device, legacy_devices_by_mac),
             )

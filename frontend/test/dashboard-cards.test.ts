@@ -21,11 +21,25 @@ describe("dashboard card registration", () => {
         const cards = window.customCards ?? [];
         const types = cards.map((card) => card.type);
 
-        expect(types.filter((type) => type === "unifi-insights-site-health-card")).toHaveLength(1);
-        expect(types.filter((type) => type === "unifi-insights-internet-activity-card")).toHaveLength(1);
-        expect(types.filter((type) => type === "unifi-insights-performance-card")).toHaveLength(1);
-        expect(types.filter((type) => type === "unifi-insights-protect-status-card")).toHaveLength(1);
-        expect(types.filter((type) => type === "unifi-insights-timeline-card")).toHaveLength(1);
+        expect(
+            types.filter((type) => type === "unifi-insights-site-health-card"),
+        ).toHaveLength(1);
+        expect(
+            types.filter(
+                (type) => type === "unifi-insights-internet-activity-card",
+            ),
+        ).toHaveLength(1);
+        expect(
+            types.filter((type) => type === "unifi-insights-performance-card"),
+        ).toHaveLength(1);
+        expect(
+            types.filter(
+                (type) => type === "unifi-insights-protect-status-card",
+            ),
+        ).toHaveLength(1);
+        expect(
+            types.filter((type) => type === "unifi-insights-timeline-card"),
+        ).toHaveLength(1);
     });
 
     it("registers concise card names and non-empty card picker descriptions", () => {
@@ -48,7 +62,8 @@ describe("dashboard card registration", () => {
         const siteEditor = await UnifiInsightsSiteHealthCard.getConfigElement();
         const protectEditor =
             await UnifiInsightsProtectStatusCard.getConfigElement();
-        const timelineEditor = await UnifiInsightsTimelineCard.getConfigElement();
+        const timelineEditor =
+            await UnifiInsightsTimelineCard.getConfigElement();
 
         expect(siteEditor.tagName.toLowerCase()).toBe(
             "unifi-insights-site-health-card-editor",
@@ -139,7 +154,9 @@ describe("dashboard card registration", () => {
         const siteEl = document.createElement(
             SITE_HEALTH_CARD_TAG,
         ) as UnifiInsightsSiteHealthCard;
-        expect(() => siteEl.setConfig(null as never)).toThrow("Invalid card config");
+        expect(() => siteEl.setConfig(null as never)).toThrow(
+            "Invalid card config",
+        );
         siteEl.setConfig({
             type: `custom:${SITE_HEALTH_CARD_TAG}`,
             entry_id: "entry-1",
@@ -168,7 +185,9 @@ describe("dashboard card registration", () => {
         const internetEl = document.createElement(
             "unifi-insights-internet-activity-card",
         ) as UnifiInsightsInternetActivityCard;
-        internetEl.setConfig({ type: "custom:unifi-insights-internet-activity-card" });
+        internetEl.setConfig({
+            type: "custom:unifi-insights-internet-activity-card",
+        });
         internetEl.hass = fake.hass;
         document.body.append(internetEl);
         await settle(internetEl);
@@ -269,7 +288,9 @@ describe("dashboard card registration", () => {
                     source: { name: "Front Door" },
                     kind: "ring",
                     severity: "info",
-                    timestamp: new Date(Date.now() - 3600_000 * 2).toISOString(),
+                    timestamp: new Date(
+                        Date.now() - 3600_000 * 2,
+                    ).toISOString(),
                 },
             ],
         } as never);
@@ -295,8 +316,14 @@ describe("dashboard card registration", () => {
         fake.subs[1]?.callback({
             throughput: { rx_bps: 45_000_000, tx_bps: 850_000 },
             windows: {
-                "1h": { download_bytes: 500_000_000, upload_bytes: 100_000_000 },
-                "1d": { download_bytes: 28_812_000_000, upload_bytes: 3_949_000_000 },
+                "1h": {
+                    download_bytes: 500_000_000,
+                    upload_bytes: 100_000_000,
+                },
+                "1d": {
+                    download_bytes: 28_812_000_000,
+                    upload_bytes: 3_949_000_000,
+                },
             },
             entity_ids: {
                 download_1d: "sensor.internet_down_1d",
@@ -308,9 +335,9 @@ describe("dashboard card registration", () => {
         expect(internetEl.shadowRoot?.textContent).toContain("45.0 Mbps");
         const tabBtn = Array.from(
             internetEl.shadowRoot?.querySelectorAll(".pill-tab") ?? [],
-        ).find(
-            (btn) => btn.textContent?.trim() === "1h",
-        ) as HTMLButtonElement | undefined;
+        ).find((btn) => btn.textContent?.trim() === "1h") as
+            | HTMLButtonElement
+            | undefined;
         tabBtn?.click();
         await settle(internetEl);
         expect(internetEl.shadowRoot?.textContent).toContain("500 MB");
@@ -357,7 +384,10 @@ describe("dashboard card registration", () => {
 
         // Test subscribe failure and backoff early return
         const failingHass = fakeHass({
-            subscribeError: { code: "sub_failed", message: "Subscription error" },
+            subscribeError: {
+                code: "sub_failed",
+                message: "Subscription error",
+            },
         });
         el.hass = failingHass.hass;
         await settle(el);

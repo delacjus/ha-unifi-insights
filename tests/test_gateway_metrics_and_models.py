@@ -146,7 +146,7 @@ class TestLegacyDeviceStatsExtraction:
         dev_id, _dev_data, stats = await coordinator._process_device(
             site_id="default",
             device_dict=device_dict,
-            clients=[],
+            clients_by_uplink={},
             legacy_site_name="default",
             legacy_device=legacy_device,
         )

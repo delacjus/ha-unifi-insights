@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -269,7 +269,10 @@ class UnifiInsightsDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {}
 
     async def _process_device(
-        self, site_id: str, device_dict: dict[str, Any], clients: list[dict[str, Any]]
+        self,
+        site_id: str,
+        device_dict: dict[str, Any],
+        clients_by_uplink: dict[str, list[dict[str, Any]]],
     ) -> tuple[str, dict[str, Any], dict[str, Any]]:
         """Process a single device and its stats."""
         device_id: str = device_dict.get("id", "")
@@ -284,13 +287,7 @@ class UnifiInsightsDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Add client data to stats
             if stats:
-                # Use camelCase uplinkDeviceId as returned by model_dump(by_alias=True)
-                stats["clients"] = [
-                    c
-                    for c in clients
-                    if (c.get("uplinkDeviceId") or c.get("uplink_device_id"))
-                    == device_id
-                ]
+                stats["clients"] = clients_by_uplink.get(device_id, [])
                 stats["id"] = device_id
 
             return device_id, device_dict, stats
@@ -350,9 +347,17 @@ class UnifiInsightsDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     sample_device.get("state") or sample_device.get("status"),
                 )
 
+            # Create O(1) lookup for clients by uplink device
+            clients_by_uplink: dict[str, list[dict[str, Any]]] = {}
+            for c in clients:
+                uplink_id = c.get("uplinkDeviceId") or c.get("uplink_device_id")
+                if uplink_id:
+                    clients_by_uplink.setdefault(uplink_id, []).append(c)
+
             # Process devices in parallel (get stats)
             tasks = [
-                self._process_device(site_id, device, clients) for device in devices
+                self._process_device(site_id, device, clients_by_uplink)
+                for device in devices
             ]
             results = await asyncio.gather(*tasks)
 

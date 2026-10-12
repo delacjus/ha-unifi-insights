@@ -280,7 +280,7 @@ class TestProcessDeviceSiteResolutionAndStats:
         _, _, stats = await mock_device_coordinator._process_device(
             site_id="site1",
             device_dict=device_dict,
-            clients=[],
+            clients_by_uplink={},
             legacy_site_name=None,
         )
         mock_device_coordinator.network_client.devices.get_port_metrics.assert_called_with(
@@ -308,7 +308,7 @@ class TestProcessDeviceSiteResolutionAndStats:
         await mock_device_coordinator._process_device(
             site_id="site1",
             device_dict=device_dict,
-            clients=[],
+            clients_by_uplink={},
             legacy_site_name=None,
         )
         mock_device_coordinator.network_client.devices.get_port_metrics.assert_called_with(
@@ -332,7 +332,7 @@ class TestProcessDeviceSiteResolutionAndStats:
         await mock_device_coordinator._process_device(
             site_id="site1",
             device_dict=device_dict,
-            clients=[],
+            clients_by_uplink={},
             legacy_site_name=None,
         )
         mock_device_coordinator.network_client.devices.get_port_metrics.assert_called_with(

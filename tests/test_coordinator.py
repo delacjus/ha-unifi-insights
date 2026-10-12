@@ -3,10 +3,10 @@
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import UpdateFailed
-import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 if TYPE_CHECKING:
@@ -1022,14 +1022,18 @@ async def test_coordinator_process_device_stats_success(
 
     device_dict = {"id": "device1", "name": "Test Device"}
     # Add clients that match the device (using both camelCase and snake_case)
-    clients = [
-        {"id": "client1", "name": "Client 1", "uplinkDeviceId": "device1"},
-        {"id": "client2", "name": "Client 2", "uplink_device_id": "device1"},
-        {"id": "client3", "name": "Client 3", "uplinkDeviceId": "other_device"},
-    ]
+    clients_by_uplink = {
+        "device1": [
+            {"id": "client1", "name": "Client 1", "uplinkDeviceId": "device1"},
+            {"id": "client2", "name": "Client 2", "uplink_device_id": "device1"},
+        ],
+        "other_device": [
+            {"id": "client3", "name": "Client 3", "uplinkDeviceId": "other_device"},
+        ],
+    }
 
     device_id, device, stats = await coordinator._process_device(
-        "site1", device_dict, clients
+        "site1", device_dict, clients_by_uplink
     )
 
     assert device_id == "device1"
