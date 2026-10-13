@@ -107,7 +107,7 @@
         type: "custom:unifi-insights-topology-card",
         entry_id: "entry-1",
         site_id: "site-1",
-        clients: "collapsed",
+                clients: params.get("clients") ?? "collapsed",
       });
       card.layout = params.get("layout") ?? "masonry";
 
@@ -118,7 +118,16 @@
             document.addEventListener("hass-more-info", (event) =>
                 window.fixtureMoreInfo.push(event.detail),
             );
+            const detailsReady = params.has("deferDetails")
+                ? new Promise((resolve) => {
+                      window.fixtureResolveDetails = resolve;
+                  })
+                : Promise.resolve();
             const details = {
+                "cli:browser-0": {
+                    kind: "client",
+                    ip_address: "192.0.2.77",
+                },
                 "dev:uuid-core": {
                     kind: "switch",
                     ip_address: "192.0.2.10",
@@ -136,6 +145,7 @@
                         message.type === "unifi_insights/topology/node_details"
                     ) {
                         window.fixtureDetailsCalls.push(message);
+                        await detailsReady;
                         const answer = details[message.node_id];
                         if (!answer)
                             throw { code: "node_not_found", message: "" };

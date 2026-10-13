@@ -28,6 +28,8 @@ interface FixtureOptions {
     layout?: string;
     unresolved?: number;
     admin?: boolean;
+    clients?: "expanded";
+    deferDetails?: boolean;
 }
 
 async function loadFixture(
@@ -43,6 +45,8 @@ async function loadFixture(
   if (dimensions.unresolved !== undefined)
     query.set("unresolved", String(dimensions.unresolved));
     if (dimensions.admin) query.set("admin", "1");
+    if (dimensions.clients) query.set("clients", dimensions.clients);
+    if (dimensions.deferDetails) query.set("deferDetails", "1");
   await page.goto(`/test/browser/fixture.html?${query}`);
   await page.waitForFunction(() => window.fixtureReady === true);
 }
@@ -258,6 +262,50 @@ test.describe("topology detail panel overflow", () => {
     await expect(page.locator(dialog)).toHaveCount(0);
     await expect(page.locator(node)).toBeFocused();
   });
+
+    test("short narrow client sheet becomes a dialog when details arrive", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await loadFixture(page, {
+            width: 360,
+            height: 320,
+            admin: true,
+            clients: "expanded",
+            deferDetails: true,
+        });
+        const client = page.locator(`${card} [data-id="cli:browser-0"]`);
+        await client.click();
+        await expect(page.locator(panel)).toBeVisible();
+        await expect(page.locator(panelHost)).toHaveAttribute("narrow", "");
+        await expect(page.locator(dialog)).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(
+            0,
+        );
+        await expect
+            .poll(() => page.evaluate(() => window.fixtureDetailsCalls.length))
+            .toBe(1);
+        const sheet = await geometry(page.locator(panel));
+        expect(sheet.scrollHeight).toBeLessThanOrEqual(sheet.clientHeight);
+
+        await page.evaluate(() => window.fixtureResolveDetails());
+        const modal = page.locator(dialog);
+        await expect(modal).toBeVisible();
+        expect(
+            await modal.evaluate((element) => element.matches(":modal")),
+        ).toBe(true);
+        await expect(
+            modal.getByRole("button", { name: "Actions" }),
+        ).toBeVisible();
+        const full = await geometry(page.locator(panel));
+        expect(full.scrollHeight).toBeLessThanOrEqual(full.clientHeight);
+        await expect(page.getByRole("menu")).toHaveCount(0);
+
+        await page.keyboard.press("Escape");
+        await expect(page.locator(dialog)).toHaveCount(0);
+        await expect(page.locator(panel)).toBeHidden();
+        await expect(client).toBeFocused();
+    });
 
   test("five-row Sections card dialog closes from the backdrop", async ({
     page,
@@ -751,6 +799,7 @@ test.describe("topology node action menu", () => {
 declare global {
   interface Window {
     fixtureCard: HTMLElement;
+        fixtureResolveDetails: () => void;
         fixtureDetailsCalls: unknown[];
         fixtureMoreInfo: unknown[];
     fixtureReady: boolean;
