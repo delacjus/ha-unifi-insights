@@ -150,6 +150,7 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 | Traffic rule _rule description_                     | Switch         | Turn a traffic rule on or off                                                          |
 | NAT rule _rule description_                         | Switch         | Turn a custom NAT rule on or off (console-managed rules get no switch)                 |
 | Static route _route name_                           | Switch         | Turn a static route on or off, disabled by default                                     |
+| Network rule changes                                | Event          | Fires when a firewall policy, route, port forward, traffic or NAT rule changes         |
 | _Outlet name_                                       | Switch         | Turn a PDU outlet on or off                                                            |
 | _Outlet name_ Power Cycle                           | Switch         | Automatic modem power cycling for an outlet, disabled by default                       |
 | _Client name_ Allow                                 | Switch         | Block or allow a client (needs **Enable Client Control**)                              |
