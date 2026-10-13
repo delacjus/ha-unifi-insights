@@ -26,6 +26,10 @@ from custom_components.unifi_insights.api.network.models import (
 from custom_components.unifi_insights.coordinators.config import (
     UnifiConfigCoordinator,
 )
+from custom_components.unifi_insights.coordinators.config_sections import (
+    SECTION_OUTCOME_FAILED,
+    async_fetch_site_routes,
+)
 from tests.test_coordinators import (
     _create_mock_model,
     _create_mock_network_client,
@@ -285,3 +289,23 @@ async def test_empty_2xx_body_reports_no_deletions(
 
     await coordinator._async_update_data()
     assert coordinator.data["rule_changes"] == {}
+
+
+@pytest.mark.parametrize("record_outcome", [True, False])
+async def test_failed_route_fetch_returns_nothing_with_or_without_outcomes(
+    record_outcome: bool,  # noqa: FBT001
+) -> None:
+    """A failed policy-based route fetch yields no routes; the outcome is optional."""
+    client = MagicMock()
+    client.routes.list_routes = AsyncMock(side_effect=UniFiConnectionError("down"))
+    outcomes: dict[tuple[str, str], str] | None = {} if record_outcome else None
+
+    routes = await async_fetch_site_routes(
+        client, dict, "site1", "default", outcomes=outcomes
+    )
+
+    assert routes == {}
+    if record_outcome:
+        assert outcomes == {("policy_based_routes", "site1"): SECTION_OUTCOME_FAILED}
+    else:
+        assert outcomes is None
