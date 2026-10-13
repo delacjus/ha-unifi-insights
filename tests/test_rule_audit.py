@@ -90,8 +90,17 @@ def test_added_modified_deleted_for_each_family(family: RuleFamily) -> None:
     assert [c["sequence"] for c in changes["s1"]] == [1, 2]
 
     data3 = _data(**{family.data_key: {"s1": {}}})
+    changes3_pending = tracker.process(data3, _ALL_OK)
+    assert len(changes3_pending["s1"]) == 2
+
     changes3 = tracker.process(data3, _ALL_OK)
-    assert [c["change_type"] for c in changes3["s1"][-2:]] == ["deleted", "deleted"]
+    deleted = changes3["s1"][-2:]
+    assert [c["change_type"] for c in deleted] == ["deleted", "deleted"]
+    by_id = {c["rule_id"]: c for c in deleted}
+    assert by_id["keep"]["rule_name"] == "Keep"
+    assert by_id["keep"]["enabled"] is False
+    assert by_id["new"]["rule_name"] == "New"
+    assert by_id["new"]["enabled"] is True
     assert changes3["s1"][-1]["sequence"] == 4
 
 
@@ -318,6 +327,8 @@ def test_sites_are_tracked_independently() -> None:
         ("firewall_rules", "s1"): "failed",
         ("firewall_rules", "s2"): "ok",
     }
+    res_pending = tracker.process(data2, outcomes2)
+    assert res_pending == {}
     res = tracker.process(data2, outcomes2)
     assert list(res.keys()) == ["s2"]
     assert res["s2"][0]["site_id"] == "s2"
@@ -396,3 +407,240 @@ def test_rule_name_uses_first_non_blank_field() -> None:
     assert names_by_id["p1"] == "P1 Desc"
     assert names_by_id["p2"] == "P2 Name"
     assert names_by_id["p3"] is None
+
+
+def test_single_empty_poll_is_not_believed() -> None:
+    """An empty section on one poll is held pending; rules returning reports nothing."""
+    tracker = RuleAuditTracker()
+    rules = {
+        "pf1": {"name": "PF 1", "enabled": True},
+        "pf2": {"name": "PF 2", "enabled": True},
+    }
+    tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+
+    res_empty = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res_empty == {}
+
+    res_back = tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+    assert res_back == {}
+
+
+def test_empty_confirmed_by_second_poll_reports_deleted() -> None:
+    """An empty section confirmed by a second successful poll reports all rules deleted."""
+    tracker = RuleAuditTracker()
+    rules = {
+        "pf1": {"name": "PF 1", "enabled": True},
+        "pf2": {"name": "PF 2", "enabled": False},
+    }
+    tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+
+    res1 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res1 == {}
+
+    res2 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    changes = res2["s1"]
+    assert len(changes) == 2
+    assert [c["change_type"] for c in changes] == ["deleted", "deleted"]
+    by_id = {c["rule_id"]: c for c in changes}
+    assert by_id["pf1"]["rule_name"] == "PF 1"
+    assert by_id["pf1"]["enabled"] is True
+    assert by_id["pf2"]["rule_name"] == "PF 2"
+    assert by_id["pf2"]["enabled"] is False
+
+
+def test_failed_poll_between_two_empty_polls_still_confirms() -> None:
+    """A failed poll between two empty polls neither confirms nor clears pending empty."""
+    tracker = RuleAuditTracker()
+    rules = {
+        "pf1": {"name": "PF 1", "enabled": True},
+        "pf2": {"name": "PF 2", "enabled": True},
+    }
+    tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+
+    res1 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res1 == {}
+
+    outcomes_failed = dict(_ALL_OK)
+    outcomes_failed[("port_forwards", "s1")] = "failed"
+    res_failed = tracker.process(_data(port_forwards={"s1": {}}), outcomes_failed)
+    assert res_failed == {}
+
+    res2 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    changes = res2["s1"]
+    assert len(changes) == 2
+    assert [c["change_type"] for c in changes] == ["deleted", "deleted"]
+
+
+def test_rules_back_after_one_empty_poll_report_real_changes_only() -> None:
+    """Rules returning after one empty poll diff against the retained baseline."""
+    tracker = RuleAuditTracker()
+    rules = {
+        "pf1": {"name": "PF 1", "enabled": True},
+        "pf2": {"name": "PF 2", "enabled": True},
+    }
+    tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+
+    res_empty = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res_empty == {}
+
+    rules_modified = {
+        "pf1": {"name": "PF 1", "enabled": False},
+        "pf2": {"name": "PF 2", "enabled": True},
+    }
+    res_back = tracker.process(_data(port_forwards={"s1": rules_modified}), _ALL_OK)
+    changes = res_back["s1"]
+    assert len(changes) == 1
+    assert changes[0]["change_type"] == "modified"
+    assert changes[0]["rule_id"] == "pf1"
+    assert changes[0]["changed_fields"] == ["enabled"]
+
+    # When emptied again after being settled, it must go pending again (kills P3)
+    res_empty2 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert len(res_empty2["s1"]) == 1
+
+    res_empty3 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert len(res_empty3["s1"]) == 3
+
+
+def test_pending_empty_is_dropped_with_its_site() -> None:
+    """When a site is removed, pending empty flags are dropped."""
+    tracker = RuleAuditTracker()
+    rules = {"pf1": {"name": "PF 1", "enabled": True}}
+    tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+
+    res1 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res1 == {}
+
+    res_removed = tracker.process({"sites": {}}, {})
+    assert res_removed == {}
+
+    res_returned = tracker.process(_data(port_forwards={"s1": rules}), _ALL_OK)
+    assert res_returned == {}
+
+    res2 = tracker.process(_data(port_forwards={"s1": {}}), _ALL_OK)
+    assert res2 == {}
+
+
+def test_error_in_one_family_keeps_other_changes_for_the_next_poll(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An error in one family fails the site comparison and keeps all changes for next poll."""
+    tracker = RuleAuditTracker()
+    data1 = _data(
+        firewall_rules={"s1": {"fw1": {"name": "FW 1", "enabled": True}}},
+        static_routes={"s1": {"sr1": {"name": "SR 1", "enabled": True}}},
+    )
+    tracker.process(data1, _ALL_OK)
+
+    data2 = _data(
+        firewall_rules={"s1": {"fw1": {"name": "FW 1", "enabled": False}}},
+        static_routes={"s1": {"sr1": {"name": "SR 1", "enabled": True}}},
+    )
+    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
+
+    real_snapshot = rule_audit_module._snapshot
+
+    def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
+        if family.rule_type == "static_route":
+            raise RuntimeError("simulated static route error")
+        return real_snapshot(family, record)
+
+    monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
+
+    with caplog.at_level(logging.ERROR):
+        res1 = tracker.process(data2, _ALL_OK)
+    assert res1 == {}
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(error_records) == 1
+
+    monkeypatch.undo()
+
+    res2 = tracker.process(data2, _ALL_OK)
+    assert "s1" in res2
+    assert len(res2["s1"]) == 1
+    assert res2["s1"][0]["change_type"] == "modified"
+    assert res2["s1"][0]["rule_id"] == "fw1"
+
+
+def test_error_in_one_site_does_not_block_other_sites(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error comparing one site does not stop comparisons of other sites."""
+    tracker = RuleAuditTracker()
+    data1 = {
+        "sites": {"s1": {"id": "s1"}, "s2": {"id": "s2"}},
+        "firewall_rules": {
+            "s1": {"r1": {"name": "R1", "enabled": True}},
+            "s2": {"r2": {"name": "R2", "enabled": True}},
+        },
+    }
+    outcomes = {
+        ("firewall_rules", "s1"): "ok",
+        ("firewall_rules", "s2"): "ok",
+    }
+    for family in RULE_FAMILIES:
+        if family.data_key != "firewall_rules":
+            data1[family.data_key] = {"s1": {}, "s2": {}}
+            outcomes[(family.data_key, "s1")] = "ok"
+            outcomes[(family.data_key, "s2")] = "ok"
+
+    tracker.process(data1, outcomes)
+
+    data2 = dict(data1)
+    data2["firewall_rules"] = {
+        "s1": {"r1": {"name": "R1", "enabled": False}},
+        "s2": {"r2": {"name": "R2", "enabled": False}},
+    }
+
+    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
+
+    real_snapshot = rule_audit_module._snapshot
+
+    def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
+        if record.get("name") == "R1":
+            raise RuntimeError("simulated site s1 error")
+        return real_snapshot(family, record)
+
+    monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
+
+    res = tracker.process(data2, outcomes)
+    assert "s1" not in res or res["s1"] == []
+    assert "s2" in res
+    assert len(res["s2"]) == 1
+    assert res["s2"][0]["rule_id"] == "r2"
+
+
+def test_persistent_error_is_logged_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A site that fails repeatedly logs its error only once until it recovers."""
+    tracker = RuleAuditTracker()
+    data = _data(firewall_rules={"s1": {"r1": {"name": "R1", "enabled": True}}})
+    tracker.process(data, _ALL_OK)
+
+    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
+
+    def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
+
+    with caplog.at_level(logging.ERROR):
+        tracker.process(data, _ALL_OK)
+        tracker.process(data, _ALL_OK)
+        tracker.process(data, _ALL_OK)
+
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(error_records) == 1
+
+    monkeypatch.undo()
+    tracker.process(data, _ALL_OK)
+
+    monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
+    with caplog.at_level(logging.ERROR):
+        tracker.process(data, _ALL_OK)
+
+    error_records_after = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(error_records_after) == 2

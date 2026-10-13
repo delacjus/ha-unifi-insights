@@ -182,13 +182,16 @@ class RuleAuditTracker:
     A section is compared only when this refresh fetched it successfully
     (outcome ``ok``). The first successful fetch of a section is its baseline
     and reports nothing. An unsupported or failed fetch keeps the baseline, so
-    an outage never looks like "every rule was deleted".
+    an outage never looks like "every rule was deleted". A section that turns
+    empty is reported only when the next successful fetch is empty too.
     """
 
     def __init__(self) -> None:
         """Initialize an empty tracker."""
         self._baselines: dict[tuple[str, str], dict[str, _RuleSnapshot]] = {}
         self._changes: dict[str, list[dict[str, Any]]] = {}
+        self._pending_empty: set[tuple[str, str]] = set()
+        self._failing_sites: set[str] = set()
         self._sequence = 0
 
     def process(
@@ -201,25 +204,40 @@ class RuleAuditTracker:
         site_ids: set[str] = set(sites) if isinstance(sites, dict) else set()
 
         for key in [key for key in self._baselines if key[1] not in site_ids]:
+            _LOGGER.debug(
+                "Rule audit: site %s is gone; its %s baseline was dropped",
+                key[1],
+                key[0],
+            )
             del self._baselines[key]
+        self._pending_empty = {key for key in self._pending_empty if key[1] in site_ids}
+        self._failing_sites &= site_ids
         for site_id in [
             site_id for site_id in self._changes if site_id not in site_ids
         ]:
             del self._changes[site_id]
 
         for site_id in sorted(site_ids):
-            new_changes: list[dict[str, Any]] = []
-            for family in RULE_FAMILIES:
-                if outcomes.get((family.data_key, site_id)) != SECTION_OUTCOME_OK:
-                    continue
-                current = self._current(family, data, site_id)
-                if current is None:
-                    continue
-                key = (family.data_key, site_id)
-                previous = self._baselines.get(key)
-                self._baselines[key] = current
-                if previous is not None:
-                    new_changes.extend(_diff(family, site_id, previous, current))
+            try:
+                baselines, pending, settled, new_changes = self._diff_site(
+                    data, outcomes, site_id
+                )
+            except Exception:
+                # One site's comparison must never stop the others. Nothing was
+                # committed for this site, so its changes are reported by the
+                # next comparison that succeeds.
+                if site_id not in self._failing_sites:
+                    self._failing_sites.add(site_id)
+                    _LOGGER.exception(
+                        "Rule audit: comparing the rules of site %s failed; its "
+                        "changes are reported once the comparison works again",
+                        site_id,
+                    )
+                continue
+            self._failing_sites.discard(site_id)
+            self._baselines.update(baselines)
+            self._pending_empty -= settled
+            self._pending_empty |= pending
             if not new_changes:
                 continue
             for change in new_changes:
@@ -237,6 +255,48 @@ class RuleAuditTracker:
             self._changes[site_id] = buffered[-RULE_CHANGE_BUFFER_SIZE:]
 
         return {site_id: list(changes) for site_id, changes in self._changes.items()}
+
+    def _diff_site(
+        self,
+        data: Mapping[str, Any],
+        outcomes: Mapping[tuple[str, str], str],
+        site_id: str,
+    ) -> tuple[
+        dict[tuple[str, str], dict[str, _RuleSnapshot]],
+        set[tuple[str, str]],
+        set[tuple[str, str]],
+        list[dict[str, Any]],
+    ]:
+        """
+        Compare every rule family of one site without changing the tracker.
+
+        Returns the new baselines, the sections seen empty for the first time,
+        the sections whose state is settled, and the changes found.
+        """
+        baselines: dict[tuple[str, str], dict[str, _RuleSnapshot]] = {}
+        pending: set[tuple[str, str]] = set()
+        settled: set[tuple[str, str]] = set()
+        changes: list[dict[str, Any]] = []
+        for family in RULE_FAMILIES:
+            if outcomes.get((family.data_key, site_id)) != SECTION_OUTCOME_OK:
+                continue
+            current = self._current(family, data, site_id)
+            if current is None:
+                continue
+            key = (family.data_key, site_id)
+            previous = self._baselines.get(key)
+            if previous and not current and key not in self._pending_empty:
+                # "Every rule is gone" is believed only when the next successful
+                # fetch says so too: a console that answers with an empty body
+                # looks exactly like one whose rules were all deleted. The
+                # baseline is kept, so nothing is lost if the rules come back.
+                pending.add(key)
+                continue
+            settled.add(key)
+            baselines[key] = current
+            if previous is not None:
+                changes.extend(_diff(family, site_id, previous, current))
+        return baselines, pending, settled, changes
 
     @staticmethod
     def _current(

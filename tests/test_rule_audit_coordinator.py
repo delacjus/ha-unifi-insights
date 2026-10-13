@@ -15,6 +15,10 @@ from custom_components.unifi_insights.api import (
 from custom_components.unifi_insights.coordinators.config import (
     UnifiConfigCoordinator,
 )
+from custom_components.unifi_insights.api.network.endpoints.port_forwards import (
+    PortForwardsEndpoint,
+)
+
 from tests.test_coordinators import (
     _create_mock_model,
     _create_mock_network_client,
@@ -225,3 +229,23 @@ async def test_fetch_optional_section_records_outcomes(
         "section_d", "s1", fetch_ok
     )
     assert res_no_outcomes == ["item1"]
+
+
+async def test_empty_2xx_body_reports_no_deletions(
+    coordinator: UnifiConfigCoordinator,
+) -> None:
+    """An empty 2xx response body returns [] and is not reported as all rules deleted."""
+    stub_client = MagicMock()
+    stub_client.build_legacy_api_path = MagicMock(return_value="/dummy/path")
+    envelope = {"data": [{"_id": "pf1", "name": "PF 1", "enabled": True}]}
+    stub_client._get = AsyncMock(side_effect=[envelope, None, envelope])
+    coordinator.network_client.port_forwards = PortForwardsEndpoint(stub_client)
+
+    await coordinator._async_update_data()
+    assert coordinator.data["rule_changes"] == {}
+
+    await coordinator._async_update_data()
+    assert coordinator.data["rule_changes"] == {}
+
+    await coordinator._async_update_data()
+    assert coordinator.data["rule_changes"] == {}
