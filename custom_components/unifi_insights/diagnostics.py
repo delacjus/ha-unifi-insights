@@ -163,6 +163,36 @@ NAT_RULE_TO_REDACT = TO_REDACT | {"address"}
 # Static routes: the destination network and the next hop map the routed LAN.
 # ("gateway_device" is a MAC and is anonymised below.)
 STATIC_ROUTE_TO_REDACT = TO_REDACT | {"static-route_network", "static-route_nexthop"}
+# Firewall policies (official API): the source and destination filters hold the
+# matched addresses, domains and MACs in nested objects with generic keys
+# ("items", "value", "start", "stop"), so the filter objects go as a whole.
+FIREWALL_RULE_TO_REDACT = TO_REDACT | {
+    "ipAddressFilter",
+    "domainFilter",
+    "macAddressFilter",
+    "ipv6IidFilter",
+}
+# Policy-based routes: the routed domains, ranges and next hop ("ipAddresses"
+# is already in TO_REDACT; client MACs are anonymised below).
+POLICY_BASED_ROUTE_TO_REDACT = TO_REDACT | {
+    "domains",
+    "ipRanges",
+    "ip_ranges",
+    "ips",
+    "nextHop",
+    "next_hop",
+}
+
+# Redaction key set of each rule section, shared by diagnostics and the
+# redacted rule export so the two can never disagree.
+RULE_SECTION_TO_REDACT: dict[str, set[str]] = {
+    "firewall_rules": FIREWALL_RULE_TO_REDACT,
+    "policy_based_routes": POLICY_BASED_ROUTE_TO_REDACT,
+    "port_forwards": PORT_FORWARD_TO_REDACT,
+    "traffic_rules": TRAFFIC_RULE_TO_REDACT,
+    "nat_rules": NAT_RULE_TO_REDACT,
+    "static_routes": STATIC_ROUTE_TO_REDACT,
+}
 
 # Keys whose value is a MAC address even when it arrives unpunctuated. Values
 # are replaced with a per-report placeholder rather than dropped; see
@@ -292,10 +322,7 @@ def _redact_coordinator_data(data: Any) -> Any:
         ("wifi", WIFI_TO_REDACT),
         ("vouchers", VOUCHER_TO_REDACT),
         ("latest_vouchers", VOUCHER_TO_REDACT),
-        ("port_forwards", PORT_FORWARD_TO_REDACT),
-        ("traffic_rules", TRAFFIC_RULE_TO_REDACT),
-        ("nat_rules", NAT_RULE_TO_REDACT),
-        ("static_routes", STATIC_ROUTE_TO_REDACT),
+        *RULE_SECTION_TO_REDACT.items(),
     ):
         records = data.get(section)
         if isinstance(records, Mapping):

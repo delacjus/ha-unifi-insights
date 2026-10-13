@@ -839,6 +839,68 @@ async def test_diagnostics_redacts_static_route_targets(
     assert "interface-route" in dumped
 
 
+async def test_diagnostics_redacts_firewall_policy_filters(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations: None,
+) -> None:
+    """Test diagnostics redacts the nested address, domain and MAC filters."""
+    coordinator = init_integration.runtime_data.coordinator
+    coordinator.data["firewall_rules"] = {
+        "site-1": {
+            "f1": {
+                "id": "f1",
+                "name": "Block cameras",
+                "enabled": True,
+                "source": {
+                    "ipAddressFilter": {"items": [{"value": "10.3.3.3"}]},
+                    "macAddressFilter": {"macAddresses": ["aa:bb:cc:dd:ee:01"]},
+                },
+                "destination": {
+                    "domainFilter": {"domains": ["blocked.example"]},
+                    "portFilter": {"items": [{"value": 443}]},
+                },
+            }
+        }
+    }
+
+    result = await async_get_config_entry_diagnostics(hass, init_integration)
+    dumped = json.dumps(result, default=str)
+    assert "10.3.3.3" not in dumped
+    assert "aa:bb:cc:dd:ee:01" not in dumped
+    assert "blocked.example" not in dumped
+    assert "Block cameras" in dumped
+    assert "443" in dumped
+
+
+async def test_diagnostics_redacts_policy_based_route_targets(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations: None,
+) -> None:
+    """Test diagnostics redacts policy-based route domains, ranges and next hop."""
+    coordinator = init_integration.runtime_data.coordinator
+    coordinator.data["policy_based_routes"] = {
+        "site-1": {
+            "p1": {
+                "_id": "p1",
+                "description": "VPN",
+                "enabled": True,
+                "domains": [{"domain": "routed.example"}],
+                "ipRanges": [{"ip_start": "10.5.5.1"}],
+                "nextHop": "10.4.4.4",
+            }
+        }
+    }
+
+    result = await async_get_config_entry_diagnostics(hass, init_integration)
+    dumped = json.dumps(result, default=str)
+    assert "routed.example" not in dumped
+    assert "10.5.5.1" not in dumped
+    assert "10.4.4.4" not in dumped
+    assert "VPN" in dumped
+
+
 async def test_diagnostics_anonymizes_dotted_client_mac(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,
