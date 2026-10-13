@@ -1294,14 +1294,16 @@ async def test_strict_list_returns_valid_records(rule_type: str, wrap: bool) -> 
 async def test_strict_list_meta_error_raises_without_the_message(
     rule_type: str,
 ) -> None:
-    """An error envelope raises a response error that quotes nothing of it."""
+    """An error envelope raises a validation error that quotes nothing of it."""
     body = {"meta": {"rc": "error", "msg": "secret 192.0.2.77"}, "data": []}
 
-    with pytest.raises(UniFiResponseError) as err:
+    with pytest.raises(UniFiValidationError) as err:
         await _LISTERS[rule_type](_client(_Session([body])), strict=True)
 
+    # Not a response error: with status 200 that would be read as "unsupported".
+    assert not isinstance(err.value, UniFiResponseError)
     assert "192.0.2.77" not in f"{err.value!s} {err.value!r} {err.value.args!r}"
-    assert err.value.response_body is None
+    assert getattr(err.value, "response_body", None) is None
     assert err.value.__cause__ is None
     assert err.value.__context__ is None
 

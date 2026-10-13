@@ -604,17 +604,21 @@ async def test_export_valid_answers_are_exported_whole() -> None:
         assert types[rule_type]["rules"][0]["x_marker"].startswith("secret-")
 
 
-async def test_export_error_envelope_is_not_ok(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    "rule_type",
+    ["policy_based_route", "port_forward", "traffic_rule", "nat_rule", "static_route"],
+)
+async def test_export_error_envelope_is_failed(
+    caplog: pytest.LogCaptureFixture, rule_type: str
 ) -> None:
-    """A 2xx error envelope is no rules; the real classifier calls it unsupported."""
+    """A 2xx error envelope is a failed read, never "ok" and never "unsupported"."""
     caplog.set_level(logging.DEBUG)
     body = {"meta": {"rc": "error", "msg": f"secret {_SENTINEL}"}, "data": []}
 
-    document = await _export_real({"port_forward": body})
+    document = await _export_real({rule_type: body})
 
     types = document["sites"]["site1"]["rule_types"]
-    assert types["port_forward"] == {"status": "unsupported", "count": 0, "rules": []}
+    assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
     assert _SENTINEL not in caplog.text
 
 

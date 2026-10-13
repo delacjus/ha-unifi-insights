@@ -76,8 +76,10 @@ class PortForwardsEndpoint:
         if isinstance(response, dict):
             meta = response.get("meta")
             if isinstance(meta, dict) and meta.get("rc") == "error":
-                msg = "UniFi Network API error"
-                raise UniFiResponseError(msg, status_code=200)
+                # An export must report this as a failed read. As a response
+                # error with status 200 it would be classified "unsupported".
+                msg = "UniFi Network API reported an error"
+                raise UniFiValidationError(msg)
             response = response.get("data")
         if not isinstance(response, list) or not all(
             isinstance(item, dict) for item in response
