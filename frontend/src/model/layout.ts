@@ -1,5 +1,5 @@
 import { hierarchy, tree } from "d3-hierarchy";
-import type { Density, Orientation } from "../config";
+import type { Density, LayoutMode, Orientation } from "../config";
 import type { NodeKind } from "../contract";
 import type { GraphModel, Visual } from "./graph-model";
 
@@ -67,8 +67,20 @@ function layoutOf(positions: Map<string, Point>): Layout {
     return { positions, bounds };
 }
 
-/** Tidy-tree layout of the model; a synthetic super-root turns the forest into one tree. */
+/** Both modes use the same positions-and-bounds contract. */
 export function layoutModel(
+    model: GraphModel,
+    density: Density,
+    orientation: Orientation,
+    mode: LayoutMode = "tree",
+): Layout {
+    return mode === "tiered"
+        ? layoutTiered(model, density, orientation)
+        : layoutTree(model, density, orientation);
+}
+
+/** Tidy-tree layout of the model; a synthetic super-root turns the forest into one tree. */
+function layoutTree(
     model: GraphModel,
     density: Density,
     orientation: Orientation,
@@ -99,18 +111,13 @@ const TIER: Record<NodeKind, number> = {
 };
 const TIER_COUNT = TIER.client + 1;
 const tierOf = (visual: Visual): number =>
-    visual.type === "group" ? TIER.client : TIER[visual.node.kind];
+    visual.type === "group"
+        ? TIER.client
+        : (TIER[visual.node.kind] ?? TIER.other);
 
 /**
- * Tiered layout: rows follow the device role (gateway, switches, access
- * points, other infrastructure, client groups and clients).
- *
- * A child goes in the row of its own tier when that is below its parent's
- * row. Otherwise (same tier as the parent, or a tier above it, e.g. a switch
- * behind an access point) it goes on a sub-row directly below the parent's
- * row, inside the parent's tier. So every edge runs to a lower row. Tiers
- * without nodes take no space. Inside a row, nodes sit in the order of their
- * parents' positions along the row, which keeps the edges from crossing.
+ * Role tiers with parent-relative sub-rows, stacked without empty tiers.
+ * Forest pre-order keeps siblings adjacent within each occupied row.
  */
 export function layoutTiered(
     model: GraphModel,
@@ -120,21 +127,25 @@ export function layoutTiered(
     if (model.roots.length === 0) return emptyLayout();
     const { breadth, depth } = SPACING[density];
 
-    // Breadth-first, so a parent has its slot before any of its children.
+    // Pre-order: each parent gets its slot before its children.
     const slots = new Map<string, { tier: number; sub: number }>();
-    const queue = [...model.roots];
+    const pending = [...model.roots].reverse();
+    const preorder: string[] = [];
     const subRows = new Array<number>(TIER_COUNT).fill(0);
-    for (const id of queue) {
+    while (pending.length > 0) {
+        const id = pending.pop()!;
+        preorder.push(id);
         const tier = tierOf(model.visuals.get(id)!);
         const parent = model.parentOf.get(id);
         const above = parent === undefined ? undefined : slots.get(parent)!;
-        const slot =
-            above === undefined || tier > above.tier
-                ? { tier, sub: 0 }
-                : { tier: above.tier, sub: above.sub + 1 };
+        const effectiveTier = Math.max(tier, above?.tier ?? tier);
+        const slot = {
+            tier: effectiveTier,
+            sub: above?.tier === effectiveTier ? above.sub + 1 : 0,
+        };
         slots.set(id, slot);
         subRows[slot.tier] = Math.max(subRows[slot.tier]!, slot.sub + 1);
-        queue.push(...(model.children.get(id) ?? []));
+        pending.push(...[...(model.children.get(id) ?? [])].reverse());
     }
 
     const firstRow: number[] = [];
@@ -144,27 +155,16 @@ export function layoutTiered(
         rowCount += count;
     }
     const rows: string[][] = Array.from({ length: rowCount }, () => []);
-    for (const id of queue) {
+    for (const id of preorder) {
         const { tier, sub } = slots.get(id)!;
         rows[firstRow[tier]! + sub]!.push(id);
     }
 
-    // Top to bottom: every parent is in an earlier row, so its place is known.
-    const along = new Map<string, number>();
     const positions = new Map<string, Point>();
     rows.forEach((ids, row) => {
-        const keyed = ids.map((id) => {
-            const parent = model.parentOf.get(id);
-            return {
-                id,
-                key: parent === undefined ? Infinity : along.get(parent)!,
-            };
-        });
-        // Array.prototype.sort is stable: siblings keep their model order.
-        keyed.sort((a, b) => (a.key === b.key ? 0 : a.key < b.key ? -1 : 1));
-        keyed.forEach(({ id }, i) => {
-            const offset = (i - (keyed.length - 1) / 2) * breadth;
-            along.set(id, offset);
+        ids.forEach((id, i) => {
+            // All rows share centre zero, including the widest row.
+            const offset = (i - (ids.length - 1) / 2) * breadth;
             positions.set(id, toPoint(offset, row * depth, orientation));
         });
     });

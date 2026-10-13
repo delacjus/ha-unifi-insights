@@ -7,7 +7,7 @@ import {
 } from "../src/contract";
 import { makeLocalize } from "../src/localize";
 import { buildModel } from "../src/model/graph-model";
-import { CULL_THRESHOLD, layoutModel, layoutTiered } from "../src/model/layout";
+import { CULL_THRESHOLD, layoutModel } from "../src/model/layout";
 import type { UitGraphView } from "../src/views/graph-view";
 import "../src/views/graph-view";
 import { cleanup, fixtureSnapshot, mount } from "./helpers";
@@ -107,7 +107,7 @@ describe("large site in the tiered layout", () => {
     it("builds and lays out within budget", () => {
         const model = buildModel(bigSnapshot(), ui);
         const start = performance.now();
-        const layout = layoutTiered(model, "comfortable", "vertical");
+        const layout = layoutModel(model, "comfortable", "vertical", "tiered");
         const ms = performance.now() - start;
         console.info(
             `[benchmark] tiered layout for ${layout.positions.size} nodes: ${ms.toFixed(1)} ms`,
