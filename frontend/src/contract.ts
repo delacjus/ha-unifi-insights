@@ -156,8 +156,6 @@ export const ISSUE_CLIENTS_TRUNCATED = "clients_truncated";
 export const ERR_ENTRY_NOT_FOUND = "entry_not_found";
 export const ERR_ENTRY_NOT_LOADED = "entry_not_loaded";
 export const ERR_SITE_NOT_SELECTED = "site_not_selected";
-/** The node id matches no device or client of the site, or more than one. */
-/** Home Assistant's own error for a command that needs an administrator. */
 
 /** The backend speaks a schema this card was not built for. */
 export class IncompatibleSchemaError extends Error {
