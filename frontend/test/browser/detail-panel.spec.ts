@@ -439,6 +439,37 @@ test.describe("topology node action menu", () => {
         await expect(modal).toHaveCount(0);
     });
 
+    for (const key of ["Enter", "Space"]) {
+        test(`native ${key} activates a menu item`, async ({
+            page,
+            context,
+        }) => {
+            await context.grantPermissions([
+                "clipboard-read",
+                "clipboard-write",
+            ]);
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openFixture(page, { width: 360, height: 320, admin: true });
+            await trigger(page).click();
+            await expect(menuItem(page, "Copy IP address")).toBeFocused();
+            await page.keyboard.down(key);
+            if (key === "Space") {
+                // Native Space activates on release, not on the press.
+                await expect(page.getByRole("menu")).toBeVisible();
+                await expect(liveRegion(page)).toHaveText("");
+            }
+            await page.keyboard.up(key);
+            await expect(page.getByRole("menu")).toHaveCount(0);
+            await expect(liveRegion(page)).toHaveText(
+                "IP address copied to the clipboard.",
+            );
+            expect(
+                await page.evaluate(() => navigator.clipboard.readText()),
+            ).toBe("192.0.2.10");
+            await expect(trigger(page)).toBeFocused();
+        });
+    }
+
     test("copies through the textarea fallback while the modal dialog is open", async ({
         page,
         context,
@@ -599,10 +630,70 @@ test.describe("topology node action menu", () => {
 
         await trigger(page).click();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
-        // A row label: the open menu covers the values beside it.
-        await page.locator(`${panel} dt`).first().click();
+        // A row label below the dropdown takes no focus; dismissal must not
+        // focus the trigger.
+        await page.locator(`${panel} dt`).last().click();
         await expect(page.getByRole("menu")).toHaveCount(0);
         await expect(trigger(page)).not.toBeFocused();
+    });
+
+    test.describe("pressed controls with the menu open", () => {
+        test.use({ hasTouch: true });
+        for (const input of ["mouse", "touch"] as const) {
+            for (const scenario of [
+                "modal Close",
+                "modal Open device",
+                "sheet Close",
+            ] as const) {
+                test(`${input} press acts on ${scenario}`, async ({ page }) => {
+                    await page.setViewportSize({ width: 390, height: 844 });
+                    const sheet = scenario === "sheet Close";
+                    await openFixture(page, {
+                        width: 360,
+                        height: sheet ? 760 : 320,
+                        admin: true,
+                    });
+                    await expect(page.locator(dialog)).toHaveCount(
+                        sheet ? 0 : 1,
+                    );
+                    const control = page.getByRole("button", {
+                        name:
+                            scenario === "modal Open device"
+                                ? "Open device"
+                                : "Close",
+                        exact: true,
+                    });
+                    const closed = await geometry(control);
+                    await trigger(page).click();
+                    await expect(page.getByRole("menu")).toBeVisible();
+                    const before = await geometry(control);
+                    expect(before.top).toBe(closed.top);
+                    expect(before.left).toBe(closed.left);
+                    const x = (before.left + before.right) / 2;
+                    const y = (before.top + before.bottom) / 2;
+                    if (input === "mouse") {
+                        await page.mouse.move(x, y);
+                        await page.mouse.down();
+                        await expect(page.getByRole("menu")).toHaveCount(0);
+                        const after = await geometry(control);
+                        await expect(control).toBeFocused();
+                        await page.mouse.up();
+                        // The release must hit the control that received the press.
+                        expect(after.top).toBe(before.top);
+                        expect(after.left).toBe(before.left);
+                    } else {
+                        await page.touchscreen.tap(x, y);
+                    }
+                    if (scenario === "modal Open device") {
+                        await expect(page).toHaveURL(
+                            /\/config\/devices\/device\/reg-core/,
+                        );
+                    }
+                    await expect(page.locator(panel)).toHaveCount(0);
+                    await expect(page.locator(dialog)).toHaveCount(0);
+                });
+            }
+        }
     });
 
     test("Tab closes the menu and moves to the next control", async ({

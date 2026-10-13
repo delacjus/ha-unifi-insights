@@ -54,7 +54,7 @@ describe("<uit-node-menu> button", () => {
         expect(list(el)).toBeNull();
     });
 
-    it("renders nothing when there is no action and nothing is loading", async () => {
+    it("renders nothing when there is no action", async () => {
         const el = await menu({ actions: [] });
         expect(el.shadowRoot!.querySelector("button")).toBeNull();
     });
@@ -374,7 +374,7 @@ describe("plan v3 menu focus", () => {
 });
 
 it.each(["Enter", " "])(
-    "activates the focused menu item with %s and contains events",
+    "leaves native %s activation unprevented and contains events",
     async (key) => {
         const el = await menu();
         const action = vi.fn();
@@ -390,9 +390,9 @@ it.each(["Enter", " "])(
         );
         const event = press(items(el)[0]!, key);
         await el.updateComplete;
-        expect(event.defaultPrevented).toBe(true);
-        expect(action).toHaveBeenCalledOnce();
+        expect(event.defaultPrevented).toBe(false);
+        expect(action).not.toHaveBeenCalled();
         expect(bubbled).not.toHaveBeenCalled();
-        expect(focused(el)).toBe(trigger(el));
+        expect(focused(el)).toBe(items(el)[0]);
     },
 );

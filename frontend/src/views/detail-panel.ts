@@ -210,7 +210,12 @@ export class UitDetailPanel extends LitElement {
                 fireEvent(this, "uit-close");
             }}
             @cancel=${(e: Event) => {
-                if (this.menuOpen) e.preventDefault();
+                if (this.menuOpen) {
+                    e.preventDefault();
+                    this.renderRoot
+                        .querySelector<UitNodeMenu>("uit-node-menu")
+                        ?.hide();
+                }
             }}
       @keydown=${(e: KeyboardEvent) => {
         // Close only this dialog. The card's own Escape handling would
@@ -218,11 +223,7 @@ export class UitDetailPanel extends LitElement {
         if (e.key !== "Escape") return;
         e.preventDefault();
         e.stopPropagation();
-                if (this.menuOpen) {
-                    this.renderRoot
-                        .querySelector<UitNodeMenu>("uit-node-menu")
-                        ?.hide();
-                } else this.close();
+                this.close();
       }}
             @pointerdown=${{
                 capture: true,
@@ -302,11 +303,10 @@ export class UitDetailPanel extends LitElement {
      */
     private statusRegion(localize: LocalizeFunc): TemplateResult {
         // A value to copy by hand is an address: only an administrator sees one.
-        const copied =
+        const status =
             this.copyStatus?.value === undefined || isAdmin(this.hass)
                 ? this.copyStatus
                 : undefined;
-        const status = copied;
         return html`<div
             class="status ${status ? "has-message" : ""}"
             role="status"
