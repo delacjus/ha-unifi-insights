@@ -82,7 +82,7 @@ conditions:
     value_template: "{{ prefixes | length > 0 }}"
 
 actions:
-  # The registry entry precedes the tracker state; the plan fixes this delay.
+  # The registry entry precedes the tracker state; this wait is fixed at 10 seconds.
   - delay: "00:00:10"
   - condition: template
     value_template: "{{ state_attr(tracker, 'source_type') == 'router' }}"

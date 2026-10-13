@@ -109,7 +109,13 @@ conditions:
                      + offline_delay.get('hours', 0) * 3600
                      + offline_delay.get('minutes', 0) * 60
                      + offline_delay.get('seconds', 0)
-                     + offline_delay.get('milliseconds', 0) / 1000)) }}
+                     + offline_delay.get('milliseconds', 0) / 1000
+                     if offline_delay is mapping else
+                     ((offline_delay.split(':')[0] | float) * 3600
+                      + (offline_delay.split(':')[1] | float) * 60
+                      + (offline_delay.split(':')[2] | float)
+                      if offline_delay is string and ':' in offline_delay else
+                      offline_delay | float))) }}
 
 actions:
   - choose:
