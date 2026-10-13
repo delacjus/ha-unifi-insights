@@ -72,11 +72,11 @@ describe("copyText", () => {
         expect(textareas()).toHaveLength(0);
     });
 
-    it("falls back outside a secure context without touching the async clipboard", async () => {
+    it("uses writeText whenever the API exists", async () => {
         const writeText = vi.fn(async () => undefined);
         stub({ secure: false, writeText, exec: () => true });
         expect(await copyText("x")).toBe(true);
-        expect(writeText).not.toHaveBeenCalled();
+        expect(writeText).toHaveBeenCalledExactlyOnceWith("x");
     });
 
     it("falls back when the async clipboard rejects", async () => {

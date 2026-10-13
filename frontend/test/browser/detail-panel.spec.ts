@@ -366,8 +366,7 @@ test.describe("topology detail panel overflow", () => {
   });
 });
 
-const trigger = (page: Page) =>
-    page.getByRole("button", { name: "Node actions" });
+const trigger = (page: Page) => page.getByRole("button", { name: "Actions" });
 const menuItem = (page: Page, name: string) =>
     page.getByRole("menuitem", { name });
 const liveRegion = (page: Page) => page.locator(`${panelHost} [role="status"]`);
@@ -386,7 +385,7 @@ test.describe("topology node action menu", () => {
         // Open with the keyboard: the first item takes focus.
         await trigger(page).focus();
         await page.keyboard.press("ArrowDown");
-        const menu = page.getByRole("menu", { name: "Node actions" });
+        const menu = page.getByRole("menu", { name: "Actions" });
         await expect(menu).toBeVisible();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
         await expect(trigger(page)).toHaveAttribute("aria-expanded", "true");
@@ -427,7 +426,9 @@ test.describe("topology node action menu", () => {
         await page.keyboard.press("Enter");
         await expect(menu).toHaveCount(0);
         await expect(trigger(page)).toBeFocused();
-        await expect(liveRegion(page)).toHaveText("Copied to the clipboard.");
+        await expect(liveRegion(page)).toHaveText(
+            "IP address copied to the clipboard.",
+        );
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
             "192.0.2.10",
         );
@@ -460,7 +461,9 @@ test.describe("topology node action menu", () => {
         await page.keyboard.press("ArrowDown");
         await expect(menuItem(page, "Copy MAC address")).toBeFocused();
         await page.keyboard.press("Enter");
-        await expect(liveRegion(page)).toHaveText("Copied to the clipboard.");
+        await expect(liveRegion(page)).toHaveText(
+            "MAC address copied to the clipboard.",
+        );
         await expect(trigger(page)).toBeFocused();
 
         await page.evaluate(() => {
@@ -496,9 +499,16 @@ test.describe("topology node action menu", () => {
         await page.keyboard.press("ArrowDown");
         await page.keyboard.press("Enter");
         await expect(liveRegion(page)).toContainText("Couldn't copy.");
-        await expect(liveRegion(page).locator(".manual")).toHaveText(
-            "192.0.2.10",
-        );
+        const manual = liveRegion(page).locator(".manual");
+        await expect(manual).toHaveText("192.0.2.10");
+        expect(
+            await manual.evaluate(
+                (element) => getComputedStyle(element).userSelect,
+            ),
+        ).toBe("text");
+        expect(
+            await page.evaluate(() => window.getSelection()?.toString()),
+        ).toBe("192.0.2.10");
     });
 
     test("Open entity closes the dialog and asks Home Assistant for the entity", async ({
@@ -539,9 +549,7 @@ test.describe("topology node action menu", () => {
         await page.locator(node).focus();
         await page.keyboard.press("Shift+F10");
         await expect(page.locator(dialog)).toBeVisible();
-        await expect(
-            page.getByRole("menu", { name: "Node actions" }),
-        ).toBeVisible();
+        await expect(page.getByRole("menu", { name: "Actions" })).toBeVisible();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
 
         // Escape twice: the menu, then the dialog; focus lands on the node.
@@ -562,15 +570,14 @@ test.describe("topology node action menu", () => {
         await expect(page.locator(dialog)).toHaveCount(0);
         await expect(page.locator(panel)).toBeVisible();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
-        // A press on non-focusable content elsewhere dismisses the menu and
-        // focus goes back to the button instead of being dropped.
+        // A press elsewhere dismisses the menu without restoring trigger focus.
         await page.locator(`${card} .title`).click();
         await expect(page.getByRole("menu")).toHaveCount(0);
         await expect(page.locator(panel)).toBeVisible();
-        await expect(trigger(page)).toBeFocused();
+        await expect(trigger(page)).not.toBeFocused();
     });
 
-    test("dismissing the menu by a press on non-focusable dialog content returns focus to the button", async ({
+    test("dismissing the menu on dialog content leaves browser focus unchanged", async ({
         page,
     }) => {
         await page.setViewportSize({ width: 390, height: 844 });
@@ -584,17 +591,17 @@ test.describe("topology node action menu", () => {
         await page.locator(`${panelHost} h3`).click();
         await expect(page.getByRole("menu")).toHaveCount(0);
         await expect(page.locator(dialog)).toBeVisible();
-        await expect(trigger(page)).toBeFocused();
+        await expect(trigger(page)).not.toBeFocused();
 
         await trigger(page).click();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
         // A row label: the open menu covers the values beside it.
         await page.locator(`${panel} dt`).first().click();
         await expect(page.getByRole("menu")).toHaveCount(0);
-        await expect(trigger(page)).toBeFocused();
+        await expect(trigger(page)).not.toBeFocused();
     });
 
-    test("Tab closes the menu with focus on the button, then moves on", async ({
+    test("Tab closes the menu and moves to the next control", async ({
         page,
     }) => {
         await page.setViewportSize({ width: 390, height: 844 });
@@ -605,21 +612,41 @@ test.describe("topology node action menu", () => {
         await page.keyboard.press("Tab");
         await expect(page.getByRole("menu")).toHaveCount(0);
         await expect(page.locator(dialog)).toBeVisible();
-        // Focus passed through the button on its way to the next control.
+        // The next control after the body menu is the existing device link.
         await expect(
-            page.getByRole("button", { name: "Close", exact: true }),
+            page.getByRole("button", { name: "Open device", exact: true }),
         ).toBeFocused();
     });
 
-    test("a non-administrator never asks for the details and gets only Open device", async ({
+    test("Tab from the last item and Shift+Tab preserve native focus order", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("End");
+        await page.keyboard.press("Tab");
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(
+            page.getByRole("button", { name: "Open device", exact: true }),
+        ).toBeFocused();
+        await trigger(page).click();
+        await page.keyboard.press("Shift+Tab");
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(trigger(page)).toBeFocused();
+    });
+
+    test("a non-administrator never requests details or sees Actions", async ({
         page,
     }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await openFixture(page, { width: 360, height: 320 });
-        await trigger(page).focus();
-        await page.keyboard.press("ArrowDown");
-        await expect(page.getByRole("menuitem")).toHaveCount(1);
-        await expect(menuItem(page, "Open device")).toBeFocused();
+        await expect(trigger(page)).toHaveCount(0);
+        await expect(page.getByRole("menuitem")).toHaveCount(0);
+        await expect(
+            page.getByRole("button", { name: "Open device", exact: true }),
+        ).toBeVisible();
         expect(await page.evaluate(() => window.fixtureDetailsCalls)).toEqual(
             [],
         );

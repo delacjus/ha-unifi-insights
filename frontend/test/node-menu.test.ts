@@ -14,7 +14,6 @@ const menu = (props: Record<string, unknown> = {}) =>
     mount<UitNodeMenu>("uit-node-menu", {
         localize,
         actions: ALL,
-        loading: false,
         ...props,
     });
 const trigger = (el: UitNodeMenu) =>
@@ -24,8 +23,6 @@ const list = (el: UitNodeMenu) =>
 const items = (el: UitNodeMenu) => [
     ...el.shadowRoot!.querySelectorAll<HTMLElement>('[role="menuitem"]'),
 ];
-const itemOf = (el: UitNodeMenu, action: string) =>
-    el.shadowRoot!.querySelector<HTMLElement>(`[data-action="${action}"]`);
 const labels = (el: UitNodeMenu) => items(el).map((i) => i.textContent?.trim());
 const focused = (el: UitNodeMenu) => el.shadowRoot!.activeElement;
 const press = (target: Element, key: string, init: KeyboardEventInit = {}) => {
@@ -50,19 +47,16 @@ describe("<uit-node-menu> button", () => {
     it("is a labelled menu button while the menu is closed", async () => {
         const el = await menu();
         const button = trigger(el);
-        expect(button.getAttribute("aria-label")).toBe("Node actions");
+        expect(button.getAttribute("aria-label")).toBe("Actions");
         expect(button.getAttribute("aria-haspopup")).toBe("menu");
         expect(button.getAttribute("aria-expanded")).toBe("false");
-        expect(button.hasAttribute("aria-controls")).toBe(false);
+        expect(button.getAttribute("aria-controls")).toMatch(/^uit-node-menu-/);
         expect(list(el)).toBeNull();
     });
 
     it("renders nothing when there is no action and nothing is loading", async () => {
         const el = await menu({ actions: [] });
         expect(el.shadowRoot!.querySelector("button")).toBeNull();
-        el.loading = true;
-        await el.updateComplete;
-        expect(trigger(el)).not.toBeNull();
     });
 
     it("opens on click with the first item focused", async () => {
@@ -71,14 +65,14 @@ describe("<uit-node-menu> button", () => {
         const menuEl = list(el)!;
         expect(trigger(el).getAttribute("aria-expanded")).toBe("true");
         expect(trigger(el).getAttribute("aria-controls")).toBe(menuEl.id);
-        expect(menuEl.getAttribute("aria-label")).toBe("Node actions");
+        expect(menuEl.getAttribute("aria-label")).toBe("Actions");
         expect(labels(el)).toEqual([
             "Copy IP address",
             "Copy MAC address",
             "Open device",
             "Open entity",
         ]);
-        expect(items(el).every((i) => i.tabIndex === -1)).toBe(true);
+        expect(items(el).map((i) => i.tabIndex)).toEqual([0, -1, -1, -1]);
         expect(focused(el)).toBe(items(el)[0]);
     });
 
@@ -198,15 +192,16 @@ describe("<uit-node-menu> keyboard", () => {
         expect(event.defaultPrevented).toBe(false);
     });
 
-    it("closes on Tab, puts focus on the button first and does not trap the key", async () => {
+    it("closes on Tab without moving focus to the button or trapping the key", async () => {
         const el = await menu();
         await open(el);
         const event = press(focused(el)!, "Tab");
+        await new Promise((resolve) => setTimeout(resolve, 0));
         await el.updateComplete;
         expect(list(el)).toBeNull();
-        // The browser then moves on from the button; the key is not consumed.
+        // Native Tab moves to the next control; the trigger never receives focus.
         expect(event.defaultPrevented).toBe(false);
-        expect(focused(el)).toBe(trigger(el));
+        expect(focused(el)).not.toBe(trigger(el));
     });
 });
 
@@ -217,7 +212,7 @@ describe("<uit-node-menu> dismissal and activation", () => {
         );
     const later = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-    it("closes on a press outside, not on a press inside, and focuses the button", async () => {
+    it("closes on a press outside without focusing the button", async () => {
         const outside = document.createElement("div");
         document.body.append(outside);
         const el = await menu();
@@ -231,33 +226,7 @@ describe("<uit-node-menu> dismissal and activation", () => {
         await el.updateComplete;
         expect(list(el)).toBeNull();
         expect(trigger(el).getAttribute("aria-expanded")).toBe("false");
-        expect(focused(el)).toBe(trigger(el));
-    });
-
-    it("puts focus back when the browser drops it for a press on content that cannot take focus", async () => {
-        const outside = document.createElement("p");
-        document.body.append(outside);
-        const el = await menu();
-        await open(el);
-        outsidePress(outside);
-        // What the browser does after pointerdown for a non-focusable target.
-        trigger(el).blur();
-        expect(focused(el)).toBeNull();
-        await later();
-        expect(focused(el)).toBe(trigger(el));
-    });
-
-    it("does the same when the browser drops focus only after the pointer is released", async () => {
-        const outside = document.createElement("p");
-        document.body.append(outside);
-        const el = await menu();
-        await open(el);
-        outsidePress(outside);
-        await later();
-        outsidePress(outside, "pointerup");
-        trigger(el).blur();
-        await later();
-        expect(focused(el)).toBe(trigger(el));
+        expect(focused(el)).not.toBe(trigger(el));
     });
 
     it("does not take focus back for a later, unrelated press after a cancelled one", async () => {
@@ -274,20 +243,6 @@ describe("<uit-node-menu> dismissal and activation", () => {
         outsidePress(outside, "pointerup");
         await later();
         expect(focused(el)).toBeNull();
-    });
-
-    it("puts focus back even when the browser moved it to a container instead of nothing", async () => {
-        // A press inside a modal dialog focuses the dialog element itself.
-        const container = document.createElement("div");
-        container.tabIndex = -1;
-        const text = document.createElement("p");
-        document.body.append(container, text);
-        const el = await menu();
-        await open(el);
-        outsidePress(text);
-        container.focus();
-        await later();
-        expect(focused(el)).toBe(trigger(el));
     });
 
     it("leaves focus on the control that the outside press focused", async () => {
@@ -316,20 +271,6 @@ describe("<uit-node-menu> dismissal and activation", () => {
         node.focus();
         await later();
         expect(document.activeElement).toBe(node);
-    });
-
-    it("treats a disabled control as plain content", async () => {
-        const outside = document.createElement("button");
-        outside.disabled = true;
-        document.body.append(outside);
-        const el = await menu();
-        await open(el);
-        outsidePress(outside);
-        await later();
-        trigger(el).blur();
-        outsidePress(outside, "pointerup");
-        await later();
-        expect(focused(el)).toBe(trigger(el));
     });
 
     it("does not take focus back after the menu was opened again", async () => {
@@ -406,65 +347,52 @@ describe("<uit-node-menu> dismissal and activation", () => {
     });
 });
 
-describe("<uit-node-menu> loading", () => {
-    it("shows a disabled loading item, then the real items with focus kept in the menu", async () => {
-        const el = await menu({ actions: [], loading: true });
-        const chosen = vi.fn();
-        el.addEventListener("uit-action", chosen);
+describe("plan v3 menu focus", () => {
+    it("does not move focus on an outside press", async () => {
+        const el = await menu();
         await open(el);
-        expect(labels(el)).toEqual(["Loading actions…"]);
-        const loading = items(el)[0]!;
-        expect(loading.getAttribute("aria-disabled")).toBe("true");
-        expect(focused(el)).toBe(loading);
-        loading.click();
-        expect(chosen).not.toHaveBeenCalled();
-        expect(list(el)).not.toBeNull();
-
-        el.actions = ["copy_ip", "open_entity"];
-        el.loading = false;
+        const focus = vi.spyOn(trigger(el), "focus");
+        document.body.dispatchEvent(
+            new Event("pointerdown", { bubbles: true, composed: true }),
+        );
         await el.updateComplete;
-        await el.updateComplete;
-        expect(labels(el)).toEqual(["Copy IP address", "Open entity"]);
-        expect(focused(el)).toBe(items(el)[0]);
+        expect(list(el)).toBeNull();
+        expect(focus).not.toHaveBeenCalled();
     });
 
-    it("keeps focus on the item the user moved to when the others arrive around it", async () => {
-        const el = await menu({
-            actions: ["open_device", "open_entity"],
-            loading: true,
-        });
+    it("does not focus the trigger after Tab", async () => {
+        const el = await menu();
         await open(el);
-        press(focused(el)!, "ArrowDown");
-        expect(focused(el)).toBe(items(el)[1]);
-        el.actions = ["copy_ip", "open_device", "open_entity"];
-        el.loading = false;
+        const focus = vi.spyOn(trigger(el), "focus");
+        const event = press(focused(el)!, "Tab");
+        await new Promise((resolve) => setTimeout(resolve, 0));
         await el.updateComplete;
-        await el.updateComplete;
-        expect(focused(el)).toBe(itemOf(el, "open_entity"));
-    });
-
-    it("moves focus to the new first item again after the menu was reopened", async () => {
-        const el = await menu({
-            actions: ["open_device", "open_entity"],
-            loading: true,
-        });
-        await open(el);
-        press(focused(el)!, "ArrowDown");
-        press(focused(el)!, "Escape");
-        await el.updateComplete;
-        await open(el);
-        expect(focused(el)).toBe(items(el)[0]);
-        el.actions = ["copy_ip", "open_device", "open_entity"];
-        el.loading = false;
-        await el.updateComplete;
-        await el.updateComplete;
-        expect(focused(el)).toBe(itemOf(el, "copy_ip"));
-    });
-
-    it("keeps real items next to the loading item while the rest loads", async () => {
-        const el = await menu({ actions: ["open_device"], loading: true });
-        await open(el);
-        expect(labels(el)).toEqual(["Open device", "Loading actions…"]);
-        expect(focused(el)).toBe(items(el)[0]);
+        expect(list(el)).toBeNull();
+        expect(event.defaultPrevented).toBe(false);
+        expect(focus).not.toHaveBeenCalled();
     });
 });
+
+it.each(["Enter", " "])(
+    "activates the focused menu item with %s and contains events",
+    async (key) => {
+        const el = await menu();
+        const action = vi.fn();
+        const bubbled = vi.fn();
+        el.addEventListener("uit-action", action);
+        el.addEventListener("keydown", bubbled);
+        el.addEventListener("click", bubbled);
+        el.addEventListener("pointerdown", bubbled);
+        await open(el);
+        bubbled.mockClear();
+        items(el)[0]!.dispatchEvent(
+            new Event("pointerdown", { bubbles: true, composed: true }),
+        );
+        const event = press(items(el)[0]!, key);
+        await el.updateComplete;
+        expect(event.defaultPrevented).toBe(true);
+        expect(action).toHaveBeenCalledOnce();
+        expect(bubbled).not.toHaveBeenCalled();
+        expect(focused(el)).toBe(trigger(el));
+    },
+);

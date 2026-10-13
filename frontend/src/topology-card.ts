@@ -28,6 +28,7 @@ import {
   type SiteTopology,
   type TopologySource,
 } from "./contract";
+import { NodeDetailsFetcher, type NodeDetailsKey } from "./data/node-details";
 import { Announcer } from "./data/announcer";
 import {
   deriveState,
@@ -68,6 +69,7 @@ import {
 import { controlStyles, themeTokens } from "./styles";
 import { KIND_KEYS, VIEW_KEYS } from "./views/describe";
 import "./views/detail-panel";
+import type { UitDetailPanel } from "./views/detail-panel";
 import "./views/graph-view";
 import type { UitGraphView } from "./views/graph-view";
 import "./views/list-view";
@@ -130,7 +132,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
   declare view: ViewMode;
   declare selectedId?: string;
     /** A fresh object asks the detail panel to open the menu of that node. */
-    declare menuRequest?: { id: string } | undefined;
+    declare menuRequest?: NodeDetailsKey | undefined;
   declare siteOverride?: SiteBinding;
   declare narrow: boolean;
   declare reducedMotion: boolean;
@@ -152,6 +154,10 @@ export class UnifiInsightsTopologyCard extends LitElement {
       if (this.hass) void this.loadSources(this.hass);
     },
   });
+    private readonly details = new NodeDetailsFetcher(() =>
+        this.requestUpdate(),
+    );
+    private selectionScope: string | undefined;
   private readonly buildModel = createModelBuilder();
   private readonly announcer = new Announcer((message) => {
     this.announcement = message;
@@ -245,6 +251,8 @@ export class UnifiInsightsTopologyCard extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.subscription.stop();
+        this.details.stop();
+        this.menuRequest = undefined;
     this.announcer.dispose();
     this.resizeObserver?.disconnect();
     this.resizeObserver = undefined;
@@ -299,6 +307,18 @@ export class UnifiInsightsTopologyCard extends LitElement {
     ) {
             this.deselect();
     }
+        const binding = this.binding;
+        const key =
+            binding && this.selectedId !== undefined
+                ? { ...binding, node_id: this.selectedId }
+                : undefined;
+        const scope = JSON.stringify(key);
+        if (scope !== this.selectionScope) {
+            this.selectionScope = scope;
+            if (JSON.stringify(this.menuRequest) !== scope)
+                this.menuRequest = undefined;
+        }
+        this.details.select(this.isConnected ? this.hass : undefined, key);
   }
 
   private get binding(): SiteBinding | undefined {
@@ -468,10 +488,13 @@ export class UnifiInsightsTopologyCard extends LitElement {
      */
     private readonly onContext = (e: Event): void => {
         const id = (e as CustomEvent<{ id: string }>).detail.id;
-        const visual = this.model?.visuals.get(id);
-        if (!visual) return;
-        this.selectedId = id;
-        this.menuRequest = visual.type === "group" ? undefined : { id };
+        if (!this.model?.visuals.has(id) && !this.model?.nodes.has(id)) return;
+        this.onSelect(e);
+        const binding = this.binding;
+        this.menuRequest =
+            binding && !id.startsWith("group:")
+                ? { ...binding, node_id: id }
+                : undefined;
     };
 
   private readonly onClose = (): void => {
@@ -479,7 +502,12 @@ export class UnifiInsightsTopologyCard extends LitElement {
   };
 
   private readonly onKeydown = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && this.selectedId !== undefined) {
+        if (
+            e.key === "Escape" &&
+            this.selectedId !== undefined &&
+            !this.renderRoot.querySelector<UitDetailPanel>("uit-detail-panel")
+                ?.menuOpen
+        ) {
       e.stopPropagation();
             this.deselect();
     }
@@ -766,6 +794,9 @@ export class UnifiInsightsTopologyCard extends LitElement {
         .selectedId=${this.selectedId}
                 .hass=${this.hass}
                 .menuRequest=${this.menuRequest}
+                .details=${this.details.state.status === "ready"
+                    ? this.details.state.details
+                    : undefined}
         .localize=${localize}
         ?narrow=${this.narrow}
       ></uit-detail-panel>

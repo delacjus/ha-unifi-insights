@@ -1,3 +1,4 @@
+import type { MessageBase } from "../src/ha-types";
 import type { TopologyCardConfig } from "../src/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/index";
@@ -94,7 +95,9 @@ describe("registration", () => {
     expect(cssText).toMatch(
       /\.body\s*\{[^}]*flex:\s*1 1 280px;[^}]*min-height:\s*0;/s,
     );
-    expect(cssText).not.toMatch(/\.body\s*\{[^}]*min-height:\s*(280|240)px;/s);
+        expect(cssText).not.toMatch(
+            /\.body\s*\{[^}]*min-height:\s*(280|240)px;/s,
+        );
     expect(cssText).toMatch(
       /\.content\s*\{[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s,
     );
@@ -331,7 +334,7 @@ describe("node action menu", () => {
             kind: "switch" as const,
             ip_address: "192.0.2.10",
             mac_address: "aa:bb:cc:dd:ee:ff",
-            ha_device_id: "reg-core",
+            device_id: "reg-core",
             entity_id: "sensor.core_status",
         },
         "cli:cli-tv": {
@@ -395,7 +398,80 @@ describe("node action menu", () => {
         await settle(el);
         await settle(panelOf(el));
         expect(panelOf(el).hass).toBe(demoted);
+        expect(menuOf(el)).toBeNull();
+    });
+
+    it("waits for fetched details and drops a stale context token after selection changes", async () => {
+        const { el, fake } = await loaded();
+        let answer!: (details: unknown) => void;
+        const previous = fake.hass.callWS;
+        fake.hass.callWS = ((message: MessageBase) =>
+            message.type === "unifi_insights/topology/node_details"
+                ? new Promise((resolve) => {
+                      answer = resolve;
+                  })
+                : previous(message)) as never;
+        contextClick(nodeIn(el, "dev:uuid-core"));
+        await settle(el);
+        expect(menuOf(el)).toBeNull();
+        dispatch(el, "uit-select", "dev:uuid-flex");
+        await settle(el);
+        expect(el.menuRequest).toBeUndefined();
+        answer({ kind: "switch", device_id: "reg-flex" });
+        await settle(el);
+        await settle(panelOf(el));
+        expect(menuList(el)).toBeNull();
         expect(menuOf(el)!.actions).toEqual(["open_device"]);
+    });
+
+    it("opens only after the details for the context node arrive", async () => {
+        const { el, fake } = await loaded();
+        let answer!: (details: unknown) => void;
+        const previous = fake.hass.callWS;
+        fake.hass.callWS = ((message: MessageBase) =>
+            message.type === "unifi_insights/topology/node_details"
+                ? new Promise((resolve) => {
+                      answer = resolve;
+                  })
+                : previous(message)) as never;
+        contextClick(nodeIn(el, "dev:uuid-core"));
+        await settle(el);
+        expect(panelOf(el).selectedId).toBe("dev:uuid-core");
+        expect(menuOf(el)).toBeNull();
+        answer(DETAILS["dev:uuid-core"]);
+        await settle(el);
+        await settle(panelOf(el));
+        expect(menuList(el)).not.toBeNull();
+    });
+
+    it("expands the containing group for context selection without toggling it again", async () => {
+        const { el } = await loaded();
+        dispatch(el, "uit-context", "cli:cli-tv");
+        await settle(el);
+        expect(el.ui.toggledGroups.has("group:dev:uuid-u1")).toBe(true);
+        expect(el.selectedId).toBe("cli:cli-tv");
+        dispatch(el, "uit-context", "cli:cli-tv");
+        await settle(el);
+        expect(el.ui.toggledGroups.has("group:dev:uuid-u1")).toBe(true);
+    });
+
+    it("drops fetched details after the card is detached", async () => {
+        const { el, fake } = await loaded();
+        let answer!: (details: unknown) => void;
+        const previous = fake.hass.callWS;
+        fake.hass.callWS = ((message: MessageBase) =>
+            message.type === "unifi_insights/topology/node_details"
+                ? new Promise((resolve) => {
+                      answer = resolve;
+                  })
+                : previous(message)) as never;
+        contextClick(nodeIn(el, "dev:uuid-core"));
+        await settle(el);
+        el.remove();
+        answer(DETAILS["dev:uuid-core"]);
+        await settle(el);
+        expect(panelOf(el).details).toBeUndefined();
+        expect(el.menuRequest).toBeUndefined();
     });
 
     it("selects the node and opens its menu on the first item after a context click", async () => {
@@ -482,6 +558,17 @@ describe("node action menu", () => {
         await settle(el);
         await settle(panelOf(el));
         expect(menuList(el)).not.toBeNull();
+    });
+
+    it("does not clear selection for card-level Escape while the menu is open", async () => {
+        const { el } = await loaded();
+        contextClick(nodeIn(el, "dev:uuid-core"));
+        await settle(el);
+        await settle(panelOf(el));
+        expect(menuOf(el)!.open).toBe(true);
+        escapeOn(el.shadowRoot!.querySelector("ha-card")!);
+        await settle(el);
+        expect(el.selectedId).toBe("dev:uuid-core");
     });
 
     it("closes only the menu on Escape and the details on the next Escape", async () => {
