@@ -198,39 +198,152 @@ describe("<uit-node-menu> keyboard", () => {
         expect(event.defaultPrevented).toBe(false);
     });
 
-    it("closes on Tab without trapping the key", async () => {
+    it("closes on Tab, puts focus on the button first and does not trap the key", async () => {
         const el = await menu();
         await open(el);
         const event = press(focused(el)!, "Tab");
         await el.updateComplete;
         expect(list(el)).toBeNull();
+        // The browser then moves on from the button; the key is not consumed.
         expect(event.defaultPrevented).toBe(false);
-        expect(focused(el)).not.toBe(trigger(el));
+        expect(focused(el)).toBe(trigger(el));
     });
 });
 
 describe("<uit-node-menu> dismissal and activation", () => {
-    it("closes on a press outside, not on a press inside, and leaves focus to the pointer", async () => {
-        const outside = document.createElement("button");
+    const outsidePress = (target: Element, type = "pointerdown") =>
+        target.dispatchEvent(
+            new Event(type, { bubbles: true, composed: true }),
+        );
+    const later = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+    it("closes on a press outside, not on a press inside, and focuses the button", async () => {
+        const outside = document.createElement("div");
         document.body.append(outside);
         const el = await menu();
         await open(el);
 
-        for (const target of [trigger(el), items(el)[1]!]) {
-            target.dispatchEvent(
-                new Event("pointerdown", { bubbles: true, composed: true }),
-            );
-        }
+        for (const target of [trigger(el), items(el)[1]!]) outsidePress(target);
         await el.updateComplete;
         expect(list(el)).not.toBeNull();
 
-        outside.dispatchEvent(
-            new Event("pointerdown", { bubbles: true, composed: true }),
-        );
+        outsidePress(outside);
         await el.updateComplete;
         expect(list(el)).toBeNull();
         expect(trigger(el).getAttribute("aria-expanded")).toBe("false");
-        expect(focused(el)).not.toBe(trigger(el));
+        expect(focused(el)).toBe(trigger(el));
+    });
+
+    it("puts focus back when the browser drops it for a press on content that cannot take focus", async () => {
+        const outside = document.createElement("p");
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        outsidePress(outside);
+        // What the browser does after pointerdown for a non-focusable target.
+        trigger(el).blur();
+        expect(focused(el)).toBeNull();
+        await later();
+        expect(focused(el)).toBe(trigger(el));
+    });
+
+    it("does the same when the browser drops focus only after the pointer is released", async () => {
+        const outside = document.createElement("p");
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        outsidePress(outside);
+        await later();
+        outsidePress(outside, "pointerup");
+        trigger(el).blur();
+        await later();
+        expect(focused(el)).toBe(trigger(el));
+    });
+
+    it("does not take focus back for a later, unrelated press after a cancelled one", async () => {
+        const outside = document.createElement("p");
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        outsidePress(outside);
+        await later();
+        outsidePress(outside, "pointercancel");
+        await later();
+        // The user then moves focus away on purpose; a later release must not undo it.
+        trigger(el).blur();
+        outsidePress(outside, "pointerup");
+        await later();
+        expect(focused(el)).toBeNull();
+    });
+
+    it("puts focus back even when the browser moved it to a container instead of nothing", async () => {
+        // A press inside a modal dialog focuses the dialog element itself.
+        const container = document.createElement("div");
+        container.tabIndex = -1;
+        const text = document.createElement("p");
+        document.body.append(container, text);
+        const el = await menu();
+        await open(el);
+        outsidePress(text);
+        container.focus();
+        await later();
+        expect(focused(el)).toBe(trigger(el));
+    });
+
+    it("leaves focus on the control that the outside press focused", async () => {
+        const outside = document.createElement("button");
+        const inner = document.createElement("span");
+        outside.append(inner);
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        // The press lands on a child of the control; the control takes focus.
+        outsidePress(inner);
+        outside.focus();
+        await later();
+        expect(document.activeElement).toBe(outside);
+        expect(list(el)).toBeNull();
+    });
+
+    it("leaves focus on an element that takes focus through its tabindex", async () => {
+        // Like a graph node: not a native control, but focusable on press.
+        const node = document.createElement("div");
+        node.tabIndex = -1;
+        document.body.append(node);
+        const el = await menu();
+        await open(el);
+        outsidePress(node);
+        node.focus();
+        await later();
+        expect(document.activeElement).toBe(node);
+    });
+
+    it("treats a disabled control as plain content", async () => {
+        const outside = document.createElement("button");
+        outside.disabled = true;
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        outsidePress(outside);
+        await later();
+        trigger(el).blur();
+        outsidePress(outside, "pointerup");
+        await later();
+        expect(focused(el)).toBe(trigger(el));
+    });
+
+    it("does not take focus back after the menu was opened again", async () => {
+        const outside = document.createElement("p");
+        document.body.append(outside);
+        const el = await menu();
+        await open(el);
+        outsidePress(outside);
+        trigger(el).blur();
+        await open(el);
+        const item = focused(el);
+        await later();
+        expect(focused(el)).toBe(item);
+        expect(list(el)).not.toBeNull();
     });
 
     it("stops listening for outside presses once closed or detached", async () => {

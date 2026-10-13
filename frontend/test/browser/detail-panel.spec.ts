@@ -566,10 +566,53 @@ test.describe("topology node action menu", () => {
         await expect(page.locator(dialog)).toHaveCount(0);
         await expect(page.locator(panel)).toBeVisible();
         await expect(menuItem(page, "Copy IP address")).toBeFocused();
-        // A press elsewhere dismisses the menu.
+        // A press on non-focusable content elsewhere dismisses the menu and
+        // focus goes back to the button instead of being dropped.
         await page.locator(`${card} .title`).click();
         await expect(page.getByRole("menu")).toHaveCount(0);
         await expect(page.locator(panel)).toBeVisible();
+        await expect(trigger(page)).toBeFocused();
+    });
+
+    test("dismissing the menu by a press on non-focusable dialog content returns focus to the button", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+
+        // The heading and a row label take no focus: the browser would leave
+        // nothing (or the dialog itself) focused after the press.
+        await page.locator(`${panelHost} h3`).click();
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(page.locator(dialog)).toBeVisible();
+        await expect(trigger(page)).toBeFocused();
+
+        await trigger(page).click();
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        // A row label: the open menu covers the values beside it.
+        await page.locator(`${panel} dt`).first().click();
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(trigger(page)).toBeFocused();
+    });
+
+    test("Tab closes the menu with focus on the button, then moves on", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(page.locator(dialog)).toBeVisible();
+        // Focus passed through the button on its way to the next control.
+        await expect(
+            page.getByRole("button", { name: "Close", exact: true }),
+        ).toBeFocused();
     });
 
     test("a non-administrator never asks for the details and gets only Open device", async ({
