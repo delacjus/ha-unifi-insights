@@ -108,6 +108,21 @@ export interface SiteTopology {
   truncation: TopologyTruncation | null;
 }
 
+/**
+ * Result of `topology/node_details` (admin only). Every optional key is absent
+ * when the value is unknown or ambiguous; the server sends neither null nor "".
+ * Kept apart from TopologyNode on purpose: the snapshot never carries IP or
+ * MAC addresses.
+ */
+export interface NodeDetails {
+    kind: NodeKind;
+    ip_address?: string;
+    mac_address?: string;
+    /** Home Assistant device registry id. */
+    ha_device_id?: string;
+    entity_id?: string;
+}
+
 export interface TopologySite {
   id: string;
   name: string;
@@ -122,6 +137,7 @@ export interface TopologySource {
 
 export const WS_SOURCES = "unifi_insights/topology/sources";
 export const WS_SUBSCRIBE = "unifi_insights/topology/subscribe";
+export const WS_NODE_DETAILS = "unifi_insights/topology/node_details";
 
 export const ISSUE_ENTRY_UNLOADED = "entry_unloaded";
 export const ISSUE_SITE_UNAVAILABLE = "site_unavailable";
@@ -133,6 +149,10 @@ export const ISSUE_CLIENTS_TRUNCATED = "clients_truncated";
 export const ERR_ENTRY_NOT_FOUND = "entry_not_found";
 export const ERR_ENTRY_NOT_LOADED = "entry_not_loaded";
 export const ERR_SITE_NOT_SELECTED = "site_not_selected";
+/** The node id matches no device or client of the site, or more than one. */
+export const ERR_NODE_NOT_FOUND = "node_not_found";
+/** Home Assistant's own error for a command that needs an administrator. */
+export const ERR_UNAUTHORIZED = "unauthorized";
 
 /** The backend speaks a schema this card was not built for. */
 export class IncompatibleSchemaError extends Error {

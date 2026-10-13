@@ -184,4 +184,17 @@ describe("notices", () => {
       "integration",
     );
   });
+
+    it("words the node details errors without a card action", () => {
+        expect(errorNotice({ code: "unauthorized", message: "x" })).toEqual({
+            code: "unauthorized",
+            severity: "error",
+            key: "error.access_denied",
+        });
+        expect(errorNotice({ code: "node_not_found", message: "" })).toEqual({
+            code: "node_not_found",
+            severity: "error",
+            key: "error.node_not_found",
+        });
+    });
 });

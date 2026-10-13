@@ -35,6 +35,9 @@ const en = {
     "error.site_not_selected":
         "The configured site no longer exists or is disabled.",
     "error.entry_not_loaded": "Integration isn't loaded (retrying).",
+    "error.access_denied":
+        "Access denied. Node actions need an administrator account.",
+    "error.node_not_found": "This device or client is no longer available.",
     "error.unknown": "Could not load the topology ({code}).",
     "action.integration": "Integration",
     "action.edit": "Edit card",
@@ -89,6 +92,14 @@ const en = {
     "detail.via_hidden": "Via hidden",
     "detail.open_device": "Open device",
     "detail.search_members": "Search clients",
+    "menu.label": "Node actions",
+    "menu.copy_ip": "Copy IP address",
+    "menu.copy_mac": "Copy MAC address",
+    "menu.open_entity": "Open entity",
+    "menu.loading": "Loading actions…",
+    "menu.copied": "Copied to the clipboard.",
+    "menu.copy_failed":
+        "Couldn't copy. Select the value below to copy it by hand.",
     "announce.updated": "Topology updated.",
     "announce.offline": "{count} devices offline.",
     "editor.site": "Site",
