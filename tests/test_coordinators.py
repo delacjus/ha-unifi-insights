@@ -7896,6 +7896,58 @@ class TestUnifiFacadeCoordinator:
         assert exc_info.value.translation_key == "network_rule_console_managed"
 
     @pytest.mark.asyncio
+    async def test_async_set_nat_rule_enabled_not_found_is_translated(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Disappeared NAT rule toggle raises translated not_found error."""
+        facade_coordinator._config_coordinator.data = {
+            "sites": {"site1": {"id": "site1", "internalReference": "default"}},
+            "nat_rules": {"site1": {"nat1": {"description": "DNS"}}},
+        }
+        facade_coordinator.network_client.nat_rules.update_nat_rule = AsyncMock(
+            side_effect=UniFiNotFoundError("Rule nat1 not found", status_code=404)
+        )
+        facade_coordinator.async_request_refresh = AsyncMock()
+
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await facade_coordinator.async_set_nat_rule_enabled(
+                "site1", "nat1", enabled=True
+            )
+
+        assert exc_info.value.translation_domain == DOMAIN
+        assert exc_info.value.translation_key == "network_rule_not_found"
+        assert exc_info.value.translation_placeholders == {
+            "rule_type": "NAT rule",
+            "rule_name": "DNS",
+        }
+        facade_coordinator.async_request_refresh.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_set_static_route_enabled_api_error_is_translated(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """API error during static route toggle raises translated error."""
+        facade_coordinator._config_coordinator.data = {
+            "sites": {"site1": {"id": "site1", "internalReference": "default"}},
+            "static_routes": {"site1": {"sr1": {"name": "Lab"}}},
+        }
+        facade_coordinator.network_client.static_routes.update_static_route = AsyncMock(
+            side_effect=UniFiConnectionError("Connection failed")
+        )
+
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await facade_coordinator.async_set_static_route_enabled(
+                "site1", "sr1", enabled=True
+            )
+
+        assert exc_info.value.translation_domain == DOMAIN
+        assert exc_info.value.translation_key == "network_rule_update_failed"
+        assert exc_info.value.translation_placeholders == {
+            "rule_type": "static route",
+            "rule_name": "Lab",
+        }
+
+    @pytest.mark.asyncio
     async def test_async_set_static_route_enabled_uses_internal_reference(
         self, facade_coordinator: UnifiFacadeCoordinator
     ) -> None:
@@ -7999,20 +8051,6 @@ class TestUnifiFacadeCoordinator:
                 "update_traffic_rule",
                 "tr1",
                 "Unable to update traffic rule tr1",
-            ),
-            (
-                "async_set_nat_rule_enabled",
-                "nat_rules",
-                "update_nat_rule",
-                "nat1",
-                "Unable to update NAT rule nat1",
-            ),
-            (
-                "async_set_static_route_enabled",
-                "static_routes",
-                "update_static_route",
-                "sr1",
-                "Unable to update static route sr1",
             ),
         ],
     )
@@ -8121,26 +8159,6 @@ class TestUnifiFacadeCoordinator:
                 "description",
                 "Bedtime",
                 "traffic rule",
-            ),
-            (
-                "async_set_nat_rule_enabled",
-                "nat_rules",
-                "update_nat_rule",
-                "nat1",
-                "nat_rules",
-                "description",
-                "DNS",
-                "NAT rule",
-            ),
-            (
-                "async_set_static_route_enabled",
-                "static_routes",
-                "update_static_route",
-                "sr1",
-                "static_routes",
-                "name",
-                "Lab",
-                "static route",
             ),
         ],
     )

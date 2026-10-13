@@ -850,7 +850,14 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except UniFiNotFoundError as err:
             _LOGGER.warning("%s: it no longer exists on the console", msg)
             await self.async_request_refresh()
-            raise HomeAssistantError(msg) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="network_rule_not_found",
+                translation_placeholders={
+                    "rule_type": label,
+                    "rule_name": display_name,
+                },
+            ) from err
         except UniFiRuleNotEditableError as err:
             _LOGGER.warning("%s: it is managed by the console", msg)
             await self.async_request_refresh()
@@ -866,7 +873,14 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise
         except Exception as err:
             _LOGGER.exception("%s", msg)
-            raise HomeAssistantError(msg) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="network_rule_update_failed",
+                translation_placeholders={
+                    "rule_type": label,
+                    "rule_name": display_name,
+                },
+            ) from err
 
     async def async_update_camera(self, camera_id: str, **kwargs: Any) -> None:
         """Update a camera via the Protect cameras endpoint."""

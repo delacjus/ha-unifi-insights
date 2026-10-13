@@ -927,6 +927,15 @@
     },
     "wake_failed": {
       "message": "Unable to send the Wake-on-LAN packet to {client_name}: {error}"
+    },
+    "network_rule_not_found": {
+      "message": "Unable to update {rule_type} {rule_name}: it no longer exists on the console."
+    },
+    "network_rule_console_managed": {
+      "message": "Unable to update {rule_type} {rule_name}: it is managed by the console."
+    },
+    "network_rule_update_failed": {
+      "message": "Unable to update {rule_type} {rule_name}."
     }
   }
 }
