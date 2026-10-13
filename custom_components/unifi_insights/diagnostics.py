@@ -157,6 +157,12 @@ PORT_FORWARD_TO_REDACT = TO_REDACT | {
 # Traffic rules: the blocked or allowed domains and address ranges
 # ("ip_addresses" is already in TO_REDACT; client MACs are anonymised below).
 TRAFFIC_RULE_TO_REDACT = TO_REDACT | {"domains", "ip_ranges"}
+# NAT rules: the translated address ("ip_address") is already in TO_REDACT; the
+# source and destination filters carry their match address under "address".
+NAT_RULE_TO_REDACT = TO_REDACT | {"address"}
+# Static routes: the destination network and the next hop map the routed LAN.
+# ("gateway_device" is a MAC and is anonymised below.)
+STATIC_ROUTE_TO_REDACT = TO_REDACT | {"static-route_network", "static-route_nexthop"}
 
 # Keys whose value is a MAC address even when it arrives unpunctuated. Values
 # are replaced with a per-report placeholder rather than dropped; see
@@ -288,6 +294,8 @@ def _redact_coordinator_data(data: Any) -> Any:
         ("latest_vouchers", VOUCHER_TO_REDACT),
         ("port_forwards", PORT_FORWARD_TO_REDACT),
         ("traffic_rules", TRAFFIC_RULE_TO_REDACT),
+        ("nat_rules", NAT_RULE_TO_REDACT),
+        ("static_routes", STATIC_ROUTE_TO_REDACT),
     ):
         records = data.get(section)
         if isinstance(records, Mapping):

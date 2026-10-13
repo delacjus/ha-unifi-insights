@@ -66,6 +66,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Rule sections fetched through async_fetch_site_rule_section, in fetch order.
+_RULE_SECTIONS: tuple[str, ...] = (
+    "port_forwards",
+    "traffic_rules",
+    "nat_rules",
+    "static_routes",
+)
+
 
 class UnifiConfigCoordinator(UnifiBaseCoordinator):
     """Coordinator for slow-changing configuration data (5 minute updates)."""
@@ -105,6 +113,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             "vpn_clients": {},
             "port_forwards": {},
             "traffic_rules": {},
+            "nat_rules": {},
+            "static_routes": {},
             "site_vpns": {},
             "network_info": {},
             "client_links": {},
@@ -147,6 +157,14 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
     def traffic_rules_available(self, site_id: str) -> bool:
         """Return True if the last refresh fetched traffic rules for a site."""
         return self._section_available("traffic_rules", site_id)
+
+    def nat_rules_available(self, site_id: str) -> bool:
+        """Return True if the last refresh fetched NAT rules for a site."""
+        return self._section_available("nat_rules", site_id)
+
+    def static_routes_available(self, site_id: str) -> bool:
+        """Return True if the last refresh fetched static routes for a site."""
+        return self._section_available("static_routes", site_id)
 
     def internet_activity_available(self, site_id: str) -> bool:
         """Return True if the last refresh fetched internet activity for a site."""
@@ -274,6 +292,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     vpn_clients={},
                     port_forwards={},
                     traffic_rules={},
+                    nat_rules={},
+                    static_routes={},
                     site_vpns={},
                     network_info={},
                     client_links={},
@@ -292,6 +312,8 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 "vpn_clients",
                 "port_forwards",
                 "traffic_rules",
+                "nat_rules",
+                "static_routes",
                 "site_vpns",
             ):
                 self.data[key] = {
@@ -316,8 +338,9 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             failed_sections: set[tuple[str, str]] = set()
             routes_by_site: dict[str, dict[str, Any]] = {}
             vpn_clients_by_site: dict[str, dict[str, Any]] = {}
-            port_forwards_by_site: dict[str, dict[str, Any]] = {}
-            traffic_rules_by_site: dict[str, dict[str, Any]] = {}
+            rule_sections_by_site: dict[str, dict[str, dict[str, Any]]] = {
+                section: {} for section in _RULE_SECTIONS
+            }
             site_vpns_by_site: dict[str, dict[str, Any]] = {}
             client_links_by_site: dict[str, dict[str, Any]] = {}
             now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
@@ -363,33 +386,36 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     prior_site_vpns=self.data.get("site_vpns", {}).get(site_id, {}),
                 )
                 rule_site_name = verified_legacy_site_name(sites.get(site_id))
-                pf_result: dict[str, Any] | BaseException
-                tr_result: dict[str, Any] | BaseException
-                pf_result, tr_result = await asyncio.gather(
-                    async_fetch_site_rule_section(
-                        self,
-                        "port_forwards",
-                        site_id,
-                        rule_site_name,
-                        self.network_client.port_forwards.list_port_forwards,
-                        failed_sections,
-                    ),
-                    async_fetch_site_rule_section(
-                        self,
-                        "traffic_rules",
-                        site_id,
-                        rule_site_name,
-                        self.network_client.traffic_rules.list_traffic_rules,
-                        failed_sections,
+                rule_fetchers: tuple[Callable[[str], Awaitable[list[Any]]], ...] = (
+                    self.network_client.port_forwards.list_port_forwards,
+                    self.network_client.traffic_rules.list_traffic_rules,
+                    self.network_client.nat_rules.list_nat_rules,
+                    self.network_client.static_routes.list_static_routes,
+                )
+                rule_results: list[
+                    dict[str, Any] | BaseException
+                ] = await asyncio.gather(
+                    *(
+                        async_fetch_site_rule_section(
+                            self,
+                            section,
+                            site_id,
+                            rule_site_name,
+                            fetch,
+                            failed_sections,
+                        )
+                        for section, fetch in zip(
+                            _RULE_SECTIONS, rule_fetchers, strict=True
+                        )
                     ),
                     return_exceptions=True,
                 )
-                if isinstance(pf_result, BaseException):
-                    raise pf_result
-                if isinstance(tr_result, BaseException):
-                    raise tr_result
-                port_forwards_by_site[site_id] = pf_result
-                traffic_rules_by_site[site_id] = tr_result
+                for section, rule_result in zip(
+                    _RULE_SECTIONS, rule_results, strict=True
+                ):
+                    if isinstance(rule_result, BaseException):
+                        raise rule_result
+                    rule_sections_by_site[section][site_id] = rule_result
 
             committed_vouchers = dict(self.data.get("vouchers", {}))
             for site_id, (v_seq, inv) in vouchers_by_site.items():
@@ -412,8 +438,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                 },
                 policy_based_routes=routes_by_site,
                 vpn_clients=vpn_clients_by_site,
-                port_forwards=port_forwards_by_site,
-                traffic_rules=traffic_rules_by_site,
+                **rule_sections_by_site,
                 site_vpns=site_vpns_by_site,
                 client_links=client_links_by_site,
             )

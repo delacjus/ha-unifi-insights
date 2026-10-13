@@ -30,7 +30,9 @@ from tests.fixtures.library_responses import (
     SAMPLE_THREAD_LINK_STATION,
 )
 from tests.fixtures.network_rule_responses import (
+    nat_rule_record,
     port_forward_record,
+    static_route_record,
     traffic_rule_record,
 )
 
@@ -791,6 +793,50 @@ async def test_diagnostics_redacts_traffic_rule_targets(
     assert "aa:bb:cc:dd:ee:01" not in dumped
     assert "Bedtime" in dumped
     assert "BLOCK" in dumped
+
+
+async def test_diagnostics_redacts_nat_rule_addresses(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations: None,
+) -> None:
+    """Test diagnostics redacts NAT rule translated and filter addresses."""
+    coordinator = init_integration.runtime_data.coordinator
+    coordinator.data["nat_rules"] = {
+        "site-1": {
+            "nat-dns": nat_rule_record(),
+        }
+    }
+
+    result = await async_get_config_entry_diagnostics(hass, init_integration)
+    dumped = json.dumps(result, default=str)
+    assert "192.0.2.53" not in dumped
+    assert "192.0.2.54" not in dumped
+    assert "All DNS to resolver" in dumped
+    assert "DNAT" in dumped
+    assert "tcp_udp" in dumped
+
+
+async def test_diagnostics_redacts_static_route_targets(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations: None,
+) -> None:
+    """Test diagnostics redacts static route networks, next hops and gateway MACs."""
+    coordinator = init_integration.runtime_data.coordinator
+    coordinator.data["static_routes"] = {
+        "site-1": {
+            "route-lab": static_route_record(**{"static-route_nexthop": "192.0.2.1"}),
+        }
+    }
+
+    result = await async_get_config_entry_diagnostics(hass, init_integration)
+    dumped = json.dumps(result, default=str)
+    assert "192.168.2.0/24" not in dumped
+    assert "192.0.2.1" not in dumped
+    assert "aa:bb:cc:dd:ee:ff" not in dumped
+    assert "Lab" in dumped
+    assert "interface-route" in dumped
 
 
 async def test_diagnostics_anonymizes_dotted_client_mac(

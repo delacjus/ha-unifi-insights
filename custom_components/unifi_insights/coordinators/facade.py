@@ -360,6 +360,8 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "vpn_clients": self._config_coordinator.data.get("vpn_clients", {}),
             "port_forwards": self._config_coordinator.data.get("port_forwards", {}),
             "traffic_rules": self._config_coordinator.data.get("traffic_rules", {}),
+            "nat_rules": self._config_coordinator.data.get("nat_rules", {}),
+            "static_routes": self._config_coordinator.data.get("static_routes", {}),
             "site_vpns": self._config_coordinator.data.get("site_vpns", {}),
             "network_info": self._config_coordinator.data.get("network_info", {}),
             "client_links": self._config_coordinator.data.get("client_links", {}),
@@ -451,6 +453,14 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def traffic_rules_available(self, site_id: str) -> bool:
         """Return True if a site's traffic rules were fetched on the last refresh."""
         return bool(self._config_coordinator.traffic_rules_available(site_id))
+
+    def nat_rules_available(self, site_id: str) -> bool:
+        """Return True if a site's NAT rules were fetched on the last refresh."""
+        return bool(self._config_coordinator.nat_rules_available(site_id))
+
+    def static_routes_available(self, site_id: str) -> bool:
+        """Return True if a site's static routes were fetched on the last refresh."""
+        return bool(self._config_coordinator.static_routes_available(site_id))
 
     def internet_activity_available(self, site_id: str) -> bool:
         """Return True if a site's internet activity was fetched on the last refresh."""
@@ -783,6 +793,66 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             _LOGGER.exception("Unable to update traffic rule %s", display_name)
             msg = f"Unable to update traffic rule {display_name}"
+            raise HomeAssistantError(msg) from err
+
+    async def async_set_nat_rule_enabled(
+        self, site_id: str, rule_id: str, *, enabled: bool
+    ) -> None:
+        """Enable or disable a NAT rule."""
+        await self._async_set_legacy_rule_enabled(
+            site_id,
+            rule_id,
+            enabled=enabled,
+            data_key="nat_rules",
+            name_field="description",
+            label="NAT rule",
+            update=self.network_client.nat_rules.update_nat_rule,
+        )
+
+    async def async_set_static_route_enabled(
+        self, site_id: str, rule_id: str, *, enabled: bool
+    ) -> None:
+        """Enable or disable a static route."""
+        await self._async_set_legacy_rule_enabled(
+            site_id,
+            rule_id,
+            enabled=enabled,
+            data_key="static_routes",
+            name_field="name",
+            label="static route",
+            update=self.network_client.static_routes.update_static_route,
+        )
+
+    async def _async_set_legacy_rule_enabled(
+        self,
+        site_id: str,
+        rule_id: str,
+        *,
+        enabled: bool,
+        data_key: str,
+        name_field: str,
+        label: str,
+        update: Callable[..., Awaitable[Any]],
+    ) -> None:
+        """Toggle one rule of a classic or v2 rule family by full-record PUT."""
+        rule_data = (
+            self._config_coordinator.data.get(data_key, {})
+            .get(site_id, {})
+            .get(rule_id, {})
+        )
+        display_name = rule_display_name(rule_data, rule_id, name_field)
+        site_name = self._require_verified_legacy_site_name(site_id)
+        msg = f"Unable to update {label} {display_name}"
+        try:
+            await update(site_name, rule_id, enabled=enabled)
+        except UniFiNotFoundError as err:
+            _LOGGER.warning("%s: it no longer exists on the console", msg)
+            await self.async_request_refresh()
+            raise HomeAssistantError(msg) from err
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.exception("%s", msg)
             raise HomeAssistantError(msg) from err
 
     async def async_update_camera(self, camera_id: str, **kwargs: Any) -> None:
