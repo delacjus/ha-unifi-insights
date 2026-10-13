@@ -22,14 +22,17 @@ function sectionsHeight(rows: number): number {
     return rows * 56 + (rows - 1) * 8;
 }
 
-async function openFixture(
+interface FixtureOptions {
+    width: number;
+    height: number;
+    layout?: string;
+    unresolved?: number;
+    admin?: boolean;
+}
+
+async function loadFixture(
     page: Page,
-    dimensions: {
-        width: number;
-        height: number;
-        layout?: string;
-        unresolved?: number;
-    },
+    dimensions: FixtureOptions,
 ): Promise<void> {
     page.on("pageerror", (error) => console.error(`Fixture error: ${error}`));
     const query = new URLSearchParams({
@@ -39,8 +42,16 @@ async function openFixture(
     if (dimensions.layout) query.set("layout", dimensions.layout);
     if (dimensions.unresolved !== undefined)
         query.set("unresolved", String(dimensions.unresolved));
+    if (dimensions.admin) query.set("admin", "1");
     await page.goto(`/test/browser/fixture.html?${query}`);
     await page.waitForFunction(() => window.fixtureReady === true);
+}
+
+async function openFixture(
+    page: Page,
+    dimensions: FixtureOptions,
+): Promise<void> {
+    await loadFixture(page, dimensions);
     await page.locator(`${card} [data-id="dev:uuid-core"]`).click();
     await expect(page.locator(panel)).toBeVisible();
 }
@@ -359,9 +370,228 @@ test.describe("topology detail panel overflow", () => {
     });
 });
 
+const trigger = (page: Page) =>
+    page.getByRole("button", { name: "Node actions" });
+const menuItem = (page: Page, name: string) =>
+    page.getByRole("menuitem", { name });
+const liveRegion = (page: Page) => page.locator(`${panelHost} [role="status"]`);
+
+test.describe("topology node action menu", () => {
+    test("works inside the narrow native dialog: keys, focus, Escape, copy", async ({
+        page,
+        context,
+    }) => {
+        await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await expectDialogShowsEverything(page);
+        const modal = page.locator(dialog);
+
+        // Open with the keyboard: the first item takes focus.
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        const menu = page.getByRole("menu", { name: "Node actions" });
+        await expect(menu).toBeVisible();
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        await expect(trigger(page)).toHaveAttribute("aria-expanded", "true");
+        expect(
+            await menu.evaluate((element) => {
+                // closest() stops at the shadow boundary; walk the flat tree.
+                let at: Node | null = element;
+                while (at) {
+                    if (at instanceof HTMLDialogElement) return true;
+                    at = at.parentNode ?? (at as ShadowRoot).host ?? null;
+                }
+                return false;
+            }),
+        ).toBe(true);
+        // Inside the dialog's box, so a modal dialog's inertness cannot hide it.
+        const box = await geometry(modal);
+        expectWithin(await geometry(menu), box);
+
+        // Arrows wrap; Home and End jump.
+        await page.keyboard.press("End");
+        await expect(menuItem(page, "Open entity")).toBeFocused();
+        await page.keyboard.press("ArrowDown");
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        await page.keyboard.press("ArrowUp");
+        await expect(menuItem(page, "Open entity")).toBeFocused();
+        await page.keyboard.press("Home");
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+
+        // Escape closes the menu only; the dialog stays and focus returns.
+        await page.keyboard.press("Escape");
+        await expect(menu).toHaveCount(0);
+        await expect(modal).toBeVisible();
+        await expect(trigger(page)).toBeFocused();
+
+        // Enter opens it again and Enter on an item copies.
+        await page.keyboard.press("Enter");
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(menu).toHaveCount(0);
+        await expect(trigger(page)).toBeFocused();
+        await expect(liveRegion(page)).toHaveText("Copied to the clipboard.");
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+            "192.0.2.10",
+        );
+        await expect(liveRegion(page)).toHaveAttribute("aria-live", "polite");
+
+        // Escape with the menu closed still closes the dialog.
+        await page.keyboard.press("Escape");
+        await expect(modal).toHaveCount(0);
+    });
+
+    test("copies through the textarea fallback while the modal dialog is open", async ({
+        page,
+        context,
+    }) => {
+        await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await expectDialogShowsEverything(page);
+        // No async clipboard: everything outside the dialog is inert, so the
+        // temporary textarea has to live inside it.
+        await page.evaluate(() => {
+            Object.defineProperty(navigator, "clipboard", {
+                configurable: true,
+                value: undefined,
+            });
+        });
+
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await expect(menuItem(page, "Copy MAC address")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(liveRegion(page)).toHaveText("Copied to the clipboard.");
+        await expect(trigger(page)).toBeFocused();
+
+        await page.evaluate(() => {
+            delete (navigator as { clipboard?: unknown }).clipboard;
+        });
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+            "aa:bb:cc:dd:ee:ff",
+        );
+        // The temporary field is gone again.
+        expect(
+            await page.evaluate(
+                () =>
+                    window.fixtureCard.shadowRoot
+                        ?.querySelector("uit-detail-panel")
+                        ?.shadowRoot?.querySelectorAll("textarea").length,
+            ),
+        ).toBe(0);
+    });
+
+    test("shows the value for manual copying when nothing can copy", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await page.evaluate(() => {
+            Object.defineProperty(navigator, "clipboard", {
+                configurable: true,
+                value: undefined,
+            });
+            document.execCommand = () => false;
+        });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+        await expect(liveRegion(page)).toContainText("Couldn't copy.");
+        await expect(liveRegion(page).locator(".manual")).toHaveText(
+            "192.0.2.10",
+        );
+    });
+
+    test("Open entity closes the dialog and asks Home Assistant for the entity", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowUp");
+        await expect(menuItem(page, "Open entity")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(page.locator(dialog)).toHaveCount(0);
+        expect(await page.evaluate(() => window.fixtureMoreInfo)).toEqual([
+            { entityId: "sensor.core_status" },
+        ]);
+    });
+
+    test("Open device in the menu leaves no dialog behind", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320, admin: true });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await expect(menuItem(page, "Open device")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/\/config\/devices\/device\/reg-core/);
+        await expect(page.locator(dialog)).toHaveCount(0);
+    });
+
+    test("Shift+F10 on a focused node opens the details and the menu", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await loadFixture(page, { width: 360, height: 320, admin: true });
+        await page.locator(node).focus();
+        await page.keyboard.press("Shift+F10");
+        await expect(page.locator(dialog)).toBeVisible();
+        await expect(
+            page.getByRole("menu", { name: "Node actions" }),
+        ).toBeVisible();
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+
+        // Escape twice: the menu, then the dialog; focus lands on the node.
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(page.locator(dialog)).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.locator(dialog)).toHaveCount(0);
+        await expect(page.locator(node)).toBeFocused();
+    });
+
+    test("a context click opens the menu in the side panel too", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await loadFixture(page, { width: 800, height: 620, admin: true });
+        await page.locator(node).click({ button: "right" });
+        await expect(page.locator(dialog)).toHaveCount(0);
+        await expect(page.locator(panel)).toBeVisible();
+        await expect(menuItem(page, "Copy IP address")).toBeFocused();
+        // A press elsewhere dismisses the menu.
+        await page.locator(`${card} .title`).click();
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(page.locator(panel)).toBeVisible();
+    });
+
+    test("a non-administrator never asks for the details and gets only Open device", async ({
+        page,
+    }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openFixture(page, { width: 360, height: 320 });
+        await trigger(page).focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(page.getByRole("menuitem")).toHaveCount(1);
+        await expect(menuItem(page, "Open device")).toBeFocused();
+        expect(await page.evaluate(() => window.fixtureDetailsCalls)).toEqual(
+            [],
+        );
+    });
+});
+
 declare global {
     interface Window {
         fixtureCard: HTMLElement;
+        fixtureDetailsCalls: unknown[];
+        fixtureMoreInfo: unknown[];
         fixtureReady: boolean;
         fixtureUpdate: () => void;
     }
