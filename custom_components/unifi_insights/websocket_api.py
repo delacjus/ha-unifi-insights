@@ -244,7 +244,7 @@ def _device_targets(
         dr.async_get(hass), (DOMAIN, f"{site_id}_{device_id}"), entry.entry_id
     )
     if device is not None and _device_in_entry(device, entry.entry_id):
-        targets["ha_device_id"] = device.id
+        targets["device_id"] = device.id
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(
         "binary_sensor", DOMAIN, f"{site_id}_{device_id}_device_status"
@@ -261,33 +261,36 @@ def _client_targets(
     """
     Return the tracker entity and own device of a client node.
 
-    The tracker is found by the client's MAC among this entry's device_tracker
-    rows, under either unique id format (current or legacy bare MAC). Zero or
-    several matches name no tracker. A tracker grouped under its uplink AP or
-    switch sits on that device, which is not the client, so the device is only
-    returned when the tracker is on the standalone ``client_<mac>`` device.
+    Prefer the current tracker unique id, falling back to a legacy bare MAC.
+    Each target must belong to this entry. The standalone client device is
+    resolved independently: the tracker's own device may be its uplink.
     """
     if mac is None:
         return {}
     mac = mac.lower()
-    trackers = [
-        tracker
-        for tracker in _client_tracker_entries(er.async_get(hass), entry.entry_id)
-        if _mac_from_unique_id(tracker.unique_id) == mac
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "device_tracker", DOMAIN, f"{DOMAIN}_{mac}"
+    )
+    tracker = registry.async_get(entity_id) if entity_id is not None else None
+    if tracker is None or tracker.config_entry_id != entry.entry_id:
+        # Older ScannerEntity rows used the MAC as the API spelled it, so
+        # preserve the existing case-insensitive legacy lookup.
+        legacy = [
+            candidate
+            for candidate in _client_tracker_entries(registry, entry.entry_id)
+            if not candidate.unique_id.startswith(f"{DOMAIN}_")
+            and _mac_from_unique_id(candidate.unique_id) == mac
     ]
-    if len(trackers) != 1:
-        return {}
-    (tracker,) = trackers
-    targets = {"entity_id": tracker.entity_id}
+        tracker = legacy[0] if len(legacy) == 1 else None
+    targets: dict[str, str] = {}
+    if tracker is not None and tracker.config_entry_id == entry.entry_id:
+        targets["entity_id"] = tracker.entity_id
     device = async_get_device_entry(
         dr.async_get(hass), (DOMAIN, f"client_{mac}"), entry.entry_id
     )
-    if (
-        device is not None
-        and device.id == tracker.device_id
-        and _device_in_entry(device, entry.entry_id)
-    ):
-        targets["ha_device_id"] = device.id
+    if device is not None and _device_in_entry(device, entry.entry_id):
+        targets["device_id"] = device.id
     return targets
 
 
@@ -313,7 +316,7 @@ def _build_node_details(
     for key, spellings in (("ip_address", _IP_KEYS), ("mac_address", _MAC_KEYS)):
         value = get_field(record, *spellings)
         if isinstance(value, str) and value.strip():
-            details[key] = value
+            details[key] = value.lower() if key == "mac_address" else value
     if kind == "client":
         details.update(_client_targets(hass, entry, details.get("mac_address")))
     else:

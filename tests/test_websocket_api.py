@@ -1573,7 +1573,7 @@ async def test_node_details_infrastructure(
         "kind": "gateway",
         "ip_address": GW_IP,
         "mac_address": GW_MAC,
-        "ha_device_id": device.id,
+        "device_id": device.id,
         "entity_id": entity.entity_id,
     }
     # The targets are an HA device registry id and an entity_id, never a unique id
@@ -1625,12 +1625,12 @@ async def test_node_details_resolves_every_snapshot_node(
         "AP": AP_MAC,
         "Switch": SWITCH_MAC,
         "Phone": PHONE_MAC,
-        "Laptop": LAPTOP_MAC_RAW,
+        "Laptop": LAPTOP_MAC,
         "Printer": PRINTER_MAC,
     }
     # Nothing is registered, so no target is guessed for any node.
     assert all(
-        not {"ha_device_id", "entity_id"} & result.keys() for result in results.values()
+        not {"device_id", "entity_id"} & result.keys() for result in results.values()
     )
 
 
@@ -1648,6 +1648,12 @@ async def test_node_details_resolves_every_snapshot_node(
             "10.9.0.2",
             "aa:00:00:00:00:02",
             id="snake-case",
+        ),
+        pytest.param(
+            {"ipAddress": "10.9.0.6", "macAddress": "AA:BC:DE:00:00:06"},
+            "10.9.0.6",
+            "aa:bc:de:00:00:06",
+            id="uppercase-mac",
         ),
         pytest.param(
             {"ip": "10.9.0.3", "mac": "aa:00:00:00:00:03"},
@@ -1707,8 +1713,10 @@ async def test_node_details_values_follow_get_field_and_omit_absent(
 async def test_node_details_client_on_standalone_device(
     hass: HomeAssistant, init_integration: MockConfigEntry, hass_ws_client
 ) -> None:
-    """A tracker on the client's own device yields that device and the tracker."""
-    _seed_details(init_integration)
+    """An HMAC client resolves its standalone device and tracker."""
+    data = _seed_details(init_integration)
+    laptop_record = data["clients"][SITE].pop("cli-2")
+    data["clients"][SITE][LAPTOP_MAC] = laptop_record
     tracker = _real_tracker(init_integration, LAPTOP_MAC)
     assert tracker.device_info["identifiers"] == {(DOMAIN, f"client_{LAPTOP_MAC}")}
     device = dr.async_get(hass).async_get_or_create(
@@ -1721,6 +1729,7 @@ async def test_node_details_client_on_standalone_device(
     client = await hass_ws_client(hass)
     nodes = (await _snapshot(client, init_integration))["nodes"]
     (laptop,) = [node for node in nodes if node["name"] == "Laptop"]
+    assert laptop["id"].startswith("cli:h")
 
     msg = await _node_details(client, init_integration, laptop["id"], msg_id=2)
 
@@ -1728,8 +1737,8 @@ async def test_node_details_client_on_standalone_device(
     assert msg["result"] == {
         "kind": "client",
         "ip_address": LAPTOP_IP,
-        "mac_address": LAPTOP_MAC_RAW,
-        "ha_device_id": device.id,
+        "mac_address": LAPTOP_MAC,
+        "device_id": device.id,
         "entity_id": registered.entity_id,
     }
 
@@ -1748,12 +1757,6 @@ async def test_node_details_grouped_client_tracker_has_no_device(
     registered = _register_tracker(
         hass, init_integration, tracker.unique_id, device_id=ap_device.id
     )
-    # A standalone client device left from an earlier offline start exists too,
-    # but the tracker is no longer on it, so it is not the tracker's device.
-    stale_client_device = dr.async_get(hass).async_get_or_create(
-        config_entry_id=init_integration.entry_id,
-        identifiers={(DOMAIN, f"client_{PHONE_MAC}")},
-    )
     client = await hass_ws_client(hass)
 
     msg = await _node_details(client, init_integration, "cli:cli-1")
@@ -1766,7 +1769,6 @@ async def test_node_details_grouped_client_tracker_has_no_device(
         "entity_id": registered.entity_id,
     }
     assert ap_device.id not in json.dumps(msg["result"])
-    assert stale_client_device.id not in json.dumps(msg["result"])
 
 
 @pytest.mark.parametrize(
@@ -1792,19 +1794,19 @@ async def test_node_details_client_tracker_unique_id_formats(
 
     assert msg["success"], msg
     assert msg["result"]["entity_id"] == registered.entity_id
-    assert "ha_device_id" not in msg["result"]
+    assert "device_id" not in msg["result"]
 
 
-async def test_node_details_client_current_unique_id_wins_only_when_alone(
+async def test_node_details_client_current_unique_id_takes_precedence(
     hass: HomeAssistant, init_integration: MockConfigEntry, hass_ws_client
 ) -> None:
-    """Two tracker rows for one MAC are ambiguous, so no target is returned."""
+    """The current unique ID wins even when a legacy bare-MAC tracker exists."""
     _seed_details(init_integration)
     device = dr.async_get(hass).async_get_or_create(
         config_entry_id=init_integration.entry_id,
         identifiers={(DOMAIN, f"client_{PHONE_MAC}")},
     )
-    _register_tracker(
+    current = _register_tracker(
         hass, init_integration, f"{DOMAIN}_{PHONE_MAC}", device_id=device.id
     )
     _register_tracker(hass, init_integration, PHONE_MAC.upper(), device_id=device.id)
@@ -1817,6 +1819,8 @@ async def test_node_details_client_current_unique_id_wins_only_when_alone(
         "kind": "client",
         "ip_address": PHONE_IP,
         "mac_address": PHONE_MAC,
+        "device_id": device.id,
+        "entity_id": current.entity_id,
     }
 
 
@@ -1836,7 +1840,7 @@ async def test_node_details_client_ignores_other_clients_and_non_trackers(
 
     assert msg["success"], msg
     assert "entity_id" not in msg["result"]
-    assert "ha_device_id" not in msg["result"]
+    assert "device_id" not in msg["result"]
 
 
 async def test_node_details_client_without_mac_has_no_targets(
@@ -1929,8 +1933,8 @@ async def test_node_details_checks_membership_of_every_device_lookup(
         phone = await _node_details(client, init_integration, "cli:cli-1", msg_id=2)
 
     assert lookup.call_count == 2
-    assert "ha_device_id" not in gateway["result"]
-    assert "ha_device_id" not in phone["result"]
+    assert "device_id" not in gateway["result"]
+    assert "device_id" not in phone["result"]
     assert phone["result"]["entity_id"].startswith("device_tracker.")
 
 
@@ -2103,3 +2107,81 @@ async def test_snapshot_commands_still_exclude_ip_and_mac(
         assert all(
             not {"ip_address", "mac_address"} & node.keys() for node in payload["nodes"]
         )
+
+
+@pytest.mark.parametrize("tracker_on_uplink", [False, True])
+async def test_node_details_client_device_resolves_independently_of_tracker(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    hass_ws_client,
+    *,
+    tracker_on_uplink: bool,
+) -> None:
+    """Only the standalone identifier determines the client device target."""
+    _seed_details(init_integration)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=init_integration.entry_id,
+        identifiers={(DOMAIN, f"client_{PHONE_MAC}")},
+    )
+    expected = {
+        "kind": "client",
+        "ip_address": PHONE_IP,
+        "mac_address": PHONE_MAC,
+        "device_id": device.id,
+    }
+    if tracker_on_uplink:
+        uplink = dr.async_get(hass).async_get_or_create(
+            config_entry_id=init_integration.entry_id,
+            identifiers={(DOMAIN, f"{SITE}_uuid-ap")},
+        )
+        tracker = _register_tracker(
+            hass, init_integration, f"{DOMAIN}_{PHONE_MAC}", device_id=uplink.id
+        )
+        expected["entity_id"] = tracker.entity_id
+    client = await hass_ws_client(hass)
+
+    msg = await _node_details(client, init_integration, "cli:cli-1")
+
+    assert msg["success"], msg
+    assert msg["result"] == expected
+
+
+async def test_node_details_foreign_current_tracker_falls_back_to_own_legacy(
+    hass: HomeAssistant, init_integration: MockConfigEntry, hass_ws_client
+) -> None:
+    """A foreign current tracker does not hide this entry's legacy tracker."""
+    _seed_details(init_integration)
+    other = _foreign_entry(hass)
+    _register_tracker(hass, other, f"{DOMAIN}_{PHONE_MAC}")
+    legacy = _register_tracker(hass, init_integration, PHONE_MAC)
+    client = await hass_ws_client(hass)
+
+    msg = await _node_details(client, init_integration, "cli:cli-1")
+
+    assert msg["success"], msg
+    assert msg["result"] == {
+        "kind": "client",
+        "ip_address": PHONE_IP,
+        "mac_address": PHONE_MAC,
+        "entity_id": legacy.entity_id,
+    }
+
+
+@pytest.mark.parametrize(
+    "node_id", ["group:dev:uuid-ap", "group:root", "group:unconnected"]
+)
+async def test_node_details_group_ids_are_not_found(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    hass_ws_client,
+    node_id: str,
+) -> None:
+    """Synthetic frontend group IDs never resolve to source records."""
+    _seed_details(init_integration)
+    client = await hass_ws_client(hass)
+
+    msg = await _node_details(client, init_integration, node_id)
+
+    assert not msg["success"], msg
+    assert msg["error"]["code"] == "node_not_found"
+    assert "result" not in msg
