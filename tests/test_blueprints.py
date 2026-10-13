@@ -404,7 +404,7 @@ async def _wait_until(condition: Callable[[], bool], expected: str) -> None:
         )
 
 
-async def _advance_while_runs_wait(
+def _advance_time(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, **delta: int
 ) -> None:
     """Move time forward and fire the due timers, without waiting for any run.
@@ -430,7 +430,7 @@ async def _advance_until(
     each step gives the event loop a moment to react before the next tick.
     """
     for _ in range(limit_seconds):
-        await _advance_while_runs_wait(hass, freezer, seconds=1)
+        _advance_time(hass, freezer, seconds=1)
         if await _poll(condition, STEP_SETTLE_SECONDS):
             return
     pytest.fail(
@@ -662,7 +662,7 @@ async def test_ap_overload_alerts_for_two_access_points_at_the_same_time(
     hass.states.async_set(AP_CLIENTS_2, "41")
     await hass.async_block_till_done()
     # Both timers fire together; the first run parks on its delay, the second queues.
-    await _advance_while_runs_wait(hass, freezer, minutes=6)
+    _advance_time(hass, freezer, minutes=6)
     await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
     assert calls == []
     await _advance_until(
@@ -878,7 +878,7 @@ async def test_offline_alerts_for_several_devices_that_fail_together(
     hass.states.async_set(SWITCH_2_ONLINE, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
     # Both timers fire together; the first run parks on its delay, the second queues.
-    await _advance_while_runs_wait(hass, freezer, minutes=6)
+    _advance_time(hass, freezer, minutes=6)
     await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
     assert calls == []
     await _advance_until(
