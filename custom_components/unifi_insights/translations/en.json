@@ -953,6 +953,12 @@
     "export_no_sites": {
       "message": "The console has no UniFi Network site to export."
     },
+    "export_target_not_found": {
+      "message": "No configured UniFi console or site matches {target}."
+    },
+    "export_target_ambiguous": {
+      "message": "{target} matches more than one configured UniFi console. Use the entry ID of the console."
+    },
     "export_network_rules_failed": {
       "message": "Unable to read any network rules from the console."
     },

@@ -2031,7 +2031,8 @@ def _get_coordinator_for_rule_export(
 
     ``console_id`` (entry title or entry ID) names the console directly. Without
     it the console is found from ``site_id``, or is the only configured one.
-    Raises ``ServiceValidationError`` when the target is unknown or ambiguous.
+    Raises a translated ``ServiceValidationError`` when the target is unknown
+    or ambiguous.
     """
     entries = [
         entry
@@ -2046,7 +2047,16 @@ def _get_coordinator_for_rule_export(
             translation_key="no_network_console",
         )
     if console_id:
-        entry = _select_console(entries, console_id, "UniFi Network console")
+        matches = [e for e in entries if _entry_matches_console(e, console_id)]
+        if len(matches) != 1:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=(
+                    "export_target_ambiguous" if matches else "export_target_not_found"
+                ),
+                translation_placeholders={"target": console_id},
+            )
+        entry = matches[0]
         if site_id and not _entry_has_site(entry, site_id):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
@@ -2059,7 +2069,22 @@ def _get_coordinator_for_rule_export(
             translation_domain=DOMAIN,
             translation_key="export_console_required",
         )
-    coordinator, _ = _get_coordinator_for_network_resource(hass, site_id=site_id)
+    if site_id is not None and not any(_entry_has_site(e, site_id) for e in entries):
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="export_target_not_found",
+            translation_placeholders={"target": site_id},
+        )
+    try:
+        coordinator, _ = _get_coordinator_for_network_resource(hass, site_id=site_id)
+    except ServiceValidationError as err:
+        # The site exists, so what is left is the shared helper's untranslated
+        # "more than one console has this site" error.
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="export_target_ambiguous",
+            translation_placeholders={"target": str(site_id)},
+        ) from err
     return coordinator
 
 
@@ -2072,7 +2097,7 @@ async def _async_handle_export_network_rules(
         hass, site_id=site_id, console_id=call.data.get("console_id")
     )
     document: dict[str, Any] = await coordinator.async_export_network_rules(
-        [site_id] if site_id else None, call.data.get("rule_types")
+        [site_id] if site_id else None, call.data.get("rule_types") or None
     )
     if not document["sites"]:
         raise ServiceValidationError(

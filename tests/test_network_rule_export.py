@@ -1399,8 +1399,95 @@ async def test_service_console_selection(hass: HomeAssistant) -> None:
         "console": "Cabin",
     }
 
-    with pytest.raises(ServiceValidationError, match="No configured"):
+    with pytest.raises(ServiceValidationError) as err:
         await _call(hass, entries, {"console_id": "nope"})
+    assert err.value.translation_key == "export_target_not_found"
+    assert err.value.translation_placeholders == {"target": "nope"}
+
+
+@pytest.mark.parametrize(
+    ("data", "key", "target"),
+    [
+        ({"console_id": "bad"}, "export_target_not_found", "bad"),
+        ({"site_id": "bad"}, "export_target_not_found", "bad"),
+        ({"console_id": "UDM"}, "export_target_ambiguous", "UDM"),
+        ({"site_id": "site1"}, "export_target_ambiguous", "site1"),
+    ],
+)
+async def test_export_target_errors_are_translated(
+    hass: HomeAssistant, data: dict[str, Any], key: str, target: str
+) -> None:
+    """Unknown or ambiguous consoles and sites raise translated errors."""
+    coordinators = [MagicMock(), MagicMock()]
+    entries = [
+        _entry("UDM", coordinators[0], {"site1": {"id": "site1"}}),
+        _entry("UDM", coordinators[1], {"site1": {"id": "site1"}}),
+    ]
+    for coordinator in coordinators:
+        coordinator.async_export_network_rules = AsyncMock(return_value=_doc())
+
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, entries, data)
+
+    assert err.value.translation_domain == DOMAIN
+    assert err.value.translation_key == key
+    assert err.value.translation_placeholders == {"target": target}
+    for coordinator in coordinators:
+        coordinator.async_export_network_rules.assert_not_awaited()
+
+
+async def test_export_site_shared_by_two_consoles_is_resolved_by_console(
+    hass: HomeAssistant,
+) -> None:
+    """Naming the console by entry ID resolves a site that two consoles share."""
+    first, second = MagicMock(), MagicMock()
+    for coordinator in (first, second):
+        coordinator.async_export_network_rules = AsyncMock(return_value=_doc())
+    entries = [
+        _entry("UDM", first, {"site1": {"id": "site1"}}),
+        _entry("Cabin", second, {"site1": {"id": "site1"}}),
+    ]
+
+    await _call(hass, entries, {"site_id": "site1", "console_id": "id-Cabin"})
+
+    second.async_export_network_rules.assert_awaited_once_with(["site1"], None)
+    first.async_export_network_rules.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{}, {"rule_types": []}, {"rule_types": None}],
+    ids=["omitted", "[]", "None"],
+)
+async def test_service_empty_rule_types_exports_all(
+    hass: HomeAssistant, data: dict[str, Any]
+) -> None:
+    """No rule types selected means all six, through the real builder."""
+    site = {"site1": _SITES["site1"]}
+    client = _client()
+
+    async def export(
+        site_ids: list[str] | None, rule_types: list[str] | None
+    ) -> dict[str, Any]:
+        return await async_build_rule_export(
+            client,
+            site,
+            console=_CONSOLE,
+            site_ids=site_ids,
+            rule_types=rule_types,
+            is_unsupported=UnifiBaseCoordinator._is_unsupported_response,
+        )
+
+    coordinator = MagicMock()
+    coordinator.async_export_network_rules = AsyncMock(side_effect=export)
+
+    response = await _call(hass, [_entry("UDM", coordinator, site)], data)
+
+    types = response["sites"]["site-1"]["rule_types"]
+    assert tuple(types) == RULE_TYPES
+    for rule_type in RULE_TYPES:
+        _lister(client, rule_type).assert_awaited_once()
+    coordinator.async_export_network_rules.assert_awaited_once_with(None, None)
 
 
 async def test_service_without_console_or_sites(hass: HomeAssistant) -> None:
