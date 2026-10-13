@@ -19,6 +19,14 @@ from custom_components.unifi_insights.api.network.endpoints.port_forwards import
     PortForwardsEndpoint,
 )
 
+from custom_components.unifi_insights.api.network.models import (
+    FirewallRule,
+    NatRule,
+    PolicyBasedRoute,
+    PortForward,
+    StaticRoute,
+    TrafficRule,
+)
 from tests.test_coordinators import (
     _create_mock_model,
     _create_mock_network_client,
@@ -40,6 +48,8 @@ def coordinator(
     )
     client.sites.get_all = AsyncMock(return_value=[site])
     for endpoint, method in (
+        ("firewall", "list_rules"),
+        ("routes", "list_routes"),
         ("port_forwards", "list_port_forwards"),
         ("traffic_rules", "list_traffic_rules"),
         ("nat_rules", "list_nat_rules"),
@@ -51,24 +61,51 @@ def coordinator(
     )
 
 
+MODELS_BY_TYPE: dict[str, tuple[type, str]] = {
+    "firewall_rule": (FirewallRule, "name"),
+    "policy_based_route": (PolicyBasedRoute, "description"),
+    "port_forward": (PortForward, "name"),
+    "traffic_rule": (TrafficRule, "description"),
+    "nat_rule": (NatRule, "description"),
+    "static_route": (StaticRoute, "name"),
+}
+
+
+@pytest.mark.parametrize(
+    ("client_lister", "record_id_key", "rule_type"),
+    [
+        ("firewall.list_rules", "id", "firewall_rule"),
+        ("routes.list_routes", "_id", "policy_based_route"),
+        ("port_forwards.list_port_forwards", "_id", "port_forward"),
+        ("traffic_rules.list_traffic_rules", "_id", "traffic_rule"),
+        ("nat_rules.list_nat_rules", "_id", "nat_rule"),
+        ("static_routes.list_static_routes", "_id", "static_route"),
+    ],
+)
 async def test_first_refresh_is_silent_then_change_is_reported(
     coordinator: UnifiConfigCoordinator,
+    client_lister: str,
+    record_id_key: str,
+    rule_type: str,
 ) -> None:
     """First refresh establishes baseline; subsequent rule change is detected."""
-    pf1 = _create_mock_model({"id": "pf1", "name": "Port Forward 1", "enabled": True})
-    coordinator.network_client.port_forwards.list_port_forwards = AsyncMock(
-        return_value=[pf1]
+    model_cls, name_field = MODELS_BY_TYPE[rule_type]
+    rule_id = "test_rule_1"
+    model_on = model_cls(
+        **{record_id_key: rule_id, name_field: "Test Rule", "enabled": True}
     )
+    model_off = model_cls(
+        **{record_id_key: rule_id, name_field: "Test Rule", "enabled": False}
+    )
+
+    endpoint_name, method_name = client_lister.split(".")
+    endpoint = getattr(coordinator.network_client, endpoint_name)
+    setattr(endpoint, method_name, AsyncMock(return_value=[model_on]))
 
     await coordinator._async_update_data()
     assert coordinator.data["rule_changes"] == {}
 
-    pf1_disabled = _create_mock_model(
-        {"id": "pf1", "name": "Port Forward 1", "enabled": False}
-    )
-    coordinator.network_client.port_forwards.list_port_forwards = AsyncMock(
-        return_value=[pf1_disabled]
-    )
+    setattr(endpoint, method_name, AsyncMock(return_value=[model_off]))
 
     await coordinator._async_update_data()
     changes = coordinator.data["rule_changes"].get("default", [])
@@ -76,8 +113,8 @@ async def test_first_refresh_is_silent_then_change_is_reported(
     change = changes[0]
     assert (change["change_type"], change["rule_type"], change["rule_id"]) == (
         "modified",
-        "port_forward",
-        "pf1",
+        rule_type,
+        rule_id,
     )
     assert change["changed_fields"] == ["enabled"]
 

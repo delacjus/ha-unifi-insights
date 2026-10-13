@@ -7,7 +7,13 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-from .config_sections import is_predefined_firewall_rule, is_predefined_nat_rule
+from .config_sections import (
+    SECTION_OUTCOME_FAILED,
+    SECTION_OUTCOME_OK,
+    SECTION_OUTCOME_UNSUPPORTED,
+    is_predefined_firewall_rule,
+    is_predefined_nat_rule,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -23,9 +29,6 @@ RULE_CHANGE_TYPES: Final[tuple[str, ...]] = (
     RULE_CHANGE_DELETED,
 )
 
-SECTION_OUTCOME_OK: Final = "ok"
-SECTION_OUTCOME_UNSUPPORTED: Final = "unsupported"
-SECTION_OUTCOME_FAILED: Final = "failed"
 
 # Changes kept per site. A poll that produces more drops the oldest ones.
 RULE_CHANGE_BUFFER_SIZE: Final = 100

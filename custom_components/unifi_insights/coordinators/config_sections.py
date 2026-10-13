@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from custom_components.unifi_insights.api import UniFiAuthenticationError
 from custom_components.unifi_insights.api.network.models import is_predefined_nat_rule
@@ -19,7 +19,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+SECTION_OUTCOME_OK: Final = "ok"
+SECTION_OUTCOME_UNSUPPORTED: Final = "unsupported"
+SECTION_OUTCOME_FAILED: Final = "failed"
+
 __all__ = [
+    "SECTION_OUTCOME_FAILED",
+    "SECTION_OUTCOME_OK",
+    "SECTION_OUTCOME_UNSUPPORTED",
     "async_fetch_site_firewall",
     "async_fetch_site_routes",
     "async_fetch_site_rule_section",
@@ -413,10 +420,10 @@ async def async_fetch_site_routes(
             err,
         )
         if outcomes is not None:
-            outcomes[("policy_based_routes", site_id)] = "failed"
+            outcomes[("policy_based_routes", site_id)] = SECTION_OUTCOME_FAILED
         return {}
     if outcomes is not None:
-        outcomes[("policy_based_routes", site_id)] = "ok"
+        outcomes[("policy_based_routes", site_id)] = SECTION_OUTCOME_OK
     return routes_dict
 
 

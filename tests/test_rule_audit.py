@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from enum import Enum
+
 import json
 import logging
 from typing import Any
@@ -279,7 +282,16 @@ def test_change_records_hold_names_never_values() -> None:
     assert set(c.keys()) == expected_keys
     assert c["changed_fields"] == sorted(["domain", "dst", "enabled", "gw", "src"])
     dumped = json.dumps(changes)
-    for forbidden in ("192.0.2.53", "198.51.100.0/24", "blocked.example", "10.9.9.9"):
+    for forbidden in (
+        "192.0.2.53",
+        "198.51.100.0/24",
+        "blocked.example",
+        "10.9.9.9",
+        "192.0.2.54",
+        "198.51.100.0/25",
+        "other.example",
+        "10.9.9.8",
+    ):
         assert forbidden not in dumped
 
 
@@ -354,6 +366,20 @@ def test_buffer_is_bounded_and_overflow_is_logged(
     assert any("only the newest" in record.message for record in caplog.records)
     assert not any("Rule 0" in record.message for record in caplog.records)
 
+    # 60 changes, then 60 more -> 100 kept and NO overflow warning in caplog for second batch
+    tracker2 = RuleAuditTracker()
+    tracker2.process(_data(), _ALL_OK)
+    batch1 = {f"b1_{i}": {"name": f"B1 {i}", "enabled": True} for i in range(60)}
+    tracker2.process(_data(firewall_rules={"s1": batch1}), _ALL_OK)
+
+    caplog.clear()
+    batch2 = dict(batch1)
+    batch2.update({f"b2_{i}": {"name": f"B2 {i}", "enabled": True} for i in range(60)})
+    with caplog.at_level(logging.WARNING):
+        res2 = tracker2.process(_data(firewall_rules={"s1": batch2}), _ALL_OK)
+    assert len(res2["s1"]) == RULE_CHANGE_BUFFER_SIZE
+    assert not any("only the newest" in record.message for record in caplog.records)
+
 
 @pytest.mark.parametrize(
     "malformed",
@@ -371,6 +397,23 @@ def test_malformed_data_is_tolerated(malformed: dict[str, Any]) -> None:
     tracker = RuleAuditTracker()
     assert tracker.process(malformed, _ALL_OK) == {}
     assert tracker.process(malformed, _ALL_OK) == {}
+
+    # One-rule baseline first, then malformed data -> {}, then the rule again -> {}
+    good_data = _data(firewall_rules={"s1": {"r1": {"name": "R1", "enabled": True}}})
+    tracker2 = RuleAuditTracker()
+    tracker2.process(good_data, _ALL_OK)
+    res_malformed = tracker2.process(malformed, _ALL_OK)
+    assert res_malformed == {}
+    res_again = tracker2.process(good_data, _ALL_OK)
+    assert res_again == {}
+
+    if malformed.get("firewall_rules") is None and malformed.get("sites"):
+        # A malformed section does not count as empty; a following empty poll is held pending (kills R10)
+        empty_data = _data(firewall_rules={"s1": {}})
+        tracker3 = RuleAuditTracker()
+        tracker3.process(good_data, _ALL_OK)
+        tracker3.process(malformed, _ALL_OK)
+        assert tracker3.process(empty_data, _ALL_OK) == {}
 
 
 def test_returned_lists_are_copies() -> None:
@@ -644,3 +687,87 @@ def test_persistent_error_is_logged_once(
 
     error_records_after = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(error_records_after) == 2
+
+
+class _DummyEnum(str, Enum):
+    ALPHA = "alpha"
+    BETA = "beta"
+
+
+def test_nested_key_order_is_not_a_change() -> None:
+    """Nested key order differences do not trigger a change."""
+    tracker = RuleAuditTracker()
+    tracker.process(
+        _data(
+            firewall_rules={
+                "s1": {"r1": {"name": "R", "enabled": True, "src": {"a": 1, "b": 2}}}
+            }
+        ),
+        _ALL_OK,
+    )
+    res = tracker.process(
+        _data(
+            firewall_rules={
+                "s1": {"r1": {"name": "R", "enabled": True, "src": {"b": 2, "a": 1}}}
+            }
+        ),
+        _ALL_OK,
+    )
+    assert res == {}
+
+
+def test_non_json_values_are_compared_not_raised() -> None:
+    """Records with non-JSON types (datetime, Enum) compare cleanly via default=str."""
+    tracker = RuleAuditTracker()
+    r1 = {
+        "name": "R",
+        "enabled": True,
+        "ts": datetime(2026, 1, 1, tzinfo=UTC),
+        "status": _DummyEnum.ALPHA,
+    }
+    tracker.process(_data(firewall_rules={"s1": {"r1": r1}}), _ALL_OK)
+
+    # Unchanged
+    res_same = tracker.process(_data(firewall_rules={"s1": {"r1": r1}}), _ALL_OK)
+    assert res_same == {}
+
+    # Changed
+    r2 = {
+        "name": "R",
+        "enabled": True,
+        "ts": datetime(2026, 1, 2, tzinfo=UTC),
+        "status": _DummyEnum.BETA,
+    }
+    res_diff = tracker.process(_data(firewall_rules={"s1": {"r1": r2}}), _ALL_OK)
+    assert len(res_diff["s1"]) == 1
+    assert res_diff["s1"][0]["change_type"] == "modified"
+
+
+def test_removed_key_is_a_changed_field() -> None:
+    """A key removed in the new record is reported in changed_fields."""
+    tracker = RuleAuditTracker()
+    tracker.process(
+        _data(
+            firewall_rules={"s1": {"r1": {"name": "R", "enabled": True, "note": "x"}}}
+        ),
+        _ALL_OK,
+    )
+    res = tracker.process(
+        _data(firewall_rules={"s1": {"r1": {"name": "R", "enabled": True}}}),
+        _ALL_OK,
+    )
+    assert len(res["s1"]) == 1
+    assert res["s1"][0]["changed_fields"] == ["note"]
+
+
+@pytest.mark.parametrize("val", ["true", 1])
+def test_non_bool_enabled_is_reported_as_none(val: Any) -> None:
+    """Non-boolean enabled values are reported as None in change records."""
+    tracker = RuleAuditTracker()
+    tracker.process(_data(firewall_rules={"s1": {}}), _ALL_OK)
+    res = tracker.process(
+        _data(firewall_rules={"s1": {"r1": {"name": "R", "enabled": val}}}),
+        _ALL_OK,
+    )
+    assert len(res["s1"]) == 1
+    assert res["s1"][0]["enabled"] is None

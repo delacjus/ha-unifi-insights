@@ -7895,56 +7895,116 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.async_request_refresh.assert_awaited_once()
         assert exc_info.value.translation_key == "network_rule_console_managed"
 
+    @pytest.mark.parametrize(
+        ("setter_name", "endpoint_mock_path", "rule_type_placeholder"),
+        [
+            ("async_set_nat_rule_enabled", "nat_rules.update_nat_rule", "NAT rule"),
+            (
+                "async_set_static_route_enabled",
+                "static_routes.update_static_route",
+                "static route",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_async_set_nat_rule_enabled_not_found_is_translated(
-        self, facade_coordinator: UnifiFacadeCoordinator
+    async def test_async_set_new_rule_enabled_not_found_is_translated(
+        self,
+        facade_coordinator: UnifiFacadeCoordinator,
+        setter_name: str,
+        endpoint_mock_path: str,
+        rule_type_placeholder: str,
     ) -> None:
-        """Disappeared NAT rule toggle raises translated not_found error."""
+        """Disappeared rule toggle raises translated not_found error and requests refresh."""
+        if "nat" in setter_name:
+            section_key = "nat_rules"
+            rule_id = "nat1"
+            rule_record = {"description": "DNS"}
+            expected_name = "DNS"
+        else:
+            section_key = "static_routes"
+            rule_id = "sr1"
+            rule_record = {"name": "Lab"}
+            expected_name = "Lab"
+
         facade_coordinator._config_coordinator.data = {
             "sites": {"site1": {"id": "site1", "internalReference": "default"}},
-            "nat_rules": {"site1": {"nat1": {"description": "DNS"}}},
+            section_key: {"site1": {rule_id: rule_record}},
         }
-        facade_coordinator.network_client.nat_rules.update_nat_rule = AsyncMock(
-            side_effect=UniFiNotFoundError("Rule nat1 not found", status_code=404)
+        ep_name, meth_name = endpoint_mock_path.split(".")
+        setattr(
+            getattr(facade_coordinator.network_client, ep_name),
+            meth_name,
+            AsyncMock(
+                side_effect=UniFiNotFoundError(
+                    f"Rule {rule_id} not found", status_code=404
+                )
+            ),
         )
         facade_coordinator.async_request_refresh = AsyncMock()
 
+        setter = getattr(facade_coordinator, setter_name)
         with pytest.raises(HomeAssistantError) as exc_info:
-            await facade_coordinator.async_set_nat_rule_enabled(
-                "site1", "nat1", enabled=True
-            )
+            await setter("site1", rule_id, enabled=True)
 
         assert exc_info.value.translation_domain == DOMAIN
         assert exc_info.value.translation_key == "network_rule_not_found"
         assert exc_info.value.translation_placeholders == {
-            "rule_type": "NAT rule",
-            "rule_name": "DNS",
+            "rule_type": rule_type_placeholder,
+            "rule_name": expected_name,
         }
         facade_coordinator.async_request_refresh.assert_awaited_once()
 
+    @pytest.mark.parametrize(
+        ("setter_name", "endpoint_mock_path", "rule_type_placeholder"),
+        [
+            ("async_set_nat_rule_enabled", "nat_rules.update_nat_rule", "NAT rule"),
+            (
+                "async_set_static_route_enabled",
+                "static_routes.update_static_route",
+                "static route",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_async_set_static_route_enabled_api_error_is_translated(
-        self, facade_coordinator: UnifiFacadeCoordinator
+    async def test_async_set_new_rule_enabled_api_error_is_translated(
+        self,
+        facade_coordinator: UnifiFacadeCoordinator,
+        setter_name: str,
+        endpoint_mock_path: str,
+        rule_type_placeholder: str,
     ) -> None:
-        """API error during static route toggle raises translated error."""
+        """API error during rule toggle raises translated error."""
+        if "nat" in setter_name:
+            section_key = "nat_rules"
+            rule_id = "nat1"
+            rule_record = {"description": "DNS"}
+            expected_name = "DNS"
+        else:
+            section_key = "static_routes"
+            rule_id = "sr1"
+            rule_record = {"name": "Lab"}
+            expected_name = "Lab"
+
         facade_coordinator._config_coordinator.data = {
             "sites": {"site1": {"id": "site1", "internalReference": "default"}},
-            "static_routes": {"site1": {"sr1": {"name": "Lab"}}},
+            section_key: {"site1": {rule_id: rule_record}},
         }
-        facade_coordinator.network_client.static_routes.update_static_route = AsyncMock(
-            side_effect=UniFiConnectionError("Connection failed")
+        ep_name, meth_name = endpoint_mock_path.split(".")
+        setattr(
+            getattr(facade_coordinator.network_client, ep_name),
+            meth_name,
+            AsyncMock(side_effect=UniFiConnectionError("Connection failed")),
         )
 
+        setter = getattr(facade_coordinator, setter_name)
         with pytest.raises(HomeAssistantError) as exc_info:
-            await facade_coordinator.async_set_static_route_enabled(
-                "site1", "sr1", enabled=True
-            )
+            await setter("site1", rule_id, enabled=True)
 
         assert exc_info.value.translation_domain == DOMAIN
         assert exc_info.value.translation_key == "network_rule_update_failed"
         assert exc_info.value.translation_placeholders == {
-            "rule_type": "static route",
-            "rule_name": "Lab",
+            "rule_type": rule_type_placeholder,
+            "rule_name": expected_name,
         }
 
     @pytest.mark.asyncio
