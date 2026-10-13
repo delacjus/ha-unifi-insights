@@ -8,9 +8,11 @@ blueprint:
     **Track Wired Clients** in the integration options. This blueprint reacts
     to the creation of a new tracker, so it does nothing until client tracking
     is on. Enabling client tracking for the first time creates many trackers
-    at once, and every one that matches your secure prefixes runs the actions.
-    Enable tracking first and add this automation afterwards if you do not
-    want that burst.
+    at once, and each one that matches your secure prefixes runs the actions,
+    but only 100 runs can be active at the same time. Runs beyond 100
+    concurrent runs are dropped, so a large burst can miss clients. Enable
+    tracking first and add this automation afterwards if you do not want that
+    burst.
 
     **How the VLAN is found:** trackers carry no VLAN or network name, so the
     VLAN is inferred from the client IP address. Each secure VLAN needs its own
