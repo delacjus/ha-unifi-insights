@@ -1413,30 +1413,37 @@ async def test_ap_overload_runs_repeat_actions_with_action_scope_templates(
         pytest.param("00:05:00", 300, id="hh-mm-ss"),
         pytest.param("00:05", 300, id="hh-mm"),
         pytest.param(300, 300, id="seconds"),
+        pytest.param("01:30:15", 5415, id="hh-mm-ss-with-hours-and-seconds"),
+        pytest.param("01:30", 5400, id="hh-mm-with-hours"),
+        pytest.param(
+            {"hours": 1, "minutes": 30, "seconds": 15},
+            5415,
+            id="mapping-with-hours-and-seconds",
+        ),
     ],
 )
-@pytest.mark.parametrize("elapsed", [299, 300], ids=["one-second-short", "at-delay"])
+@pytest.mark.parametrize("shortfall", [1, 0], ids=["one-second-short", "at-delay"])
 async def test_recovery_accepts_string_offline_delay(
     hass: HomeAssistant,
     *,
     freezer: FrozenDateTimeFactory,
     blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
-    offline_delay: str | int,
+    offline_delay: str | int | dict[str, int],
     delay_seconds: int,
-    elapsed: int,
+    shortfall: int,
 ) -> None:
     """Duration forms permit recovery only once the full delay has elapsed."""
     hass.states.async_set(SWITCH_ONLINE, "off")
     await _use_blueprint(
         hass, INFRASTRUCTURE_OFFLINE, _offline_inputs(offline_delay=offline_delay)
     )
-    await _advance(hass, freezer, seconds=elapsed)
+    await _advance(hass, freezer, seconds=delay_seconds - shortfall)
     await _set_state(hass, SWITCH_ONLINE, "on")
     assert _data(calls) == (
-        [{"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}]
-        if elapsed == delay_seconds
-        else []
+        []
+        if shortfall
+        else [{"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}]
     )
 
 
