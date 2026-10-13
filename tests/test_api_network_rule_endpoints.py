@@ -17,18 +17,30 @@ from custom_components.unifi_insights.api import (
     UniFiResponseError,
 )
 from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
+from custom_components.unifi_insights.api.network.endpoints.nat_rules import (
+    NatRulesEndpoint,
+)
 from custom_components.unifi_insights.api.network.endpoints.port_forwards import (
     PortForwardsEndpoint,
+)
+from custom_components.unifi_insights.api.network.endpoints.static_routes import (
+    StaticRoutesEndpoint,
 )
 from custom_components.unifi_insights.api.network.endpoints.traffic_rules import (
     TrafficRulesEndpoint,
 )
+from custom_components.unifi_insights.api.network.models.nat_rule import NatRule
 from custom_components.unifi_insights.api.network.models.port_forward import PortForward
+from custom_components.unifi_insights.api.network.models.static_route import StaticRoute
 from custom_components.unifi_insights.api.network.models.traffic_rule import TrafficRule
 from tests.fixtures.network_rule_responses import (
     AIOUNIFI_TRAFFIC_RULE_KEYS,
     LIVE_PORT_FORWARD_KEYS,
+    REFERENCE_NAT_RULE_KEYS,
+    REFERENCE_STATIC_ROUTE_KEYS,
+    nat_rule_record,
     port_forward_record,
+    static_route_record,
     traffic_rule_record,
 )
 
@@ -584,3 +596,444 @@ def test_rule_models_require_string_id() -> None:
     assert tr2.id == "tr-2"
     with pytest.raises(ValidationError):
         TrafficRule.model_validate({})
+
+
+def test_nat_rule_fixture_matches_reference_key_set() -> None:
+    """NAT rule fixture matches exactly the reference key set."""
+    record = nat_rule_record()
+    assert set(record.keys()) == REFERENCE_NAT_RULE_KEYS
+    assert len(REFERENCE_NAT_RULE_KEYS) == 17
+
+
+async def test_list_nat_rules_local_v2_path_and_models() -> None:
+    """List NAT rules calls local v2 path with bare list and parses models."""
+    rec = nat_rule_record()
+    session = _Session([rec])  # BARE LIST
+    client = _client(session)
+
+    rules = await client.nat_rules.list_nat_rules("default")
+
+    assert len(session.requests) == 1
+    _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
+    assert len(rules) == 1
+    rule = rules[0]
+    assert rule.id == "nat-dns"
+    assert rule.description == "All DNS to resolver"
+    assert rule.enabled is True
+    dumped = rule.model_dump(by_alias=True)
+    assert dumped["ip_address"] == "192.0.2.53"
+
+
+async def test_list_nat_rules_remote_connector_path() -> None:
+    """List NAT rules uses cloud connector v2 path on remote connection."""
+    session = _Session([nat_rule_record()])
+    client = _remote_client(session)
+
+    rules = await client.nat_rules.list_nat_rules("default")
+
+    assert len(rules) == 1
+    assert len(session.requests) == 1
+    assert (
+        session.requests[0]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/v2/api/site/default/nat"
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_count"),
+    [
+        ([nat_rule_record()], 1),
+        ({"data": [nat_rule_record()]}, 1),
+        ({"meta": {"rc": "ok"}, "data": [nat_rule_record()]}, 1),
+        ({"data": nat_rule_record()}, 1),
+        (None, 0),
+        ("not-a-dict", 0),
+        ([nat_rule_record(), "invalid", 123, None, {"description": "no-id"}], 1),
+    ],
+)
+async def test_list_nat_rules_response_envelopes(
+    payload: Any, expected_count: int
+) -> None:
+    """List NAT rules tolerates various response envelope formats."""
+    session = _Session([payload])
+    client = _client(session)
+
+    rules = await client.nat_rules.list_nat_rules("default")
+    assert len(rules) == expected_count
+
+
+async def test_list_nat_rules_meta_error_raises() -> None:
+    """List NAT rules raises UniFiResponseError when meta rc is error."""
+    session = _Session([{"meta": {"rc": "error", "msg": "API error"}}])
+    client = _client(session)
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.nat_rules.list_nat_rules("default")
+    assert exc_info.value.message == "API error"
+
+
+async def test_list_nat_rules_skips_items_without_string_id() -> None:
+    """List NAT rules skips items that fail validation due to missing string id."""
+    bad_items = [{"description": "no id"}, {"_id": 5}, nat_rule_record()]
+    session = _Session([bad_items])
+    client = _client(session)
+
+    rules = await client.nat_rules.list_nat_rules("default")
+    assert len(rules) == 1
+    assert rules[0].id == "nat-dns"
+
+
+async def test_update_nat_rule_puts_full_record_with_only_enabled_changed() -> None:
+    """Update NAT rule performs GET then PUT of full record with enabled changed."""
+    original = nat_rule_record(enabled=True)
+    updated = dict(original)
+    updated["enabled"] = False
+
+    session = _Session([[original], updated])
+    client = _client(session)
+
+    result = await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+
+    assert len(session.requests) == 2
+    _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
+    _assert_request(
+        session.requests[1],
+        "PUT",
+        "/v2/api/site/default/nat/nat-dns",
+        body=updated,
+    )
+    assert set(session.requests[1]["json"].keys()) == REFERENCE_NAT_RULE_KEYS
+    assert session.requests[1]["json"]["source_filter"] == original["source_filter"]
+    assert (
+        session.requests[1]["json"]["destination_filter"]
+        == original["destination_filter"]
+    )
+    assert original["enabled"] is True  # not mutated
+    assert result.enabled is False
+
+
+async def test_update_nat_rule_remote_connector_path() -> None:
+    """Update NAT rule uses cloud connector v2 path on remote connection."""
+    original = nat_rule_record(enabled=True)
+    updated = dict(original)
+    updated["enabled"] = False
+
+    session = _Session([[original], updated])
+    client = _remote_client(session)
+
+    result = await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+
+    assert len(session.requests) == 2
+    assert (
+        session.requests[0]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/v2/api/site/default/nat"
+    )
+    assert (
+        session.requests[1]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/v2/api/site/default/nat/nat-dns"
+    )
+    assert session.requests[1]["json"] == updated
+    assert result.enabled is False
+
+
+async def test_update_nat_rule_not_found_raises_and_sends_no_put() -> None:
+    """Update NAT rule raises UniFiNotFoundError if rule not found."""
+    session = _Session([[nat_rule_record()]])
+    client = _client(session)
+
+    with pytest.raises(UniFiNotFoundError) as exc_info:
+        await client.nat_rules.update_nat_rule("default", "nat-missing", enabled=False)
+    assert "NAT rule nat-missing not found" in exc_info.value.args[0]
+    assert len(session.requests) == 1
+
+
+@pytest.mark.parametrize("put_response", [[], {}])
+async def test_update_nat_rule_uses_payload_when_put_echo_missing(
+    put_response: Any,
+) -> None:
+    """Update NAT rule falls back to payload when PUT echo is missing."""
+    original = nat_rule_record(enabled=True)
+    session = _Session([[original], put_response])
+    client = _client(session)
+
+    result = await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+    assert result.id == "nat-dns"
+    assert result.enabled is False
+
+
+async def test_update_nat_rule_put_meta_error_raises() -> None:
+    """Update NAT rule raises UniFiResponseError when PUT response is error."""
+    original = nat_rule_record(enabled=True)
+    session = _Session(
+        [
+            [original],
+            {"meta": {"rc": "error", "msg": "Write failed"}},
+        ]
+    )
+    client = _client(session)
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+    assert exc_info.value.message == "Write failed"
+
+
+def test_static_route_fixture_matches_reference_key_set() -> None:
+    """Static route fixture matches exactly the reference key set."""
+    record = static_route_record()
+    assert set(record.keys()) == REFERENCE_STATIC_ROUTE_KEYS
+    assert len(REFERENCE_STATIC_ROUTE_KEYS) == 11
+
+
+async def test_list_static_routes_local_path_and_models() -> None:
+    """List static routes calls local classic path and parses models."""
+    rec = static_route_record()
+    session = _Session([{"meta": {"rc": "ok"}, "data": [rec]}])
+    client = _client(session)
+
+    routes = await client.static_routes.list_static_routes("default")
+
+    assert len(session.requests) == 1
+    _assert_request(session.requests[0], "GET", "/api/s/default/rest/routing")
+    assert len(routes) == 1
+    route = routes[0]
+    assert route.id == "route-lab"
+    assert route.name == "Lab"
+    assert route.enabled is True
+    dumped = route.model_dump(by_alias=True)
+    assert dumped["static-route_network"] == "192.168.2.0/24"
+
+
+async def test_list_static_routes_remote_connector_path() -> None:
+    """List static routes uses cloud connector path on remote connection."""
+    session = _Session([{"meta": {"rc": "ok"}, "data": [static_route_record()]}])
+    client = _remote_client(session)
+
+    routes = await client.static_routes.list_static_routes("default")
+
+    assert len(routes) == 1
+    assert len(session.requests) == 1
+    assert (
+        session.requests[0]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/api/s/default/rest/routing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_count"),
+    [
+        ([static_route_record()], 1),
+        ({"meta": {"rc": "ok"}, "data": [static_route_record()]}, 1),
+        ({"data": static_route_record()}, 1),
+        ({"data": "unexpected"}, 0),
+        (None, 0),
+        ("not-a-dict", 0),
+        ([static_route_record(), "invalid", 123, None], 1),
+    ],
+)
+async def test_list_static_routes_response_envelopes(
+    payload: Any, expected_count: int
+) -> None:
+    """List static routes tolerates various response envelope formats."""
+    session = _Session([payload])
+    client = _client(session)
+
+    routes = await client.static_routes.list_static_routes("default")
+    assert len(routes) == expected_count
+
+
+async def test_list_static_routes_meta_error_raises() -> None:
+    """List static routes raises UniFiResponseError when meta rc is error."""
+    session = _Session([{"meta": {"rc": "error", "msg": "API error"}}])
+    client = _client(session)
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.static_routes.list_static_routes("default")
+    assert exc_info.value.message == "API error"
+
+
+async def test_list_static_routes_skips_items_without_string_id() -> None:
+    """List static routes skips items that fail validation due to missing string id."""
+    bad_items = [{"name": "No ID"}, {"_id": 5}, static_route_record()]
+    session = _Session([[bad_items[0], bad_items[1], bad_items[2]]])
+    client = _client(session)
+
+    routes = await client.static_routes.list_static_routes("default")
+    assert len(routes) == 1
+    assert routes[0].id == "route-lab"
+
+
+async def test_update_static_route_puts_full_record_with_only_enabled_changed() -> None:
+    """Update static route performs GET then PUT of full record with enabled changed."""
+    original = static_route_record(enabled=True)
+    updated = dict(original)
+    updated["enabled"] = False
+
+    session = _Session(
+        [
+            {"meta": {"rc": "ok"}, "data": [original]},
+            {"meta": {"rc": "ok"}, "data": [updated]},
+        ]
+    )
+    client = _client(session)
+
+    result = await client.static_routes.update_static_route(
+        "default", "route-lab", enabled=False
+    )
+
+    assert len(session.requests) == 2
+    _assert_request(session.requests[0], "GET", "/api/s/default/rest/routing")
+    _assert_request(
+        session.requests[1],
+        "PUT",
+        "/api/s/default/rest/routing/route-lab",
+        body=updated,
+    )
+    assert set(session.requests[1]["json"].keys()) == REFERENCE_STATIC_ROUTE_KEYS
+    assert "static-route_network" in session.requests[1]["json"]
+    assert original["enabled"] is True  # not mutated
+    assert result.enabled is False
+
+
+async def test_update_static_route_remote_connector_path() -> None:
+    """Update static route uses cloud connector path on remote connection."""
+    original = static_route_record(enabled=True)
+    updated = dict(original)
+    updated["enabled"] = False
+
+    session = _Session(
+        [
+            {"meta": {"rc": "ok"}, "data": [original]},
+            {"meta": {"rc": "ok"}, "data": [updated]},
+        ]
+    )
+    client = _remote_client(session)
+
+    result = await client.static_routes.update_static_route(
+        "default", "route-lab", enabled=False
+    )
+
+    assert len(session.requests) == 2
+    assert (
+        session.requests[0]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/api/s/default/rest/routing"
+    )
+    assert (
+        session.requests[1]["url"]
+        == "https://api.ui.com/v1/connector/consoles/console-1/network/api/s/default/rest/routing/route-lab"
+    )
+    assert session.requests[1]["json"] == updated
+    assert result.enabled is False
+
+
+async def test_update_static_route_not_found_raises_and_sends_no_put() -> None:
+    """Update static route raises UniFiNotFoundError if route not found."""
+    session = _Session([{"meta": {"rc": "ok"}, "data": [static_route_record()]}])
+    client = _client(session)
+
+    with pytest.raises(UniFiNotFoundError) as exc_info:
+        await client.static_routes.update_static_route(
+            "default", "route-missing", enabled=False
+        )
+    assert "Static route route-missing not found" in exc_info.value.args[0]
+    assert len(session.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "put_response",
+    [
+        {"meta": {"rc": "ok"}, "data": []},
+        {},
+    ],
+)
+async def test_update_static_route_uses_payload_when_put_echo_missing(
+    put_response: Any,
+) -> None:
+    """Update static route falls back to payload when PUT echo is missing."""
+    original = static_route_record(enabled=True)
+    session = _Session(
+        [
+            {"meta": {"rc": "ok"}, "data": [original]},
+            put_response,
+        ]
+    )
+    client = _client(session)
+
+    result = await client.static_routes.update_static_route(
+        "default", "route-lab", enabled=False
+    )
+    assert result.id == "route-lab"
+    assert result.enabled is False
+
+
+async def test_update_static_route_put_meta_error_raises() -> None:
+    """Update static route raises UniFiResponseError when PUT response is error."""
+    original = static_route_record(enabled=True)
+    session = _Session(
+        [
+            {"meta": {"rc": "ok"}, "data": [original]},
+            {"meta": {"rc": "error", "msg": "Write failed"}},
+        ]
+    )
+    client = _client(session)
+
+    with pytest.raises(UniFiResponseError) as exc_info:
+        await client.static_routes.update_static_route(
+            "default", "route-lab", enabled=False
+        )
+    assert exc_info.value.message == "Write failed"
+
+
+@pytest.mark.parametrize("endpoint_name", ["nat_rules", "static_routes"])
+@pytest.mark.parametrize(
+    ("status", "body", "expected_exc", "is_json"),
+    [
+        (401, {"error": "unauthorized"}, UniFiAuthenticationError, True),
+        (403, {"error": "forbidden"}, UniFiAuthenticationError, True),
+        (404, {"error": "not found"}, UniFiNotFoundError, True),
+        (200, "<html>Bad Gateway</html>", UniFiResponseError, False),
+    ],
+)
+async def test_nat_and_static_route_endpoints_map_http_errors(
+    endpoint_name: str,
+    status: int,
+    body: Any,
+    expected_exc: type[Exception],
+    is_json: bool,  # noqa: FBT001
+) -> None:
+    """NAT and static route list endpoints map HTTP errors to exceptions."""
+    session = _Session([_Response(body, status=status, is_json=is_json)])
+    client = _client(session)
+
+    coro = (
+        client.nat_rules.list_nat_rules("default")
+        if endpoint_name == "nat_rules"
+        else client.static_routes.list_static_routes("default")
+    )
+    with pytest.raises(expected_exc) as exc_info:
+        await coro
+
+    assert exc_info.value.status_code == status
+
+
+def test_client_registers_nat_and_static_route_endpoints() -> None:
+    """Client exposes nat_rules and static_routes endpoint properties."""
+    client = _client(_Session([]))
+    assert isinstance(client.nat_rules, NatRulesEndpoint)
+    assert isinstance(client.static_routes, StaticRoutesEndpoint)
+
+
+def test_nat_and_static_route_models_require_string_id() -> None:
+    """Both models require id and accept id or _id alias."""
+    nr1 = NatRule.model_validate({"_id": "nat-1"})
+    assert nr1.id == "nat-1"
+    nr2 = NatRule.model_validate({"id": "nat-2"})
+    assert nr2.id == "nat-2"
+    with pytest.raises(ValidationError):
+        NatRule.model_validate({})
+
+    sr1 = StaticRoute.model_validate({"_id": "sr-1"})
+    assert sr1.id == "sr-1"
+    sr2 = StaticRoute.model_validate({"id": "sr-2"})
+    assert sr2.id == "sr-2"
+    with pytest.raises(ValidationError):
+        StaticRoute.model_validate({})
