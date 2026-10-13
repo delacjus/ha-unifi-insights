@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from freezegun import api as freezegun_api
 from homeassistant.components.automation.helpers import async_get_blueprints
 from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
 from homeassistant.components.device_tracker import ScannerEntity, SourceType
@@ -35,7 +36,7 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.unifi_insights.const import CONF_TRACK_WIFI_CLIENTS, DOMAIN
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from unittest.mock import MagicMock
 
     from freezegun.api import FrozenDateTimeFactory
@@ -48,6 +49,11 @@ INFRASTRUCTURE_OFFLINE = "infrastructure_offline_alert.yaml"
 SECURE_VLAN = "secure_vlan_new_client_alert.yaml"
 ALL_BLUEPRINTS = (AP_OVERLOAD, INFRASTRUCTURE_OFFLINE, SECURE_VLAN)
 AUTOMATION_ENTITY_ID = "automation.blueprint_under_test"
+
+# Real seconds a test waits for a run to reach the state it expects, and for the
+# event loop to react to one simulated second of the freezer.
+WAIT_TIMEOUT_SECONDS = 10.0
+STEP_SETTLE_SECONDS = 0.02
 
 # The version floor of this integration (hacs.json "homeassistant").
 MIN_HOME_ASSISTANT_VERSION = "2026.6.0"
@@ -362,18 +368,72 @@ async def _advance(
     await hass.async_block_till_done()
 
 
+def _active_runs(hass: HomeAssistant) -> int:
+    """Return how many runs of the automation under test are active or queued."""
+    state = hass.states.get(AUTOMATION_ENTITY_ID)
+    assert state is not None
+    return int(state.attributes["current"])
+
+
+async def _poll(condition: Callable[[], bool], seconds: float) -> bool:
+    """Let the event loop run until ``condition`` holds or ``seconds`` have passed.
+
+    The freezer also freezes the loop clock, so the limit is measured with the
+    real clock; ``asyncio.sleep`` with a positive delay would never return.
+    ``freezegun_api.real_monotonic`` is read through the module on purpose:
+    freezegun replaces a real clock function imported into any other namespace.
+    """
+    deadline = freezegun_api.real_monotonic() + seconds
+    while not condition():
+        if freezegun_api.real_monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0)
+    return True
+
+
+async def _wait_until(condition: Callable[[], bool], expected: str) -> None:
+    """Wait for ``condition`` without moving time, or fail with what was expected.
+
+    Runs parked on a ``delay`` or a ``wait_template`` must be observed through
+    their run count or their recorded calls: ``async_block_till_done`` would
+    wait for them to finish, which is exactly what the caller wants to watch.
+    """
+    if not await _poll(condition, WAIT_TIMEOUT_SECONDS):
+        pytest.fail(f"Timed out after {WAIT_TIMEOUT_SECONDS:g} s waiting for {expected}")
+
+
 async def _advance_while_runs_wait(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, **delta: int
 ) -> None:
-    """Move time forward without waiting for runs parked on a ``delay`` action.
+    """Move time forward and fire the due timers, without waiting for any run.
 
-    ``async_block_till_done`` would wait for those runs to finish, which is
-    exactly what the caller wants to observe step by step.
+    The caller then waits for what it expects with ``_wait_until``.
     """
     freezer.tick(timedelta(**delta))
     async_fire_time_changed(hass)
-    for _ in range(25):
-        await asyncio.sleep(0)
+
+
+async def _advance_until(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    condition: Callable[[], bool],
+    expected: str,
+    *,
+    limit_seconds: int = 30,
+) -> None:
+    """Let simulated time pass one second at a time until ``condition`` holds.
+
+    A ``delay`` or a timeout only starts counting when its run reaches it, so one
+    big step could pass before the timer exists. Small steps cannot miss it, and
+    each step gives the event loop a moment to react before the next tick.
+    """
+    for _ in range(limit_seconds):
+        await _advance_while_runs_wait(hass, freezer, seconds=1)
+        if await _poll(condition, STEP_SETTLE_SECONDS):
+            return
+    pytest.fail(
+        f"Timed out after {limit_seconds} simulated seconds waiting for {expected}"
+    )
 
 
 async def _set_state(
@@ -599,12 +659,17 @@ async def test_ap_overload_alerts_for_two_access_points_at_the_same_time(
     hass.states.async_set(AP_CLIENTS, "40")
     hass.states.async_set(AP_CLIENTS_2, "41")
     await hass.async_block_till_done()
-    # Both timers fire together; the first run parks on its delay.
+    # Both timers fire together; the first run parks on its delay, the second queues.
     await _advance_while_runs_wait(hass, freezer, minutes=6)
+    await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
     assert calls == []
-    await _advance_while_runs_wait(hass, freezer, seconds=6)
+    await _advance_until(
+        hass, freezer, lambda: len(calls) >= 1, "the first run to record its call"
+    )
     assert len(calls) == 1
-    await _advance_while_runs_wait(hass, freezer, seconds=6)
+    await _advance_until(
+        hass, freezer, lambda: len(calls) >= 2, "the queued run to record its call"
+    )
     await hass.async_block_till_done()
 
     assert sorted(call["entity"] for call in _data(calls)) == sorted(
@@ -810,11 +875,17 @@ async def test_offline_alerts_for_several_devices_that_fail_together(
     hass.states.async_set(SWITCH_ONLINE, STATE_UNAVAILABLE)
     hass.states.async_set(SWITCH_2_ONLINE, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
+    # Both timers fire together; the first run parks on its delay, the second queues.
     await _advance_while_runs_wait(hass, freezer, minutes=6)
+    await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
     assert calls == []
-    await _advance_while_runs_wait(hass, freezer, seconds=6)
+    await _advance_until(
+        hass, freezer, lambda: len(calls) >= 1, "the first run to record its call"
+    )
     assert len(calls) == 1
-    await _advance_while_runs_wait(hass, freezer, seconds=6)
+    await _advance_until(
+        hass, freezer, lambda: len(calls) >= 2, "the queued run to record its call"
+    )
     await hass.async_block_till_done()
 
     assert sorted(call["entity"] for call in _data(calls)) == sorted(
@@ -1099,10 +1170,13 @@ async def test_new_secure_clients_that_connect_together_all_run_slow_actions(
         _client(23, "Second Camera", "10.0.50.23"),
     ]
     await tracking_entry.runtime_data.device_coordinator.async_refresh()
-    await _advance_while_runs_wait(hass, freezer, seconds=1)
+    # Parallel mode: both runs are alive at once, each parked on its slow action.
+    await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
     assert calls == []
 
-    await _advance_while_runs_wait(hass, freezer, seconds=6)
+    await _advance_until(
+        hass, freezer, lambda: len(calls) >= 2, "both runs to record their call"
+    )
     await hass.async_block_till_done()
 
     assert sorted(call["name"] for call in _data(calls)) == [
@@ -1219,15 +1293,12 @@ async def test_a_tracker_that_never_gets_a_state_is_dropped_after_the_timeout(
         suggested_object_id="stateless_client",
     )
     # The run is parked on the wait: do not block on it.
-    await _advance_while_runs_wait(hass, freezer, seconds=1)
-    automation_state = hass.states.get(AUTOMATION_ENTITY_ID)
-    assert automation_state is not None
-    assert automation_state.attributes["current"] == 1, "the run should be waiting"
+    await _wait_until(lambda: _active_runs(hass) == 1, "the run to wait for a state")
 
-    await _advance_while_runs_wait(hass, freezer, seconds=30)
+    await _advance_until(
+        hass, freezer, lambda: _active_runs(hass) == 0, "the wait to time out"
+    )
     await hass.async_block_till_done()
 
     assert calls == []
-    automation_state = hass.states.get(AUTOMATION_ENTITY_ID)
-    assert automation_state is not None
-    assert automation_state.attributes["current"] == 0
+    assert _active_runs(hass) == 0
