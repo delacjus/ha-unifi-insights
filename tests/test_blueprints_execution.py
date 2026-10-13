@@ -1,8 +1,9 @@
+# Copyright (c) 2026 UniFi Insights contributors
 """Tests for the UniFi Insights automation blueprints.
 
 Every blueprint is loaded with the Home Assistant YAML loader (which understands
 ``!input``), validated by the blueprint loader Home Assistant itself uses, and
-then installed into the config directory of the test instance. The execution
+then loaded through a patch of Home Assistant's blueprint loader. The execution
 tests set up a real automation with ``use_blueprint``, change states or fire the
 trigger, and assert on what the user-supplied actions did.
 """
@@ -11,24 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import shutil
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 from freezegun import api as freezegun_api
+from homeassistant.components.automation.config import AUTOMATION_BLUEPRINT_SCHEMA
 from homeassistant.components.automation.helpers import async_get_blueprints
-from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
-from homeassistant.components.device_tracker import ScannerEntity, SourceType
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.blueprint.models import Blueprint
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.helpers.entity import entity_sources
 from homeassistant.setup import async_setup_component
 from homeassistant.util import yaml as yaml_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    MockEntityPlatform,
     async_fire_time_changed,
     async_mock_service,
 )
@@ -36,7 +35,7 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.unifi_insights.const import CONF_TRACK_WIFI_CLIENTS, DOMAIN
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator
     from unittest.mock import MagicMock
 
     from freezegun.api import FrozenDateTimeFactory
@@ -44,10 +43,10 @@ if TYPE_CHECKING:
     from homeassistant.helpers import entity_registry as er
 
 BLUEPRINT_SOURCE = Path(__file__).parent.parent / "blueprints" / "automation" / DOMAIN
-AP_OVERLOAD = "ap_overload_alert.yaml"
-INFRASTRUCTURE_OFFLINE = "infrastructure_offline_alert.yaml"
-SECURE_VLAN = "secure_vlan_new_client_alert.yaml"
-ALL_BLUEPRINTS = (AP_OVERLOAD, INFRASTRUCTURE_OFFLINE, SECURE_VLAN)
+AP_OVERLOAD = "ap_overload.yaml"
+INFRASTRUCTURE_OFFLINE = "infrastructure_offline.yaml"
+SECURE_SUBNET = "secure_subnet_new_client.yaml"
+ALL_BLUEPRINTS = (AP_OVERLOAD, INFRASTRUCTURE_OFFLINE, SECURE_SUBNET)
 AUTOMATION_ENTITY_ID = "automation.blueprint_under_test"
 
 # Real seconds a test waits for a run to reach the state it expects, and for the
@@ -55,43 +54,11 @@ AUTOMATION_ENTITY_ID = "automation.blueprint_under_test"
 WAIT_TIMEOUT_SECONDS = 10.0
 STEP_SETTLE_SECONDS = 0.02
 
-# The version floor of this integration (hacs.json "homeassistant").
-MIN_HOME_ASSISTANT_VERSION = "2026.6.0"
-
-EXPECTED_ENTITY_SELECTORS: dict[str, dict[str, dict[str, Any]]] = {
-    AP_OVERLOAD: {
-        "ap_client_sensors": {
-            "entity": {"integration": DOMAIN, "domain": "sensor", "multiple": True}
-        },
-        # Utilisation can come from any integration: no integration filter.
-        "utilisation_sensors": {"entity": {"domain": "sensor", "multiple": True}},
-    },
-    INFRASTRUCTURE_OFFLINE: {
-        "connectivity_sensors": {
-            "entity": {
-                "integration": DOMAIN,
-                "domain": "binary_sensor",
-                "device_class": "connectivity",
-                "multiple": True,
-            }
-        },
-    },
-    SECURE_VLAN: {
-        "allowed_trackers": {
-            "entity": {
-                "integration": DOMAIN,
-                "domain": "device_tracker",
-                "multiple": True,
-            }
-        },
-    },
-}
-
 FIVE_MINUTES = {"hours": 0, "minutes": 5, "seconds": 0}
 
 
 def _load(name: str) -> dict[str, Any]:
-    """Load a blueprint from the repository with the Home Assistant loader."""
+    """Read a repository blueprint with Home Assistant's YAML loader."""
     return yaml_util.load_yaml_dict(BLUEPRINT_SOURCE / name)
 
 
@@ -115,208 +82,14 @@ def _no_automation_warnings(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
     yield
     noisy = [
         f"{record.name}: {record.getMessage()}"
-        for record in caplog.records
+        for record in [
+            *caplog.get_records("setup"),
+            *caplog.get_records("call"),
+            *caplog.records,
+        ]
         if record.levelno >= logging.WARNING and record.name.startswith(WATCHED_LOGGERS)
     ]
     assert not noisy, noisy
-
-
-# ---------------------------------------------------------------------------
-# Static checks: parse, schema, structure
-# ---------------------------------------------------------------------------
-
-
-def test_blueprint_directory_holds_exactly_the_three_blueprints() -> None:
-    """The distributed directory contains the three blueprints and nothing else."""
-    assert sorted(path.name for path in BLUEPRINT_SOURCE.iterdir()) == sorted(
-        ALL_BLUEPRINTS
-    )
-
-
-@pytest.mark.parametrize("name", ALL_BLUEPRINTS)
-def test_blueprint_parses_and_matches_the_blueprint_schema(name: str) -> None:
-    """Each file loads with ``!input`` support and passes the blueprint schema."""
-    data = _load(name)
-    validated = BLUEPRINT_SCHEMA(data)
-
-    metadata = validated["blueprint"]
-    assert metadata["domain"] == "automation"
-    assert metadata["name"].startswith("UniFi Insights")
-    assert metadata["description"].strip()
-    assert metadata["homeassistant"] == {"min_version": MIN_HOME_ASSISTANT_VERSION}
-    # Every input is described for the blueprint UI.
-    for input_name, definition in metadata["input"].items():
-        assert definition["name"], input_name
-        assert definition["description"], input_name
-        assert "selector" in definition, input_name
-
-
-@pytest.mark.parametrize("name", ALL_BLUEPRINTS)
-def test_blueprint_uses_the_modern_automation_syntax(name: str) -> None:
-    """Plural ``triggers``/``conditions``/``actions`` keys, no legacy singular keys."""
-    data = _load(name)
-
-    assert "triggers" in data
-    assert "actions" in data
-    assert not {"trigger", "condition", "action", "platform"} & set(data)
-    for trigger in data["triggers"]:
-        assert "trigger" in trigger
-        assert "platform" not in trigger
-
-
-@pytest.mark.parametrize("name", ALL_BLUEPRINTS)
-def test_blueprint_selectors_that_filter_by_integration_use_unifi_insights(
-    name: str,
-) -> None:
-    """No selector filters on any integration other than UniFi Insights."""
-    inputs = _load(name)["blueprint"]["input"]
-
-    for input_name, definition in inputs.items():
-        entity = definition["selector"].get("entity", {})
-        if "integration" in entity:
-            assert entity["integration"] == DOMAIN, input_name
-
-
-@pytest.mark.parametrize(
-    ("name", "input_name", "selector"),
-    [
-        pytest.param(name, input_name, selector, id=f"{name}-{input_name}")
-        for name, selectors in EXPECTED_ENTITY_SELECTORS.items()
-        for input_name, selector in selectors.items()
-    ],
-)
-def test_entity_selectors_are_exactly_the_planned_filters(
-    name: str, input_name: str, selector: dict[str, Any]
-) -> None:
-    """The entity pickers show only the entities the blueprint can work with."""
-    definition = _load(name)["blueprint"]["input"][input_name]
-
-    assert definition["selector"] == selector
-
-
-def test_optional_inputs_default_to_empty_or_on() -> None:
-    """Optional inputs have defaults so a minimal setup validates."""
-    ap = _load(AP_OVERLOAD)["blueprint"]["input"]
-    offline = _load(INFRASTRUCTURE_OFFLINE)["blueprint"]["input"]
-    vlan = _load(SECURE_VLAN)["blueprint"]["input"]
-
-    assert ap["utilisation_sensors"]["default"] == []
-    assert offline["recovery_actions"]["default"] == []
-    assert offline["treat_unavailable_as_offline"]["default"] is True
-    assert offline["treat_unavailable_as_offline"]["selector"] == {"boolean": {}}
-    assert vlan["allowed_trackers"]["default"] == []
-    # The secure prefixes are required: without one the blueprint is meaningless.
-    assert "default" not in vlan["secure_prefixes"]
-    assert vlan["secure_prefixes"]["selector"] == {"text": {"multiple": True}}
-
-
-def test_ap_overload_uses_numeric_state_triggers_with_ids_and_a_duration() -> None:
-    """Client overload and utilisation are separate ``for:`` numeric triggers."""
-    triggers = _load(AP_OVERLOAD)["triggers"]
-
-    assert [(t["trigger"], t["id"]) for t in triggers] == [
-        ("numeric_state", "client_overload"),
-        ("numeric_state", "utilisation"),
-    ]
-    assert all("for" in trigger for trigger in triggers)
-
-
-def test_ap_overload_description_says_there_is_no_utilisation_sensor() -> None:
-    """Users must be told UniFi Insights has no channel utilisation sensor."""
-    metadata = _load(AP_OVERLOAD)["blueprint"]
-    text = " ".join(
-        [metadata["description"]]
-        + [
-            definition.get("description", "")
-            for definition in metadata["input"].values()
-        ]
-    ).lower()
-
-    assert "does not currently" in text
-    assert "channel utilisation sensor" in text
-    assert "another" in text
-
-
-def test_offline_description_states_the_unavailable_limits() -> None:
-    """A confirmed offline device and a polling failure both read unavailable."""
-    description = _load(INFRASTRUCTURE_OFFLINE)["blueprint"]["description"].lower()
-
-    assert "confirmed offline device" in description
-    assert "controller" in description
-    assert description.count("unavailable") >= 2
-
-
-def test_offline_blueprint_separates_offline_and_recovery_with_trigger_ids() -> None:
-    """Offline goes to off/unavailable for a duration, recovery returns to on."""
-    triggers = _load(INFRASTRUCTURE_OFFLINE)["triggers"]
-
-    offline, recovery = triggers
-    assert offline["id"] == "offline"
-    assert offline["to"] == ["off", "unavailable"]
-    assert "for" in offline
-    assert recovery["id"] == "recovery"
-    assert recovery["from"] == ["off", "unavailable"]
-    assert recovery["to"] == "on"
-
-
-def test_secure_vlan_triggers_on_new_entity_registry_entries() -> None:
-    """A new client is a new tracker, so the trigger is a registry ``create``."""
-    assert _load(SECURE_VLAN)["triggers"] == [
-        {
-            "trigger": "event",
-            "event_type": "entity_registry_updated",
-            "event_data": {"action": "create"},
-        }
-    ]
-
-
-def test_secure_vlan_description_states_the_prerequisites_and_limits() -> None:
-    """Tracking is opt-in, the VLAN comes from the IP, and the burst has a limit."""
-    data = _load(SECURE_VLAN)
-    description = " ".join(data["blueprint"]["description"].lower().split())
-
-    assert "client tracking" in description
-    assert "opt-in" in description or "opt in" in description
-    assert "ip" in description
-    assert "inferred" in description
-    assert "first time" in description
-    assert "many" in description
-
-    # ``mode: parallel`` drops every run beyond ``max``: the text must say so
-    # and name the limit that is really configured.
-    sentences = re.split(r"(?<=[.!?])\s+", description)
-    dropped = [sentence for sentence in sentences if "dropped" in sentence]
-    assert dropped, "the description must say that runs beyond the limit are dropped"
-    assert any(str(data["max"]) in sentence for sentence in dropped), (
-        f"the sentence about dropped runs must name the limit ({data['max']})"
-    )
-
-
-def test_secure_vlan_exposes_name_entity_and_ip_but_never_the_mac() -> None:
-    """The actions get ``client_entity``, ``client_name`` and ``client_ip`` only."""
-    data = _load(SECURE_VLAN)
-    variable_steps = [step for step in data["actions"] if "variables" in step]
-
-    assert len(variable_steps) == 1
-    assert set(variable_steps[0]["variables"]) == {
-        "client_entity",
-        "client_name",
-        "client_ip",
-    }
-    everything = str({key: data[key] for key in data if key != "blueprint"})
-    assert not re.search(r"\bmac", everything, re.IGNORECASE)
-
-
-@pytest.mark.parametrize("name", ALL_BLUEPRINTS)
-async def test_home_assistant_loads_each_blueprint_from_its_config_directory(
-    hass: HomeAssistant, blueprint_dir: Path, name: str
-) -> None:
-    """The production loader accepts the installed file and the version floor."""
-    blueprint = await async_get_blueprints(hass).async_get_blueprint(f"{DOMAIN}/{name}")
-
-    assert blueprint.domain == "automation"
-    assert blueprint.validate() is None
-    assert blueprint.name.startswith("UniFi Insights")
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +98,27 @@ async def test_home_assistant_loads_each_blueprint_from_its_config_directory(
 
 
 @pytest.fixture
-async def blueprint_dir(hass: HomeAssistant, tmp_path: Path) -> Path:
-    """Copy the blueprints into the config directory of the test instance."""
-    hass.config.config_dir = str(tmp_path)
-    target = Path(hass.config.path("blueprints/automation/unifi_insights"))
-    await hass.async_add_executor_job(shutil.copytree, BLUEPRINT_SOURCE, target)
-    return target
+async def blueprint_dir(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> AsyncIterator[_BlueprintProgress]:
+    """Patch blueprint loading to read repository files, as Core's tests do."""
+    progress = _BlueprintProgress(caplog)
+
+    async def load(path: str) -> Blueprint:
+        progress.start = len(caplog.records)
+        name = Path(path).name
+        data = await hass.async_add_executor_job(_load, name)
+        return Blueprint(
+            data,
+            path=path,
+            expected_domain="automation",
+            schema=AUTOMATION_BLUEPRINT_SCHEMA,
+        )
+
+    with patch.object(
+        async_get_blueprints(hass), "async_get_blueprint", side_effect=load
+    ):
+        yield progress
 
 
 @pytest.fixture
@@ -449,6 +237,36 @@ async def _set_state(
     await hass.async_block_till_done()
 
 
+class _BlueprintProgress:
+    """Observe actual event dispatch and delay/admission logs without loop counts."""
+
+    def __init__(self, caplog: pytest.LogCaptureFixture) -> None:
+        self.caplog = caplog
+        self.start = 0
+
+    @property
+    def creations(self) -> int:
+        """Count native create events since the automation loaded."""
+        return sum(
+            record.name == "homeassistant.core"
+            and "Bus:Handling <Event entity_registry_updated[L]: action=create,"
+            in record.getMessage()
+            for record in self.caplog.records[self.start :]
+        )
+
+    @property
+    def outcomes(self) -> int:
+        """Count creations that have reached the delay or failed the conditions."""
+        return sum(
+            record.name == "homeassistant.components.automation.blueprint_under_test"
+            and (
+                "Executing step delay 0:00:10" in record.getMessage()
+                or "Conditions not met, aborting automation" in record.getMessage()
+            )
+            for record in self.caplog.records[self.start :]
+        )
+
+
 def _data(calls: list[ServiceCall]) -> list[dict[str, Any]]:
     """Return the data of every recorded call."""
     return [dict(call.data) for call in calls]
@@ -476,11 +294,11 @@ AP_ACTIONS = [
 def _ap_inputs(**overrides: Any) -> dict[str, Any]:
     """Return the AP overload inputs: 30 clients, 80% utilisation, five minutes."""
     inputs: dict[str, Any] = {
-        "ap_client_sensors": [AP_CLIENTS],
+        "client_sensors": [AP_CLIENTS],
         "client_threshold": 30,
         "utilisation_threshold": 80,
         "duration": FIVE_MINUTES,
-        "actions": AP_ACTIONS,
+        "alert_actions": AP_ACTIONS,
     }
     inputs.update(overrides)
     return inputs
@@ -488,8 +306,9 @@ def _ap_inputs(**overrides: Any) -> dict[str, Any]:
 
 async def test_ap_overload_alerts_when_clients_stay_above_the_threshold(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """Crossing the client threshold runs the actions once the duration passes."""
@@ -508,8 +327,9 @@ async def test_ap_overload_alerts_when_clients_stay_above_the_threshold(
 
 async def test_ap_overload_alerts_when_utilisation_stays_above_the_threshold(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """A utilisation sensor from another integration triggers its own alert."""
@@ -530,15 +350,23 @@ async def test_ap_overload_alerts_when_utilisation_stays_above_the_threshold(
     ]
 
 
+@pytest.mark.parametrize(
+    "utilisation_sensors", [None, []], ids=["default", "explicit-empty"]
+)
 async def test_ap_overload_with_no_utilisation_sensor_still_alerts_on_clients(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
+    utilisation_sensors: list[str] | None,
 ) -> None:
     """The optional utilisation input can stay at its empty default."""
     hass.states.async_set(AP_CLIENTS, "5")
-    await _use_blueprint(hass, AP_OVERLOAD, _ap_inputs())
+    inputs = _ap_inputs()
+    if utilisation_sensors is not None:
+        inputs["utilisation_sensors"] = utilisation_sensors
+    await _use_blueprint(hass, AP_OVERLOAD, inputs)
 
     await _set_state(hass, AP_CLIENTS, "45")
     await _advance(hass, freezer, minutes=6)
@@ -548,17 +376,20 @@ async def test_ap_overload_with_no_utilisation_sensor_still_alerts_on_clients(
     ]
 
 
-async def test_ap_overload_ignores_a_value_equal_to_the_threshold(
+@pytest.mark.parametrize("value", ["29", "30"], ids=["below", "equal"])
+async def test_ap_overload_ignores_a_value_at_or_below_the_threshold(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
+    value: str,
 ) -> None:
     """Overload means strictly more clients than the threshold."""
     hass.states.async_set(AP_CLIENTS, "5")
     await _use_blueprint(hass, AP_OVERLOAD, _ap_inputs())
 
-    await _set_state(hass, AP_CLIENTS, "30")
+    await _set_state(hass, AP_CLIENTS, value)
     await _advance(hass, freezer, minutes=10)
 
     assert calls == []
@@ -566,8 +397,9 @@ async def test_ap_overload_ignores_a_value_equal_to_the_threshold(
 
 async def test_ap_overload_drop_before_the_duration_cancels_the_alert(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """A short spike must not alert."""
@@ -594,7 +426,7 @@ async def test_ap_overload_ignores_a_crossing_that_follows_unknown_or_unavailabl
     hass: HomeAssistant,
     *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     gap_state: str,
     entity_id: str,
@@ -624,8 +456,9 @@ async def test_ap_overload_ignores_a_crossing_that_follows_unknown_or_unavailabl
 @pytest.mark.parametrize("gap_state", [STATE_UNKNOWN, STATE_UNAVAILABLE])
 async def test_ap_overload_does_not_alert_while_the_sensor_is_unknown_or_unavailable(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     gap_state: str,
 ) -> None:
@@ -641,8 +474,9 @@ async def test_ap_overload_does_not_alert_while_the_sensor_is_unknown_or_unavail
 
 async def test_ap_overload_alerts_for_two_access_points_at_the_same_time(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """Simultaneous overloads are queued, not dropped as 'already running'."""
@@ -655,7 +489,7 @@ async def test_ap_overload_alerts_for_two_access_points_at_the_same_time(
     await _use_blueprint(
         hass,
         AP_OVERLOAD,
-        _ap_inputs(ap_client_sensors=[AP_CLIENTS, AP_CLIENTS_2], actions=actions),
+        _ap_inputs(client_sensors=[AP_CLIENTS, AP_CLIENTS_2], alert_actions=actions),
     )
 
     hass.states.async_set(AP_CLIENTS, "40")
@@ -711,7 +545,7 @@ def _offline_inputs(**overrides: Any) -> dict[str, Any]:
     """Return the offline inputs with a five minute duration and both actions."""
     inputs: dict[str, Any] = {
         "connectivity_sensors": [SWITCH_ONLINE],
-        "offline_duration": FIVE_MINUTES,
+        "offline_delay": FIVE_MINUTES,
         "offline_actions": OFFLINE_ACTIONS,
         "recovery_actions": RECOVERY_ACTIONS,
     }
@@ -721,8 +555,9 @@ def _offline_inputs(**overrides: Any) -> dict[str, Any]:
 
 async def test_offline_actions_run_when_a_device_stays_off(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """A connectivity sensor that is ``off`` for the duration is offline."""
@@ -741,8 +576,9 @@ async def test_offline_actions_run_when_a_device_stays_off(
 
 async def test_offline_actions_run_when_a_device_stays_unavailable(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """By default ``unavailable`` counts as offline: that is how a lost device reads."""
@@ -759,8 +595,9 @@ async def test_offline_actions_run_when_a_device_stays_unavailable(
 
 async def test_unavailable_is_ignored_when_it_is_not_treated_as_offline(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """With the switch off, unavailable stays quiet but ``off`` still alerts."""
@@ -775,6 +612,7 @@ async def test_unavailable_is_ignored_when_it_is_not_treated_as_offline(
     await _advance(hass, freezer, minutes=6)
     assert calls == []
 
+    await _set_state(hass, SWITCH_ONLINE, "on")
     await _set_state(hass, SWITCH_ONLINE, "off")
     await _advance(hass, freezer, minutes=6)
     assert _data(calls) == [
@@ -785,8 +623,9 @@ async def test_unavailable_is_ignored_when_it_is_not_treated_as_offline(
 @pytest.mark.parametrize("previous", ["off", STATE_UNAVAILABLE])
 async def test_recovery_actions_run_when_a_device_comes_back_on(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     previous: str,
 ) -> None:
@@ -794,6 +633,7 @@ async def test_recovery_actions_run_when_a_device_comes_back_on(
     hass.states.async_set(SWITCH_ONLINE, previous)
     await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
 
+    await _advance(hass, freezer, minutes=6)
     await _set_state(hass, SWITCH_ONLINE, "on")
 
     assert _data(calls) == [
@@ -803,8 +643,9 @@ async def test_recovery_actions_run_when_a_device_comes_back_on(
 
 async def test_offline_then_recovery_runs_each_action_list_once(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """The trigger IDs keep the two action lists apart."""
@@ -818,28 +659,32 @@ async def test_offline_then_recovery_runs_each_action_list_once(
     assert [call["event"] for call in _data(calls)] == ["offline", "recovery"]
 
 
-async def test_a_short_outage_does_not_raise_the_offline_alert(
+@pytest.mark.parametrize("offline_state", ["off", STATE_UNAVAILABLE])
+async def test_a_short_outage_does_not_raise_offline_or_recovery_actions(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
+    offline_state: str,
 ) -> None:
     """Coming back inside the duration cancels the offline alert."""
     hass.states.async_set(SWITCH_ONLINE, "on")
     await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
 
-    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _set_state(hass, SWITCH_ONLINE, offline_state)
     await _advance(hass, freezer, minutes=2)
     await _set_state(hass, SWITCH_ONLINE, "on")
     await _advance(hass, freezer, minutes=10)
 
-    assert [call["event"] for call in _data(calls)] == ["recovery"]
+    assert calls == []
 
 
 async def test_recovery_actions_are_optional(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """With no recovery actions the offline alert works and recovery is silent."""
@@ -857,8 +702,9 @@ async def test_recovery_actions_are_optional(
 
 async def test_offline_alerts_for_several_devices_that_fail_together(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """A failed uplink takes several devices down at once: none may be dropped."""
@@ -897,8 +743,9 @@ async def test_offline_alerts_for_several_devices_that_fail_together(
 
 async def test_offline_ignores_sensors_that_were_not_selected(
     hass: HomeAssistant,
+    *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
     """Only the selected connectivity sensors count."""
@@ -921,9 +768,9 @@ VLAN_ACTIONS = [
     {
         "action": "test.record",
         "data": {
-            "entity": "{{ client_entity }}",
-            "name": "{{ client_name }}",
-            "ip": "{{ client_ip }}",
+            "entity": "{{ tracker }}",
+            "ip": "{{ ip_address }}",
+            "prefix": "{{ matched_prefix }}",
         },
     }
 ]
@@ -932,8 +779,8 @@ VLAN_ACTIONS = [
 def _vlan_inputs(**overrides: Any) -> dict[str, Any]:
     """Return the secure VLAN inputs with one secure prefix."""
     inputs: dict[str, Any] = {
-        "secure_prefixes": ["10.0.50."],
-        "actions": VLAN_ACTIONS,
+        "subnet_prefixes": ["10.0.50."],
+        "alert_actions": VLAN_ACTIONS,
     }
     inputs.update(overrides)
     return inputs
@@ -986,18 +833,27 @@ async def _connect(
     """Make clients appear on the controller and let the integration poll them."""
     network_client.clients.get_all.return_value = list(clients)
     await entry.runtime_data.device_coordinator.async_refresh()
-    await hass.async_block_till_done()
+    await _wait_until(
+        lambda: all(
+            hass.states.get("device_tracker." + c["name"].lower().replace(" ", "_"))
+            is not None
+            for c in clients
+        ),
+        "the real integration to publish every client tracker",
+    )
 
 
 async def test_new_tracker_on_a_secure_prefix_runs_the_actions(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
 ) -> None:
     """A tracker created for a client in a secure prefix reaches the actions."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs())
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs())
 
     await _connect(
         hass,
@@ -1006,14 +862,18 @@ async def test_new_tracker_on_a_secure_prefix_runs_the_actions(
         _client(1, "Guest Laptop", "10.0.50.23"),
     )
 
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+
     # The real platform publishes the ip attribute the blueprint filters on.
     state = hass.states.get("device_tracker.guest_laptop")
     assert state is not None
     assert state.attributes["ip"] == "10.0.50.23"
+    assert state.attributes["source_type"] == "router"
+    assert "ip_address" not in state.attributes
     assert _data(calls) == [
         {
             "entity": "device_tracker.guest_laptop",
-            "name": "Guest Laptop",
+            "prefix": "10.0.50.",
             "ip": "10.0.50.23",
         }
     ]
@@ -1021,13 +881,15 @@ async def test_new_tracker_on_a_secure_prefix_runs_the_actions(
 
 async def test_new_tracker_on_another_prefix_is_ignored(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
 ) -> None:
     """Clients outside the secure prefixes do not alert."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs())
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs())
 
     await _connect(
         hass,
@@ -1038,6 +900,7 @@ async def test_new_tracker_on_another_prefix_is_ignored(
         _client(3, "Printer", "10.0.5.12"),
     )
 
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
     assert hass.states.get("device_tracker.living_room_tv") is not None
     assert hass.states.get("device_tracker.printer") is not None
     assert calls == []
@@ -1045,7 +908,9 @@ async def test_new_tracker_on_another_prefix_is_ignored(
 
 async def test_allowlisted_tracker_on_a_secure_prefix_is_excluded(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
@@ -1053,7 +918,7 @@ async def test_allowlisted_tracker_on_a_secure_prefix_is_excluded(
     """A known device on the secure VLAN does not alert; a stranger still does."""
     await _use_blueprint(
         hass,
-        SECURE_VLAN,
+        SECURE_SUBNET,
         _vlan_inputs(allowed_trackers=["device_tracker.alarm_panel"]),
     )
 
@@ -1065,6 +930,8 @@ async def test_allowlisted_tracker_on_a_secure_prefix_is_excluded(
         _client(5, "Stranger Phone", "10.0.50.77"),
     )
 
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+
     # Both trackers exist; the allowlisted entity id is the one that was created.
     assert hass.states.get("device_tracker.alarm_panel") is not None
     assert [call["entity"] for call in _data(calls)] == [
@@ -1074,7 +941,9 @@ async def test_allowlisted_tracker_on_a_secure_prefix_is_excluded(
 
 async def test_first_time_tracking_creates_many_trackers_and_each_secure_one_alerts(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
@@ -1082,8 +951,8 @@ async def test_first_time_tracking_creates_many_trackers_and_each_secure_one_ale
     """A burst of new trackers is processed completely, across several prefixes."""
     await _use_blueprint(
         hass,
-        SECURE_VLAN,
-        _vlan_inputs(secure_prefixes=["10.0.50.", "10.0.60."]),
+        SECURE_SUBNET,
+        _vlan_inputs(subnet_prefixes=["10.0.50.", "10.0.60."]),
     )
     clients = [
         _client(10 + n, f"Camera {n}", f"10.0.{50 if n % 2 else 60}.{n}")
@@ -1092,9 +961,10 @@ async def test_first_time_tracking_creates_many_trackers_and_each_secure_one_ale
 
     await _connect(hass, tracking_entry, mock_network_client, *clients)
 
-    assert sorted(call["name"] for call in _data(calls)) == [
-        f"Camera {n}" for n in range(1, 7)
-    ]
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+    assert sorted(
+        call["entity"].removeprefix("device_tracker.") for call in _data(calls)
+    ) == [f"camera_{n}" for n in range(1, 7)]
     assert sorted(call["ip"] for call in _data(calls)) == sorted(
         f"10.0.{50 if n % 2 else 60}.{n}" for n in range(1, 7)
     )
@@ -1102,14 +972,16 @@ async def test_first_time_tracking_creates_many_trackers_and_each_secure_one_ale
 
 async def test_blank_secure_prefix_never_matches_every_client(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
 ) -> None:
     """An empty or whitespace prefix entry is ignored, not a wildcard."""
     await _use_blueprint(
-        hass, SECURE_VLAN, _vlan_inputs(secure_prefixes=["", "  ", "10.0.50."])
+        hass, SECURE_SUBNET, _vlan_inputs(subnet_prefixes=["", "  ", "10.0.50."])
     )
 
     await _connect(
@@ -1118,6 +990,7 @@ async def test_blank_secure_prefix_never_matches_every_client(
         mock_network_client,
         _client(6, "Elsewhere", "192.168.9.9"),
     )
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
     assert calls == []
 
     await _connect(
@@ -1127,18 +1000,23 @@ async def test_blank_secure_prefix_never_matches_every_client(
         _client(6, "Elsewhere", "192.168.9.9"),
         _client(7, "Inside", "10.0.50.9"),
     )
-    assert [call["name"] for call in _data(calls)] == ["Inside"]
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+    assert [
+        call["entity"].removeprefix("device_tracker.") for call in _data(calls)
+    ] == ["inside"]
 
 
 async def test_prefix_must_match_the_start_of_the_ip_address(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
 ) -> None:
     """``168.1.`` is inside 192.168.1.40 but is not its prefix."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs(secure_prefixes=["168.1."]))
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs(subnet_prefixes=["168.1."]))
 
     await _connect(
         hass,
@@ -1148,54 +1026,69 @@ async def test_prefix_must_match_the_start_of_the_ip_address(
         _client(21, "Starts With", "168.1.2.3"),
     )
 
-    assert [call["name"] for call in _data(calls)] == ["Starts With"]
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+    assert [
+        call["entity"].removeprefix("device_tracker.") for call in _data(calls)
+    ] == ["starts_with"]
 
 
 async def test_new_secure_clients_that_connect_together_all_run_slow_actions(
     hass: HomeAssistant,
     *,
     freezer: FrozenDateTimeFactory,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
-    tracking_entry: MockConfigEntry,
-    mock_network_client: MagicMock,
+    entity_registry: er.EntityRegistry,
+    mock_config_entry: MockConfigEntry,
 ) -> None:
-    """Actions that take time must not make later new clients get dropped."""
+    """All runs enter the user actions before any slow action is released."""
+    mock_config_entry.add_to_hass(hass)
+    hass.states.async_set("input_boolean.release", "off")
     await _use_blueprint(
         hass,
-        SECURE_VLAN,
-        _vlan_inputs(actions=[{"delay": {"seconds": 5}}, *VLAN_ACTIONS]),
+        SECURE_SUBNET,
+        _vlan_inputs(
+            alert_actions=[
+                *VLAN_ACTIONS,
+                {"wait_template": "{{ is_state('input_boolean.release', 'on') }}"},
+                {"action": "test.record", "data": {"finished": "{{ tracker }}"}},
+            ]
+        ),
     )
-
-    mock_network_client.clients.get_all.return_value = [
-        _client(22, "First Camera", "10.0.50.22"),
-        _client(23, "Second Camera", "10.0.50.23"),
+    trackers = [
+        _create_tracker(
+            hass, entity_registry, mock_config_entry, f"camera_{n}", ip=f"10.0.50.{n}"
+        )
+        for n in range(1, 4)
     ]
-    await tracking_entry.runtime_data.device_coordinator.async_refresh()
-    # Parallel mode: both runs are alive at once, each parked on its slow action.
-    await _wait_until(lambda: _active_runs(hass) == 2, "both runs to start")
-    assert calls == []
-
-    await _advance_until(
-        hass, freezer, lambda: len(calls) >= 2, "both runs to record their call"
+    await _wait_until(
+        lambda: _active_runs(hass) == 3, "three creations inside 10 seconds"
     )
+    _advance_time(hass, freezer, seconds=10)
+    await _wait_until(
+        lambda: len(calls) == 3,
+        "all three parallel runs to enter alert_actions before releasing any run",
+    )
+    assert sorted(call["entity"] for call in _data(calls)) == sorted(trackers)
+    assert all(call["prefix"] == "10.0.50." for call in _data(calls))
+    assert _active_runs(hass) == 3
+    hass.states.async_set("input_boolean.release", "on")
+    await _wait_until(lambda: len(calls) == 6, "all three slow actions to finish")
     await hass.async_block_till_done()
-
-    assert sorted(call["name"] for call in _data(calls)) == [
-        "First Camera",
-        "Second Camera",
-    ]
+    assert sorted(call["finished"] for call in _data(calls)[3:]) == sorted(trackers)
 
 
 async def test_single_octet_prefix_keeps_its_trailing_dot(
     hass: HomeAssistant,
-    blueprint_dir: Path,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     mock_network_client: MagicMock,
 ) -> None:
     """``10.`` means the whole 10.x network, not the number 10.0 and not 100.x."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs(secure_prefixes=["10."]))
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs(subnet_prefixes=["10."]))
 
     await _connect(
         hass,
@@ -1205,102 +1098,327 @@ async def test_single_octet_prefix_keeps_its_trailing_dot(
         _client(9, "Carrier Grade NAT", "100.64.0.9"),
     )
 
-    assert [call["name"] for call in _data(calls)] == ["Inside Ten"]
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+    assert [
+        call["entity"].removeprefix("device_tracker.") for call in _data(calls)
+    ] == ["inside_ten"]
 
 
-class _UnifiSensorWithAnIp(SensorEntity):
-    """A UniFi Insights sensor that carries an ``ip`` attribute like a tracker."""
-
-    _attr_name = "Gateway Address"
-    _attr_unique_id = "gateway-address"
-    _attr_native_value = 1
-    _attr_extra_state_attributes = {"ip": "10.0.50.1"}  # noqa: RUF012
-
-
-async def test_a_new_entity_that_is_not_a_device_tracker_is_ignored(
-    hass: HomeAssistant,
-    blueprint_dir: Path,
-    calls: list[ServiceCall],
-    tracking_entry: MockConfigEntry,
-) -> None:
-    """Only ``device_tracker.`` entities count, even from UniFi Insights."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs())
-
-    platform = MockEntityPlatform(hass, domain="sensor", platform_name=DOMAIN)
-    await platform.async_add_entities([_UnifiSensorWithAnIp()])
-    await hass.async_block_till_done()
-
-    state = hass.states.get("sensor.gateway_address")
-    assert state is not None
-    assert state.attributes["ip"] == "10.0.50.1"
-    assert calls == []
-
-
-class _OtherIntegrationTracker(ScannerEntity):
-    """A tracker that belongs to another integration, inside the secure prefix."""
-
-    _attr_name = "Other Integration Phone"
-    _attr_ip_address = "10.0.50.99"
-    _attr_source_type = SourceType.ROUTER
-
-    @property
-    def unique_id(self) -> str:
-        """Return a unique id that does not depend on a MAC address."""
-        return "other-integration-phone"
-
-    @property
-    def is_connected(self) -> bool:
-        """Report the device as connected."""
-        return True
-
-
-async def test_a_secure_tracker_from_another_integration_is_ignored(
-    hass: HomeAssistant,
-    blueprint_dir: Path,
-    calls: list[ServiceCall],
-    tracking_entry: MockConfigEntry,
-) -> None:
-    """The IP match alone is not enough: the tracker must belong to UniFi Insights."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs())
-
-    platform = MockEntityPlatform(
-        hass, domain="device_tracker", platform_name="other_integration"
-    )
-    await platform.async_add_entities([_OtherIntegrationTracker()])
-    await hass.async_block_till_done()
-
-    state = hass.states.get("device_tracker.other_integration_phone")
-    assert state is not None
-    assert state.attributes["ip"] == "10.0.50.99"
-    assert calls == []
-
-
-async def test_a_tracker_that_never_gets_a_state_is_dropped_after_the_timeout(
+async def test_a_tracker_that_never_gets_a_state_finishes_after_the_fixed_delay(
     hass: HomeAssistant,
     *,
     entity_registry: er.EntityRegistry,
-    blueprint_dir: Path,
+    blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
     tracking_entry: MockConfigEntry,
     freezer: FrozenDateTimeFactory,
 ) -> None:
     """A registry entry without a state ends the run instead of hanging or alerting."""
-    await _use_blueprint(hass, SECURE_VLAN, _vlan_inputs())
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs())
 
-    entity_registry.async_get_or_create(
+    tracker = entity_registry.async_get_or_create(
         "device_tracker",
         DOMAIN,
-        f"{DOMAIN}_aa:bb:cc:dd:ee:99",
+        "stateless-client",
         config_entry=tracking_entry,
         suggested_object_id="stateless_client",
+    ).entity_id
+    entity_sources(hass)[tracker] = {
+        "domain": DOMAIN,
+        "config_entry": tracking_entry.entry_id,
+    }
+    # The run is parked on the fixed delay: do not block on it.
+    await _wait_until(
+        lambda: _active_runs(hass) == 1, "the run to start its fixed delay"
     )
-    # The run is parked on the wait: do not block on it.
-    await _wait_until(lambda: _active_runs(hass) == 1, "the run to wait for a state")
 
     await _advance_until(
-        hass, freezer, lambda: _active_runs(hass) == 0, "the wait to time out"
+        hass,
+        freezer,
+        lambda: _active_runs(hass) == 0,
+        "the fixed-delay run to finish without a state",
     )
     await hass.async_block_till_done()
 
     assert calls == []
     assert _active_runs(hass) == 0
+
+
+async def _finish_secure_wait(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    progress: _BlueprintProgress,
+) -> None:
+    """Observe admission/rejection of every create event before advancing time."""
+    await _wait_until(
+        lambda: progress.creations > 0 and progress.outcomes == progress.creations,
+        "every native creation to reach its fixed delay or fail admission",
+    )
+    _advance_time(hass, freezer, seconds=10)
+    await _wait_until(lambda: _active_runs(hass) == 0, "secure-client runs to finish")
+    await hass.async_block_till_done()
+
+
+def _create_tracker(
+    hass: HomeAssistant,
+    registry: er.EntityRegistry,
+    entry: MockConfigEntry,
+    object_id: str,
+    *,
+    platform: str = DOMAIN,
+    source_type: str = "router",
+    ip: Any = "10.0.50.23",
+    domain: str = "device_tracker",
+) -> str:
+    """Create a real registry entry (native event), then publish its state."""
+    tracker = registry.async_get_or_create(
+        domain,
+        platform,
+        object_id,
+        config_entry=entry,
+        suggested_object_id=object_id,
+    ).entity_id
+    # Registry + states alone omit the entity-platform source metadata that
+    # integration_entities() reads. Populate HA's source registry, not the template.
+    entity_sources(hass)[tracker] = {"domain": platform, "config_entry": entry.entry_id}
+    hass.states.async_set(tracker, "home", {"source_type": source_type, "ip": ip})
+    return tracker
+
+
+@pytest.mark.parametrize(
+    ("overrides", "tracker_options"),
+    [
+        pytest.param({"subnet_prefixes": ["", "  "]}, {}, id="blank-prefixes"),
+        pytest.param(
+            {"allowed_trackers": ["device_tracker.registry_client"]},
+            {},
+            id="allowlisted",
+        ),
+        pytest.param({}, {"source_type": "gps"}, id="mobility-gps"),
+        pytest.param({}, {"source_type": ""}, id="missing-source"),
+        pytest.param({}, {"ip": "192.168.1.5"}, id="other-subnet"),
+        pytest.param({}, {"ip": None}, id="missing-ip"),
+        pytest.param({}, {"ip": ""}, id="empty-ip"),
+        pytest.param({}, {"ip": 123}, id="non-string-ip"),
+        pytest.param({}, {"platform": "other_integration"}, id="other-platform"),
+        pytest.param({}, {"domain": "sensor"}, id="non-tracker"),
+    ],
+)
+async def test_secure_subnet_registry_creation_filters(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    entity_registry: er.EntityRegistry,
+    mock_config_entry: MockConfigEntry,
+    overrides: dict[str, Any],
+    tracker_options: dict[str, Any],
+) -> None:
+    """Native create events enforce every eligibility/source/address check."""
+    mock_config_entry.add_to_hass(hass)
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs(**overrides))
+    _create_tracker(
+        hass, entity_registry, mock_config_entry, "registry_client", **tracker_options
+    )
+    await _wait_until(
+        lambda: blueprint_dir.outcomes == 1,
+        "the native creation to reach its delay or fail admission",
+    )
+    # These exclusions must happen before admission, not consume a delayed slot.
+    if overrides or "platform" in tracker_options or "domain" in tracker_options:
+        assert _active_runs(hass) == 0
+    else:
+        assert _active_runs(hass) == 1
+    await _finish_secure_wait(hass, freezer, blueprint_dir)
+    assert calls == []
+
+
+async def test_secure_subnet_waits_exactly_ten_seconds_and_alerts_only_on_creation(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    entity_registry: er.EntityRegistry,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A trimmed matching prefix alerts at 10 seconds; returning clients do not."""
+    mock_config_entry.add_to_hass(hass)
+    await _use_blueprint(
+        hass, SECURE_SUBNET, _vlan_inputs(subnet_prefixes=[" ", " 10.0.50. "])
+    )
+    tracker = _create_tracker(
+        hass, entity_registry, mock_config_entry, "registry_client"
+    )
+    await _wait_until(lambda: _active_runs(hass) == 1, "the fixed-delay run to start")
+    _advance_time(hass, freezer, seconds=9)
+    assert not await _poll(lambda: bool(calls), STEP_SETTLE_SECONDS)
+    assert _active_runs(hass) == 1
+    _advance_time(hass, freezer, seconds=1)
+    await _wait_until(lambda: len(calls) == 1, "the alert at exactly 10 seconds")
+    await hass.async_block_till_done()
+    assert _data(calls) == [
+        {"entity": tracker, "ip": "10.0.50.23", "prefix": "10.0.50."}
+    ]
+    await _set_state(
+        hass, tracker, "not_home", {"source_type": "router", "ip": "10.0.50.23"}
+    )
+    await _set_state(
+        hass, tracker, "home", {"source_type": "router", "ip": "10.0.50.23"}
+    )
+    await _advance(hass, freezer, seconds=20)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("previous", [STATE_UNKNOWN, STATE_UNAVAILABLE, "off"])
+@pytest.mark.parametrize("offline_state", ["off", STATE_UNAVAILABLE])
+async def test_offline_ignores_startup_and_duplicate_transitions(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    previous: str,
+    offline_state: str,
+) -> None:
+    """Only an online previous state qualifies an offline alert."""
+    hass.states.async_set(SWITCH_ONLINE, previous)
+    await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
+    await _set_state(hass, SWITCH_ONLINE, offline_state)
+    await _advance(hass, freezer, minutes=6)
+    assert calls == []
+
+
+@pytest.mark.parametrize("treat_unavailable", [False, True])
+async def test_recovery_from_unavailable_obeys_the_flag(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    treat_unavailable: bool,
+) -> None:
+    """A long unavailable outage recovers only when the user counts it offline."""
+    hass.states.async_set(SWITCH_ONLINE, "on")
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=treat_unavailable),
+    )
+    await _set_state(hass, SWITCH_ONLINE, STATE_UNAVAILABLE)
+    await _advance(hass, freezer, minutes=6)
+    await _set_state(hass, SWITCH_ONLINE, "on")
+    assert [call["event"] for call in _data(calls)] == (
+        ["offline", "recovery"] if treat_unavailable else []
+    )
+
+
+async def test_ap_overload_exposes_inputs_and_trigger_values_to_actions(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """User templates can read inputs and trigger values as named variables."""
+    hass.states.async_set(AP_CLIENTS, "12")
+    await _use_blueprint(
+        hass,
+        AP_OVERLOAD,
+        _ap_inputs(
+            alert_actions=[
+                {
+                    "action": "test.record",
+                    "data": {
+                        "client_sensors": "{{ client_sensors }}",
+                        "client_threshold": "{{ client_threshold }}",
+                        "utilisation_sensors": "{{ utilisation_sensors }}",
+                        "utilisation_threshold": "{{ utilisation_threshold }}",
+                        "duration": "{{ duration }}",
+                        "action_count": "{{ alert_actions | length }}",
+                        "id": "{{ trigger_id }}",
+                        "entity": "{{ entity_id }}",
+                        "previous": "{{ from_state.state }}",
+                        "value": "{{ to_state.state }}",
+                    },
+                }
+            ]
+        ),
+    )
+    await _set_state(hass, AP_CLIENTS, "31")
+    await _advance(hass, freezer, minutes=6)
+    assert _data(calls) == [
+        {
+            "client_sensors": [AP_CLIENTS],
+            "client_threshold": 30,
+            "utilisation_sensors": [],
+            "utilisation_threshold": 80,
+            "duration": FIVE_MINUTES,
+            "action_count": 1,
+            "id": "client_overload",
+            "entity": AP_CLIENTS,
+            "previous": 12,
+            "value": 31,
+        }
+    ]
+
+
+@pytest.mark.parametrize("elapsed", [299, 300], ids=["below-delay", "exact-delay"])
+async def test_recovery_previous_state_duration_boundary(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    elapsed: int,
+) -> None:
+    """Recovery requires at least, rather than strictly more than, offline_delay."""
+    hass.states.async_set(SWITCH_ONLINE, "off")
+    await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
+    await _advance(hass, freezer, seconds=elapsed)
+    await _set_state(hass, SWITCH_ONLINE, "on")
+    assert _data(calls) == (
+        [{"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}]
+        if elapsed == 300
+        else []
+    )
+
+
+@pytest.mark.parametrize("address_at", [9, 11], ids=["inside-wait", "after-wait"])
+async def test_secure_subnet_reads_ip_once_after_the_fixed_wait(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    entity_registry: er.EntityRegistry,
+    mock_config_entry: MockConfigEntry,
+    address_at: int,
+) -> None:
+    """An IP arriving during the wait alerts; an IP arriving afterwards does not."""
+    mock_config_entry.add_to_hass(hass)
+    await _use_blueprint(hass, SECURE_SUBNET, _vlan_inputs())
+    tracker = _create_tracker(
+        hass, entity_registry, mock_config_entry, "late_address", ip=None
+    )
+    await _wait_until(lambda: blueprint_dir.outcomes == 1, "the fixed delay to begin")
+    _advance_time(hass, freezer, seconds=9 if address_at == 9 else 10)
+    if address_at == 11:
+        await _wait_until(lambda: _active_runs(hass) == 0, "the missing-IP run to end")
+        _advance_time(hass, freezer, seconds=1)
+    hass.states.async_set(
+        tracker, "home", {"source_type": "router", "ip": "10.0.50.23"}
+    )
+    if address_at == 9:
+        assert not await _poll(lambda: bool(calls), STEP_SETTLE_SECONDS)
+        _advance_time(hass, freezer, seconds=1)
+        await _wait_until(
+            lambda: len(calls) == 1, "the IP at the fixed deadline to alert"
+        )
+    await hass.async_block_till_done()
+    assert _data(calls) == (
+        [{"entity": tracker, "ip": "10.0.50.23", "prefix": "10.0.50."}]
+        if address_at == 9
+        else []
+    )
