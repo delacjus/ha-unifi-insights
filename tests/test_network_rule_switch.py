@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.unifi_insights.api.exceptions import UniFiConnectionError
 from custom_components.unifi_insights.api.network.models import NatRule, StaticRoute
@@ -16,6 +19,7 @@ from custom_components.unifi_insights.network_rule_switch import (
     NAT_RULE_SWITCH,
     NETWORK_RULE_SWITCH_TYPES,
     PORT_FORWARD_SWITCH,
+    REFRESH_RETRY_DELAY,
     STATIC_ROUTE_SWITCH,
     TRAFFIC_RULE_SWITCH,
     UnifiInsightsNetworkRuleSwitch,
@@ -688,3 +692,103 @@ def test_rule_switch_availability_follows_its_own_section(
     for d in NETWORK_RULE_SWITCH_TYPES:
         getattr(mock_coordinator, avail_attrs[d.key]).return_value = d.key == desc.key
     assert switch.available is True
+
+
+def _static_route_switch_for_retry(
+    hass: HomeAssistant,
+    mock_coordinator: MagicMock,
+    *,
+    readable_after_write: bool,
+) -> UnifiInsightsNetworkRuleSwitch:
+    """Build a static route switch whose post-write refresh can or cannot read."""
+    mock_coordinator.async_set_static_route_enabled = AsyncMock()
+    mock_coordinator.async_request_refresh = AsyncMock()
+    mock_coordinator.static_routes_available = MagicMock(
+        return_value=readable_after_write
+    )
+    mock_coordinator.data["static_routes"] = {"site1": {"sr1": {"enabled": False}}}
+    switch = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, STATIC_ROUTE_SWITCH, "site1", "sr1"
+    )
+    switch.hass = hass
+    switch.async_write_ha_state = MagicMock()
+    return switch
+
+
+async def _async_pass_seconds(hass: HomeAssistant, seconds: float) -> None:
+    """Move the clock forward and let due timers run."""
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+    await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+async def test_write_retries_refresh_once_when_rules_cannot_be_read(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """A refresh that could not read the rules is repeated once after the delay."""
+    switch = _static_route_switch_for_retry(
+        hass, mock_coordinator, readable_after_write=False
+    )
+
+    await switch.async_turn_on()
+    assert mock_coordinator.async_request_refresh.await_count == 1
+
+    await _async_pass_seconds(hass, REFRESH_RETRY_DELAY - 1)
+    assert mock_coordinator.async_request_refresh.await_count == 1
+
+    await _async_pass_seconds(hass, REFRESH_RETRY_DELAY + 1)
+    assert mock_coordinator.async_request_refresh.await_count == 2
+
+    await _async_pass_seconds(hass, 10 * REFRESH_RETRY_DELAY)
+    assert mock_coordinator.async_request_refresh.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_write_does_not_retry_refresh_when_rules_were_read(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """A refresh that read the rules is not repeated."""
+    switch = _static_route_switch_for_retry(
+        hass, mock_coordinator, readable_after_write=True
+    )
+
+    await switch.async_turn_on()
+    await _async_pass_seconds(hass, 10 * REFRESH_RETRY_DELAY)
+
+    mock_coordinator.static_routes_available.assert_called_with("site1")
+    assert mock_coordinator.async_request_refresh.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_second_write_replaces_the_pending_refresh_retry(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """Two writes inside the delay leave one retry, not two."""
+    switch = _static_route_switch_for_retry(
+        hass, mock_coordinator, readable_after_write=False
+    )
+
+    await switch.async_turn_on()
+    await switch.async_turn_off()
+    assert mock_coordinator.async_request_refresh.await_count == 2
+
+    await _async_pass_seconds(hass, 10 * REFRESH_RETRY_DELAY)
+    assert mock_coordinator.async_request_refresh.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_removed_switch_drops_the_pending_refresh_retry(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """A switch that is removed does not refresh afterwards."""
+    switch = _static_route_switch_for_retry(
+        hass, mock_coordinator, readable_after_write=False
+    )
+
+    await switch.async_turn_on()
+    await switch.async_will_remove_from_hass()
+    await _async_pass_seconds(hass, 10 * REFRESH_RETRY_DELAY)
+    assert mock_coordinator.async_request_refresh.await_count == 1
+
+    # Removing a switch with nothing pending is a no-op.
+    await switch.async_will_remove_from_hass()

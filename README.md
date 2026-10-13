@@ -172,7 +172,7 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 | Latest Voucher Expiration                           | Sensor         | Expiration timestamp of the most recent generated voucher                              |
 | Latest voucher QR code                              | Image          | Captive portal activation code QR code (not for joining Wi-Fi)                         |
 
-NAT rule and static route switches use the console's private API. Their record shapes and API-key write support come from open-source clients and have not yet been confirmed on UniFi hardware; if the console rejects a change, the switch reports an error and the rule is left as it was.
+NAT rule and static route switches use the console's private API. They were tested on one UniFi gateway through the cloud connector; other consoles and Network versions may behave differently. If the console rejects a change, the switch reports an error and the rule is left as it was. A console can refuse requests for a few seconds while it applies a change (seen after static route changes). The rule switches of that site are then unavailable for about 15 seconds, until the integration reads the rules again.
 
 ### Network rule change events
 
