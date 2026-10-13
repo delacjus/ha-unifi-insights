@@ -190,15 +190,15 @@ Deleting the last rule of a type on a site is reported one poll later (the integ
 
 Known limits: a rule the integration cannot parse is reported as `deleted`; a rule the console takes over (it becomes system-defined) is reported as `deleted`, and `added` if it is handed back; at most 100 changes per site are kept from one poll.
 
-| Property | Description |
-| --- | --- |
-| `event_type` | `added`, `modified` or `deleted` |
-| `site_id` | Site identifier |
-| `rule_type` | Family of rule (`firewall_rule`, `policy_based_route`, `port_forward`, `traffic_rule`, `nat_rule`, `static_route`) |
-| `rule_id` | Unique ID of the rule |
-| `rule_name` | Name or description of the rule |
-| `enabled` | Whether the rule is enabled (`true`, `false`, or `null`) |
-| `changed_fields` | List of field names that changed |
+| Property         | Description                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `event_type`     | `added`, `modified` or `deleted`                                                                                   |
+| `site_id`        | Site identifier                                                                                                    |
+| `rule_type`      | Family of rule (`firewall_rule`, `policy_based_route`, `port_forward`, `traffic_rule`, `nat_rule`, `static_route`) |
+| `rule_id`        | Unique ID of the rule                                                                                              |
+| `rule_name`      | Name or description of the rule                                                                                    |
+| `enabled`        | Whether the rule is enabled (`true`, `false`, or `null`)                                                           |
+| `changed_fields` | List of field names that changed                                                                                   |
 
 `rule_name` is the name or description typed on the console. No other field value (addresses, ports, domains) is included; `changed_fields` lists field names only.
 
