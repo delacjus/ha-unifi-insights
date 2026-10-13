@@ -172,6 +172,8 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 | Latest Voucher Expiration                           | Sensor         | Expiration timestamp of the most recent generated voucher                              |
 | Latest voucher QR code                              | Image          | Captive portal activation code QR code (not for joining Wi-Fi)                         |
 
+NAT rule and static route switches use the console's private API. Their record shapes and API-key write support come from open-source clients and have not yet been confirmed on UniFi hardware; if the console rejects a change, the switch reports an error and the rule is left as it was.
+
 #### Hotspot voucher management
 
 The integration creates entities to configure, generate, and monitor UniFi Hotspot guest vouchers:

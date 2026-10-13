@@ -41,6 +41,7 @@ from tests.fixtures.network_rule_responses import (
     REFERENCE_STATIC_ROUTE_KEYS,
     nat_rule_record,
     port_forward_record,
+    static_route_next_hop_record,
     static_route_record,
     traffic_rule_record,
 )
@@ -609,7 +610,7 @@ def test_nat_rule_fixture_matches_reference_key_set() -> None:
 async def test_list_nat_rules_local_v2_path_and_models() -> None:
     """List NAT rules calls local v2 path with bare list and parses models."""
     rec = nat_rule_record()
-    session = _Session([rec])  # BARE LIST
+    session = _Session([[rec]])  # BARE LIST
     client = _client(session)
 
     rules = await client.nat_rules.list_nat_rules("default")
@@ -647,6 +648,7 @@ async def test_list_nat_rules_remote_connector_path() -> None:
         ({"data": [nat_rule_record()]}, 1),
         ({"meta": {"rc": "ok"}, "data": [nat_rule_record()]}, 1),
         ({"data": nat_rule_record()}, 1),
+        ({"data": "unexpected"}, 0),
         (None, 0),
         ("not-a-dict", 0),
         ([nat_rule_record(), "invalid", 123, None, {"description": "no-id"}], 1),
@@ -684,16 +686,25 @@ async def test_list_nat_rules_skips_items_without_string_id() -> None:
     assert rules[0].id == "nat-dns"
 
 
-async def test_update_nat_rule_puts_full_record_with_only_enabled_changed() -> None:
+@pytest.mark.parametrize(
+    ("start_enabled", "target"),
+    [(True, False), (False, True)],
+)
+async def test_update_nat_rule_puts_full_record_with_only_enabled_changed(
+    start_enabled: bool,  # noqa: FBT001
+    target: bool,  # noqa: FBT001
+) -> None:
     """Update NAT rule performs GET then PUT of full record with enabled changed."""
-    original = nat_rule_record(enabled=True)
+    original = nat_rule_record(enabled=start_enabled)
     updated = dict(original)
-    updated["enabled"] = False
+    updated["enabled"] = target
 
     session = _Session([[original], updated])
     client = _client(session)
 
-    result = await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+    result = await client.nat_rules.update_nat_rule(
+        "default", "nat-dns", enabled=target
+    )
 
     assert len(session.requests) == 2
     _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
@@ -709,8 +720,8 @@ async def test_update_nat_rule_puts_full_record_with_only_enabled_changed() -> N
         session.requests[1]["json"]["destination_filter"]
         == original["destination_filter"]
     )
-    assert original["enabled"] is True  # not mutated
-    assert result.enabled is False
+    assert original["enabled"] is start_enabled  # not mutated
+    assert result.enabled is target
 
 
 async def test_update_nat_rule_remote_connector_path() -> None:
@@ -863,11 +874,18 @@ async def test_list_static_routes_skips_items_without_string_id() -> None:
     assert routes[0].id == "route-lab"
 
 
-async def test_update_static_route_puts_full_record_with_only_enabled_changed() -> None:
+@pytest.mark.parametrize(
+    ("start_enabled", "target"),
+    [(True, False), (False, True)],
+)
+async def test_update_static_route_puts_full_record_with_only_enabled_changed(
+    start_enabled: bool,  # noqa: FBT001
+    target: bool,  # noqa: FBT001
+) -> None:
     """Update static route performs GET then PUT of full record with enabled changed."""
-    original = static_route_record(enabled=True)
+    original = static_route_record(enabled=start_enabled)
     updated = dict(original)
-    updated["enabled"] = False
+    updated["enabled"] = target
 
     session = _Session(
         [
@@ -878,7 +896,7 @@ async def test_update_static_route_puts_full_record_with_only_enabled_changed() 
     client = _client(session)
 
     result = await client.static_routes.update_static_route(
-        "default", "route-lab", enabled=False
+        "default", "route-lab", enabled=target
     )
 
     assert len(session.requests) == 2
@@ -891,8 +909,8 @@ async def test_update_static_route_puts_full_record_with_only_enabled_changed() 
     )
     assert set(session.requests[1]["json"].keys()) == REFERENCE_STATIC_ROUTE_KEYS
     assert "static-route_network" in session.requests[1]["json"]
-    assert original["enabled"] is True  # not mutated
-    assert result.enabled is False
+    assert original["enabled"] is start_enabled  # not mutated
+    assert result.enabled is target
 
 
 async def test_update_static_route_remote_connector_path() -> None:
@@ -1103,3 +1121,66 @@ def test_static_route_model_keeps_record_with_non_bool_enabled_as_none(
     model = StaticRoute.model_validate(raw)
     assert model.id == "route-lab"
     assert model.enabled is None
+
+
+@pytest.mark.parametrize("target", [True, False])
+async def test_update_nat_rule_puts_raw_record_not_model_dump(
+    target: bool,  # noqa: FBT001
+) -> None:
+    """Update NAT rule preserves raw dict without description or model dump defaults."""
+    fetched = {
+        "_id": "nat-raw",
+        "enabled": not target,
+        "x_future_key": {"a": 1},
+    }
+    expected_put = {**fetched, "enabled": target}
+    session = _Session([[fetched], expected_put])
+    client = _client(session)
+
+    result = await client.nat_rules.update_nat_rule(
+        "default", "nat-raw", enabled=target
+    )
+
+    assert len(session.requests) == 2
+    _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
+    _assert_request(
+        session.requests[1],
+        "PUT",
+        "/v2/api/site/default/nat/nat-raw",
+        body=expected_put,
+    )
+    assert session.requests[1]["json"] == expected_put
+    assert "description" not in session.requests[1]["json"]
+    assert result.enabled is target
+
+
+@pytest.mark.parametrize("target", [True, False])
+async def test_update_static_route_keeps_next_hop_keys(
+    target: bool,  # noqa: FBT001
+) -> None:
+    """Update static route preserves next-hop keys and empty distance in PUT body."""
+    fetched = static_route_next_hop_record(enabled=not target)
+    expected_put = {**fetched, "enabled": target}
+    session = _Session(
+        [
+            {"meta": {"rc": "ok"}, "data": [fetched]},
+            {"meta": {"rc": "ok"}, "data": [expected_put]},
+        ]
+    )
+    client = _client(session)
+
+    result = await client.static_routes.update_static_route(
+        "default", "route-nexthop", enabled=target
+    )
+
+    assert len(session.requests) == 2
+    _assert_request(session.requests[0], "GET", "/api/s/default/rest/routing")
+    _assert_request(
+        session.requests[1],
+        "PUT",
+        "/api/s/default/rest/routing/route-nexthop",
+        body=expected_put,
+    )
+    assert session.requests[1]["json"] == expected_put
+    assert "static-route_nexthop" in session.requests[1]["json"]
+    assert result.enabled is target

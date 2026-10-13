@@ -218,3 +218,22 @@ def static_route_record(**overrides: Any) -> dict[str, Any]:
     }
     record.update(overrides)
     return record
+
+
+def static_route_next_hop_record(**overrides: Any) -> dict[str, Any]:
+    """Return synthetic next-hop static route (reference-derived, not live-observed)."""
+    record: dict[str, Any] = {
+        "_id": "route-nexthop",
+        "site_id": "classic-site-id",
+        "name": "NextHop",
+        "enabled": True,
+        "type": "static-route",
+        "static-route_type": "nexthop-route",
+        "static-route_network": "198.51.100.0/24",
+        "static-route_nexthop": "192.0.2.1",
+        "gateway_type": "default",
+        "gateway_device": "aa:bb:cc:dd:ee:ff",
+        "static-route_distance": "",
+    }
+    record.update(overrides)
+    return record

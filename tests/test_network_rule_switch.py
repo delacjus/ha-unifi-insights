@@ -650,3 +650,41 @@ def test_discovery_skips_nat_rule_and_static_route_with_non_bool_enabled(
         e for e in entities if e.entity_description.key in ("nat_rule", "static_route")
     ]
     assert len(target_entities) == 0
+
+
+@pytest.mark.parametrize("desc", NETWORK_RULE_SWITCH_TYPES)
+def test_rule_switch_availability_follows_its_own_section(
+    mock_coordinator: MagicMock,
+    desc: UnifiInsightsNetworkRuleSwitchEntityDescription,
+) -> None:
+    """Switch availability follows its own section availability function."""
+    mock_coordinator.data["port_forwards"] = {"site1": {"pf1": {"enabled": True}}}
+    mock_coordinator.data["traffic_rules"] = {"site1": {"tr1": {"enabled": True}}}
+    mock_coordinator.data["nat_rules"] = {"site1": {"nat1": {"enabled": True}}}
+    mock_coordinator.data["static_routes"] = {"site1": {"sr1": {"enabled": True}}}
+
+    rule_ids = {
+        PORT_FORWARD_SWITCH.key: "pf1",
+        TRAFFIC_RULE_SWITCH.key: "tr1",
+        NAT_RULE_SWITCH.key: "nat1",
+        STATIC_ROUTE_SWITCH.key: "sr1",
+    }
+    avail_attrs = {
+        PORT_FORWARD_SWITCH.key: "port_forwards_available",
+        TRAFFIC_RULE_SWITCH.key: "traffic_rules_available",
+        NAT_RULE_SWITCH.key: "nat_rules_available",
+        STATIC_ROUTE_SWITCH.key: "static_routes_available",
+    }
+
+    # Only descriptor's availability returns False, other three True -> unavailable
+    for d in NETWORK_RULE_SWITCH_TYPES:
+        getattr(mock_coordinator, avail_attrs[d.key]).return_value = d.key != desc.key
+    switch = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, desc, "site1", rule_ids[desc.key]
+    )
+    assert switch.available is False
+
+    # Reverse: only its own returns True, other three False -> available
+    for d in NETWORK_RULE_SWITCH_TYPES:
+        getattr(mock_coordinator, avail_attrs[d.key]).return_value = d.key == desc.key
+    assert switch.available is True
