@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Self
+import logging
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 from pydantic import ValidationError
@@ -16,6 +17,7 @@ from custom_components.unifi_insights.api import (
     UniFiNotFoundError,
     UniFiResponseError,
     UniFiRuleNotEditableError,
+    UniFiValidationError,
 )
 from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
 from custom_components.unifi_insights.api.network.endpoints.nat_rules import (
@@ -32,8 +34,10 @@ from custom_components.unifi_insights.api.network.endpoints.traffic_rules import
 )
 from custom_components.unifi_insights.api.network.models.nat_rule import NatRule
 from custom_components.unifi_insights.api.network.models.port_forward import PortForward
+from custom_components.unifi_insights.api.network.models.routes import PolicyBasedRoute
 from custom_components.unifi_insights.api.network.models.static_route import StaticRoute
 from custom_components.unifi_insights.api.network.models.traffic_rule import TrafficRule
+from custom_components.unifi_insights.coordinators.base import UnifiBaseCoordinator
 from tests.fixtures.network_rule_responses import (
     AIOUNIFI_TRAFFIC_RULE_KEYS,
     LIVE_PORT_FORWARD_KEYS,
@@ -45,6 +49,9 @@ from tests.fixtures.network_rule_responses import (
     static_route_record,
     traffic_rule_record,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 
 class _Response:
@@ -1184,3 +1191,292 @@ async def test_update_static_route_keeps_next_hop_keys(
     assert session.requests[1]["json"] == expected_put
     assert "static-route_nexthop" in session.requests[1]["json"]
     assert result.enabled is target
+
+
+# --- strict list reads (the rule export) --------------------------------------
+
+# rule type -> how to call the list method of that family on a client
+_LISTERS: dict[str, Callable[..., Awaitable[list[Any]]]] = {
+    "firewall_rule": lambda c, **kw: c.firewall.list_rules("site-id", **kw),
+    "policy_based_route": lambda c, **kw: c.routes.list_routes("default", **kw),
+    "port_forward": lambda c, **kw: c.port_forwards.list_port_forwards("default", **kw),
+    "traffic_rule": lambda c, **kw: c.traffic_rules.list_traffic_rules("default", **kw),
+    "nat_rule": lambda c, **kw: c.nat_rules.list_nat_rules("default", **kw),
+    "static_route": lambda c, **kw: c.static_routes.list_static_routes("default", **kw),
+}
+_LENIENT = tuple(rule_type for rule_type in _LISTERS if rule_type != "firewall_rule")
+_GOOD: dict[str, dict[str, Any]] = {
+    "firewall_rule": {"id": "fw1", "name": "Allow DNS"},
+    "policy_based_route": {"_id": "pbr1", "description": "Route out"},
+    "port_forward": port_forward_record(),
+    "traffic_rule": traffic_rule_record(),
+    "nat_rule": nat_rule_record(),
+    "static_route": static_route_record(),
+}
+# One record per family that fails its model, carrying a sentinel address that
+# pydantic would quote as ``input_value``.
+_BAD: dict[str, dict[str, Any]] = {
+    "firewall_rule": {"name": "192.0.2.123"},
+    "policy_based_route": {"_id": "pbr-bad", "network_ids": [{"id": "192.0.2.123"}]},
+    "port_forward": {"_id": 5, "name": "192.0.2.123"},
+    "traffic_rule": {"description": "192.0.2.123"},
+    "nat_rule": {"description": "192.0.2.123"},
+    "static_route": {"name": "192.0.2.123"},
+}
+_MALFORMED_BODIES: list[Any] = [
+    None,
+    {},
+    {"data": None},
+    {"data": "unexpected"},
+    "text",
+]
+_EMPTY_BODIES: list[Any] = [[], {"data": []}, {"meta": {"rc": "ok"}, "data": []}]
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+@pytest.mark.parametrize("body", [*_MALFORMED_BODIES, [1, 2], [{"a": 1}, "x"]])
+async def test_strict_list_rejects_malformed_bodies(rule_type: str, body: Any) -> None:
+    """A strict read raises for every body that is not a list of record dicts."""
+    client = _client(_Session([body]))
+
+    with pytest.raises(UniFiValidationError) as err:
+        # [{"a": 1}, "x"] fails on the non-dict, the other bodies on the shape.
+        await _LISTERS[rule_type](client, strict=True)
+
+    # Not an unsupported answer: the export must report it as failed.
+    assert UnifiBaseCoordinator._is_unsupported_response(err.value) is False
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+async def test_strict_list_rejects_invalid_record_without_skipping(
+    rule_type: str,
+) -> None:
+    """One invalid record anywhere fails the whole read; none is skipped."""
+    for records in (
+        [_GOOD[rule_type], _BAD[rule_type]],
+        [_BAD[rule_type], _GOOD[rule_type]],
+    ):
+        client = _client(_Session([records]))
+
+        with pytest.raises(UniFiValidationError) as err:
+            await _LISTERS[rule_type](client, strict=True)
+
+        assert UnifiBaseCoordinator._is_unsupported_response(err.value) is False
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+@pytest.mark.parametrize("body", _EMPTY_BODIES)
+async def test_strict_list_valid_empty_answer_is_empty_list(
+    rule_type: str, body: Any
+) -> None:
+    """A real empty answer is a valid, empty list in strict mode."""
+    client = _client(_Session([body]))
+
+    assert await _LISTERS[rule_type](client, strict=True) == []
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+@pytest.mark.parametrize("wrap", [False, True])
+async def test_strict_list_returns_valid_records(rule_type: str, wrap: bool) -> None:  # noqa: FBT001
+    """Valid records come back as models, in a bare list or a data envelope."""
+    records = [_GOOD[rule_type]]
+    body = {"meta": {"rc": "ok"}, "data": records} if wrap else records
+    session = _Session([body])
+
+    rules = await _LISTERS[rule_type](_client(session), strict=True)
+
+    assert len(rules) == 1
+    assert rules[0].id == (_GOOD[rule_type].get("_id") or _GOOD[rule_type]["id"])
+    assert len(session.requests) == 1
+
+
+@pytest.mark.parametrize("rule_type", _LENIENT)
+async def test_strict_list_meta_error_raises_without_the_message(
+    rule_type: str,
+) -> None:
+    """An error envelope raises a response error that quotes nothing of it."""
+    body = {"meta": {"rc": "error", "msg": "secret 192.0.2.77"}, "data": []}
+
+    with pytest.raises(UniFiResponseError) as err:
+        await _LISTERS[rule_type](_client(_Session([body])), strict=True)
+
+    assert "192.0.2.77" not in f"{err.value!s} {err.value!r} {err.value.args!r}"
+    assert err.value.response_body is None
+    assert err.value.__cause__ is None
+    assert err.value.__context__ is None
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+async def test_strict_list_error_carries_no_response_content(rule_type: str) -> None:
+    """The raised error quotes nothing of the body or of pydantic's input."""
+    sentinel = "192.0.2.123"
+    bodies: list[Any] = [
+        [_BAD[rule_type]],
+        {"data": sentinel},
+        [sentinel],
+        [{"name": sentinel, **_BAD[rule_type]}, sentinel],
+    ]
+    for body in bodies:
+        with pytest.raises(UniFiValidationError) as err:
+            await _LISTERS[rule_type](_client(_Session([body])), strict=True)
+
+        text = f"{err.value!s} {err.value!r} {err.value.args!r} {err.value.message}"
+        assert sentinel not in text
+        assert err.value.__cause__ is None
+        assert err.value.__context__ is None
+
+
+@pytest.mark.parametrize("rule_type", _LISTERS)
+async def test_strict_list_does_not_log_the_body(
+    rule_type: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A strict read omits the body from the transport log; a default read logs it."""
+    caplog.set_level(logging.DEBUG)
+    # First key, so it is inside the transport's 500 character excerpt.
+    record = {"x_marker": "marker-198.51.100.99", **_GOOD[rule_type]}
+
+    await _LISTERS[rule_type](_client(_Session([[record]])), strict=True)
+    assert "marker-198.51.100.99" not in caplog.text
+    assert "<body omitted" in caplog.text
+
+    caplog.clear()
+    await _LISTERS[rule_type](_client(_Session([[record]])))
+    assert "marker-198.51.100.99" in caplog.text
+
+
+# A policy-based route has every field optional, so a bare ``{}`` (or any dict)
+# parses as one empty route by default. That is today's behaviour; strict reads
+# reject those bodies.
+_LENIENT_CASES: list[tuple[str, Any, int]] = [
+    *[
+        (rule_type, body, 0)
+        for rule_type in _LISTERS
+        for body in _MALFORMED_BODIES
+        if not (rule_type == "policy_based_route" and body == {})
+    ],
+    ("policy_based_route", {}, 1),
+    *[(rule_type, [1, 2], 0) for rule_type in _LENIENT],
+    *[
+        (rule_type, [{"a": 1}, "x", 7, None], int(rule_type == "policy_based_route"))
+        for rule_type in _LENIENT
+    ],
+]
+
+
+@pytest.mark.parametrize(("rule_type", "body", "expected"), _LENIENT_CASES)
+async def test_list_methods_default_is_lenient_unchanged(
+    rule_type: str, body: Any, expected: int
+) -> None:
+    """Without ``strict`` a broken answer is still skipped, as polling expects."""
+    rules = await _LISTERS[rule_type](_client(_Session([body])))
+    assert len(rules) == expected
+
+
+@pytest.mark.parametrize("rule_type", _LENIENT)
+async def test_list_methods_default_still_skips_invalid_and_single_dict(
+    rule_type: str,
+) -> None:
+    """Default reads still skip an invalid record and accept a single data dict."""
+    rules = await _LISTERS[rule_type](
+        _client(_Session([[_BAD[rule_type], _GOOD[rule_type]]]))
+    )
+    assert len(rules) == 1
+
+    rules = await _LISTERS[rule_type](_client(_Session([{"data": _GOOD[rule_type]}])))
+    assert len(rules) == 1
+
+
+async def test_list_rules_default_is_lenient_unchanged() -> None:
+    """The default firewall read still raises on a non-dict record, as before."""
+    with pytest.raises(ValidationError):
+        await _client(_Session([[1, 2]])).firewall.list_rules("site-id")
+
+
+@pytest.mark.parametrize("rule_type", _LENIENT)
+async def test_skipped_record_log_has_no_input_value(
+    rule_type: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The debug line for a skipped record names the field, never its value."""
+    caplog.set_level(logging.DEBUG)
+
+    rules = await _LISTERS[rule_type](
+        _client(_Session([[_BAD[rule_type], _GOOD[rule_type]]]))
+    )
+
+    assert len(rules) == 1
+    assert "Skipping invalid" in caplog.text
+    assert "ValidationError" in caplog.text
+    assert "input_value" not in caplog.text
+    # The record is logged by the transport (default reads) but the skip line
+    # itself carries only the error type and field names.
+    skip_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "Skipping invalid" in record.getMessage()
+    ]
+    assert len(skip_lines) == 1
+    assert "192.0.2.123" not in skip_lines[0]
+
+
+async def test_skipped_policy_based_route_log_for_non_validation_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A route record failing with another error type is still skipped quietly."""
+    caplog.set_level(logging.DEBUG)
+
+    def boom(*_: Any, **__: Any) -> None:
+        msg = "internal 192.0.2.124"
+        raise TypeError(msg)
+
+    client = _client(_Session([[_GOOD["policy_based_route"]]]))
+    original = PolicyBasedRoute.model_validate
+    PolicyBasedRoute.model_validate = boom  # type: ignore[method-assign,assignment]
+    try:
+        rules = await client.routes.list_routes("default")
+    finally:
+        PolicyBasedRoute.model_validate = original  # type: ignore[method-assign]
+
+    assert rules == []
+    skip_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "Skipping invalid" in record.getMessage()
+    ]
+    assert skip_lines == [
+        "Skipping invalid policy-based route item (TypeError: no field details)"
+    ]
+
+
+async def test_strict_firewall_pages_are_each_checked() -> None:
+    """Every page of the paged firewall list is parsed strictly."""
+    page = {"data": [_GOOD["firewall_rule"]], "totalCount": 201}
+    session = _Session([page, {**page, "data": [{"id": "fw2", "name": "Second"}]}])
+    rules = await _client(session).firewall.list_rules("site-id", strict=True)
+    assert [rule.id for rule in rules] == ["fw1", "fw2"]
+    assert [r["params"] for r in session.requests] == [
+        {"offset": 0, "limit": 200},
+        {"offset": 200, "limit": 200},
+    ]
+
+    broken = _Session([page, {"data": "unexpected", "totalCount": 201}])
+    with pytest.raises(UniFiValidationError):
+        await _client(broken).firewall.list_rules("site-id", strict=True)
+
+    bad_record = _Session([page, {"data": [_BAD["firewall_rule"]], "totalCount": 201}])
+    with pytest.raises(UniFiValidationError):
+        await _client(bad_record).firewall.list_rules("site-id", strict=True)
+
+
+async def test_strict_firewall_explicit_page_is_single_strict_request() -> None:
+    """With an explicit offset or limit the strict read is one checked request."""
+    session = _Session([{"data": "unexpected"}])
+    with pytest.raises(UniFiValidationError):
+        await _client(session).firewall.list_rules(
+            "site-id", offset=0, limit=5, strict=True
+        )
+    assert len(session.requests) == 1
+    assert session.requests[0]["params"] == {"offset": 0, "limit": 5}
+
+    ok = _Session([{"data": [_GOOD["firewall_rule"]]}])
+    rules = await _client(ok).firewall.list_rules("site-id", limit=5, strict=True)
+    assert [rule.id for rule in rules] == ["fw1"]

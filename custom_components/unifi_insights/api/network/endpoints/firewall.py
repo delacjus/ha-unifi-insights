@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
+from ...exceptions import UniFiValidationError
 from ..models import FirewallRule, FirewallZone
 from ..models.firewall import (
     FirewallPolicyOrdering,
@@ -173,6 +176,7 @@ class FirewallEndpoint:
         offset: int | None = None,
         limit: int | None = None,
         filter_str: str | None = None,
+        strict: bool = False,
     ) -> list[FirewallRule]:
         """
         List all firewall rules.
@@ -186,12 +190,17 @@ class FirewallEndpoint:
             limit: Maximum number of items to return.
             filter_str: Filter query string using API filter syntax.
                 Example: "action.eq('drop')" or "and(name.isNotNull(), enabled.eq(true))"
+            strict: Used by the rule export. Every page must be a list of valid
+                rules, otherwise ``UniFiValidationError`` is raised, and the
+                response bodies are not logged.
 
         Returns:
             List of firewall rules.
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/firewall/policies")
+        parse = self._parse_rules_strict if strict else self._parse_rules_response
+        get_options: dict[str, Any] = {"log_body": False} if strict else {}
 
         # When caller supplies explicit pagination, honour it as a single request.
         if offset is not None or limit is not None:
@@ -202,8 +211,10 @@ class FirewallEndpoint:
                 params["limit"] = limit
             if filter_str:
                 params["filter"] = filter_str
-            return self._parse_rules_response(
-                await self._client._get(path, params=params if params else None)
+            return parse(
+                await self._client._get(
+                    path, params=params if params else None, **get_options
+                )
             )
 
         # Auto-paginate to retrieve all rules.
@@ -216,8 +227,8 @@ class FirewallEndpoint:
             if filter_str:
                 params["filter"] = filter_str
 
-            response = await self._client._get(path, params=params)
-            rules = self._parse_rules_response(response)
+            response = await self._client._get(path, params=params, **get_options)
+            rules = parse(response)
             all_rules.extend(rules)
 
             # Check if there are more pages.
@@ -239,6 +250,26 @@ class FirewallEndpoint:
         if isinstance(data, list):
             return [FirewallRule.model_validate(item) for item in data]
         return []
+
+    @staticmethod
+    def _parse_rules_strict(response: Any) -> list[FirewallRule]:
+        """Parse one page of firewall policies; anything but valid rules raises."""
+        data = response.get("data") if isinstance(response, dict) else response
+        if not isinstance(data, list) or not all(isinstance(i, dict) for i in data):
+            msg = "Unexpected firewall policy list response"
+            raise UniFiValidationError(msg)
+        rules: list[FirewallRule] = []
+        for item in data:
+            try:
+                rules.append(FirewallRule.model_validate(item))
+            except ValidationError:
+                break
+        else:
+            return rules
+        # Raised outside the handler so no validation error, which quotes the
+        # record, is attached to it as context.
+        msg = "Invalid firewall policy record"
+        raise UniFiValidationError(msg)
 
     async def get_rule(self, site_id: str, rule_id: str) -> FirewallRule:
         """

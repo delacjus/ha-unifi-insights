@@ -19,10 +19,13 @@ from homeassistant.exceptions import (
 )
 
 from custom_components.unifi_insights.api import (
+    ApiKeyAuth,
+    ConnectionType,
     UniFiAuthenticationError,
     UniFiConnectionError,
     UniFiNotFoundError,
 )
+from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
 from custom_components.unifi_insights.api.network.models import (
     FirewallRule,
     NatRule,
@@ -56,6 +59,7 @@ from tests.fixtures.network_rule_responses import (
     static_route_record,
     traffic_rule_record,
 )
+from tests.test_api_network_rule_endpoints import _Response
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -342,8 +346,8 @@ async def test_export_document_shape_and_fresh_fetch(freezer: Any) -> None:
         "count": 1,
         "rules": [port_forward_record()],
     }
-    _lister(client, "firewall_rule").assert_any_await("site1")
-    _lister(client, "port_forward").assert_awaited_once_with("default")
+    _lister(client, "firewall_rule").assert_any_await("site1", strict=True)
+    _lister(client, "port_forward").assert_awaited_once_with("default", strict=True)
     assert json.dumps(document)
 
 
@@ -366,7 +370,7 @@ async def test_site_without_classic_name_is_unsupported_for_classic_families() -
     for rule_type in RULE_TYPES[1:]:
         assert types[rule_type] == {"status": "unsupported", "count": 0, "rules": []}
         _lister(client, rule_type).assert_not_awaited()
-    _lister(client, "firewall_rule").assert_awaited_once_with("site2")
+    _lister(client, "firewall_rule").assert_awaited_once_with("site2", strict=True)
 
 
 async def test_family_status_unsupported_and_failed(
@@ -405,7 +409,7 @@ async def test_rule_types_filter() -> None:
     document = await _build(client, rule_types=["nat_rule"], site_ids=["site1"])
 
     assert list(document["sites"]["site1"]["rule_types"]) == ["nat_rule"]
-    _lister(client, "nat_rule").assert_awaited_once_with("default")
+    _lister(client, "nat_rule").assert_awaited_once_with("default", strict=True)
     for rule_type in RULE_TYPES:
         if rule_type != "nat_rule":
             _lister(client, rule_type).assert_not_awaited()
@@ -443,6 +447,233 @@ async def test_no_matching_site_returns_empty_sites() -> None:
     assert document["sites"] == {}
     for rule_type in RULE_TYPES:
         _lister(client, rule_type).assert_not_awaited()
+
+
+# --- real transport and real endpoints ---------------------------------------
+
+# rule type -> the end of the request path of its list call
+_PATH_ENDS: dict[str, str] = {
+    "firewall_rule": "/firewall/policies",
+    "policy_based_route": "/trafficroutes",
+    "port_forward": "/rest/portforward",
+    "traffic_rule": "/trafficrules",
+    "nat_rule": "/nat",
+    "static_route": "/rest/routing",
+}
+# What each endpoint answers when it has no rules.
+_EMPTY_ANSWER: dict[str, Any] = {
+    "firewall_rule": {
+        "offset": 0,
+        "limit": 200,
+        "count": 0,
+        "totalCount": 0,
+        "data": [],
+    },
+    "policy_based_route": [],
+    "port_forward": {"meta": {"rc": "ok"}, "data": []},
+    "traffic_rule": [],
+    "nat_rule": [],
+    "static_route": {"meta": {"rc": "ok"}, "data": []},
+}
+_SENTINEL = "192.0.2.123"
+# A valid record per family, with sentinel values a log must never show. The
+# marker key comes first so it is inside any 500 character log excerpt.
+_GOOD_RECORDS: dict[str, dict[str, Any]] = {
+    "firewall_rule": {"x_marker": "secret-198.51.100.1", "id": "fw1", "name": "SSH"},
+    "policy_based_route": {"x_marker": "secret-198.51.100.2", "_id": "pbr1"},
+    "port_forward": port_forward_record(
+        x_marker="secret-198.51.100.3", fwd="192.0.2.88"
+    ),
+    "traffic_rule": traffic_rule_record(x_marker="secret-198.51.100.4"),
+    "nat_rule": nat_rule_record(x_marker="secret-198.51.100.5"),
+    "static_route": static_route_record(x_marker="secret-198.51.100.6"),
+}
+# A record per family that fails its model and quotes the sentinel as input.
+_INVALID_RECORDS: dict[str, dict[str, Any]] = {
+    "firewall_rule": {"name": _SENTINEL},
+    "policy_based_route": {"_id": "pbr-bad", "network_ids": [{"id": _SENTINEL}]},
+    "port_forward": {"_id": 5, "name": _SENTINEL},
+    "traffic_rule": {"description": _SENTINEL},
+    "nat_rule": {"description": _SENTINEL},
+    "static_route": {"name": _SENTINEL},
+}
+
+
+class _RoutedSession:
+    """Answer each rule list request with the body registered for its family."""
+
+    closed = False
+
+    def __init__(self, bodies: dict[str, Any]) -> None:
+        self._bodies = {**_EMPTY_ANSWER, **bodies}
+        self.requests: list[str] = []
+
+    def request(self, method: str, url: object, **kwargs: Any) -> _Response:
+        path = str(url)
+        self.requests.append(path)
+        for rule_type, end in _PATH_ENDS.items():
+            if path.endswith(end):
+                return _Response(self._bodies[rule_type])
+        msg = f"unexpected request {method} {path}"
+        raise AssertionError(msg)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _real_client(session: _RoutedSession) -> UniFiNetworkClient:
+    return UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+        session=session,  # type: ignore[arg-type]
+    )
+
+
+async def _export_real(bodies: dict[str, Any]) -> dict[str, Any]:
+    """Export site1 through the real client and the real six endpoints."""
+    return await _build(
+        _real_client(_RoutedSession(bodies)), site_ids=["site1"], rule_types=None
+    )
+
+
+def _statuses(document: dict[str, Any]) -> dict[str, str]:
+    types = document["sites"]["site1"]["rule_types"]
+    return {rule_type: types[rule_type]["status"] for rule_type in RULE_TYPES}
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+@pytest.mark.parametrize(
+    "body",
+    [None, {}, {"data": None}, {"data": "unexpected"}, "text", [1, 2]],
+)
+async def test_export_rejects_malformed_list_response(
+    rule_type: str, body: Any
+) -> None:
+    """A broken answer is a failed family, never an empty successful one."""
+    document = await _export_real({rule_type: body})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
+    for other in RULE_TYPES:
+        if other != rule_type:
+            assert types[other] == {"status": "ok", "count": 0, "rules": []}
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+async def test_export_invalid_record_marks_family_failed(rule_type: str) -> None:
+    """One bad record fails the family; it is never exported as 1 of 2."""
+    records = [_GOOD_RECORDS[rule_type], _INVALID_RECORDS[rule_type]]
+
+    document = await _export_real({rule_type: records})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
+    assert [t for t in RULE_TYPES if types[t]["status"] != "ok"] == [rule_type]
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+@pytest.mark.parametrize(
+    "body", [[], {"data": []}, {"meta": {"rc": "ok"}, "data": []}, None]
+)
+async def test_export_valid_empty_list_is_ok(rule_type: str, body: Any) -> None:
+    """A real empty answer is an ok family with no rules."""
+    if body is None:
+        body = _EMPTY_ANSWER[rule_type]
+
+    document = await _export_real({rule_type: body})
+
+    assert _statuses(document) == dict.fromkeys(RULE_TYPES, "ok")
+    for exported in document["sites"]["site1"]["rule_types"].values():
+        assert (exported["count"], exported["rules"]) == (0, [])
+
+
+async def test_export_valid_answers_are_exported_whole() -> None:
+    """Valid answers of all six real endpoints come back as ok, with their rules."""
+    document = await _export_real(
+        {rule_type: [record] for rule_type, record in _GOOD_RECORDS.items()}
+    )
+
+    assert _statuses(document) == dict.fromkeys(RULE_TYPES, "ok")
+    types = document["sites"]["site1"]["rule_types"]
+    for rule_type in RULE_TYPES:
+        assert types[rule_type]["count"] == 1
+        assert types[rule_type]["rules"][0]["x_marker"].startswith("secret-")
+
+
+async def test_export_error_envelope_is_not_ok(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 2xx error envelope is no rules; the real classifier calls it unsupported."""
+    caplog.set_level(logging.DEBUG)
+    body = {"meta": {"rc": "error", "msg": f"secret {_SENTINEL}"}, "data": []}
+
+    document = await _export_real({"port_forward": body})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types["port_forward"] == {"status": "unsupported", "count": 0, "rules": []}
+    assert _SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize("redact", [True, False])
+@pytest.mark.parametrize("invalid", [False, True])
+async def test_export_transport_logs_no_sensitive_values(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    redact: bool,  # noqa: FBT001
+    invalid: bool,  # noqa: FBT001
+) -> None:
+    """Real client, real endpoints, DEBUG: no rule value or input_value is logged."""
+    caplog.set_level(logging.DEBUG)
+    bodies = {
+        rule_type: [
+            record,
+            *([_INVALID_RECORDS[rule_type]] if invalid else []),
+        ]
+        for rule_type, record in _GOOD_RECORDS.items()
+    }
+    session = _RoutedSession(bodies)
+    client = _real_client(session)
+
+    async def export(
+        site_ids: list[str] | None, rule_types: list[str] | None
+    ) -> dict[str, Any]:
+        return await _build(client, site_ids=site_ids, rule_types=rule_types)
+
+    coordinator = MagicMock()
+    coordinator.async_export_network_rules = AsyncMock(side_effect=export)
+
+    call = _call(
+        hass,
+        [_entry("UDM", coordinator, _SITES)],
+        {"site_id": "site1", "redact": redact},
+    )
+    if invalid:
+        # Every family fails, which is an error of the action.
+        with pytest.raises(HomeAssistantError) as err:
+            await call
+        assert err.value.translation_key == "export_network_rules_failed"
+    else:
+        assert (await call)["redacted"] is redact
+
+    # Every family was really requested, so the log below is not trivially clean.
+    assert len(session.requests) == len(RULE_TYPES)
+    assert "<body omitted" in caplog.text
+    for text in (
+        caplog.text,
+        *(record.getMessage() for record in caplog.records),
+        *(record.exc_text or "" for record in caplog.records),
+    ):
+        for sentinel in (
+            _SENTINEL,
+            "192.0.2.88",
+            "secret-198.51.100",
+            "input_value",
+            "blocked.example",
+            "Plex",
+            "SSH",
+        ):
+            assert sentinel not in text, sentinel
 
 
 def test_redaction_removes_sensitive_values_of_every_family() -> None:

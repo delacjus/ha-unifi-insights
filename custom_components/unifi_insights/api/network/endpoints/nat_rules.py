@@ -12,11 +12,13 @@ from custom_components.unifi_insights.api.exceptions import (
     UniFiNotFoundError,
     UniFiResponseError,
     UniFiRuleNotEditableError,
+    UniFiValidationError,
 )
 from custom_components.unifi_insights.api.network.models.nat_rule import (
     NatRule,
     is_predefined_nat_rule,
 )
+from custom_components.unifi_insights.api.validation import sanitized_validation_fields
 
 if TYPE_CHECKING:
     from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
@@ -68,9 +70,56 @@ class NatRulesEndpoint:
 
         return []
 
-    async def list_nat_rules(self, site_name: str) -> list[NatRule]:
-        """List all NAT rules for a site."""
+    def _extract_strict_items(self, response: Any) -> list[dict[str, Any]]:
+        """
+        Return the records of a list answer, or raise.
+
+        Used by the rule export, which must not present a broken answer as a
+        list of rules: the body must be a list, or a dict whose ``data`` is a
+        list, and every element must be a dict. Nothing of the response is
+        put in a message.
+        """
+        if isinstance(response, dict):
+            meta = response.get("meta")
+            if isinstance(meta, dict) and meta.get("rc") == "error":
+                msg = "UniFi Network API error"
+                raise UniFiResponseError(msg, status_code=200)
+            response = response.get("data")
+        if not isinstance(response, list) or not all(
+            isinstance(item, dict) for item in response
+        ):
+            msg = "Unexpected NAT rules list response"
+            raise UniFiValidationError(msg)
+        return response
+
+    def _parse_strict(self, response: Any) -> list[NatRule]:
+        """Validate every record of a list answer; the first bad one raises."""
+        rules: list[NatRule] = []
+        for item in self._extract_strict_items(response):
+            try:
+                rules.append(NatRule.model_validate(item))
+            except ValidationError:
+                break
+        else:
+            return rules
+        # Raised outside the handler so no validation error, which quotes the
+        # record, is attached to it as context.
+        msg = "Invalid NAT rule record"
+        raise UniFiValidationError(msg)
+
+    async def list_nat_rules(
+        self, site_name: str, *, strict: bool = False
+    ) -> list[NatRule]:
+        """
+        List all NAT rules for a site.
+
+        With ``strict`` (the rule export) the answer must be a list of valid
+        records, otherwise ``UniFiValidationError`` is raised: nothing is
+        skipped and the response body is not logged.
+        """
         path = self._client.build_legacy_v2_api_path(site_name, ENDPOINT_NAT_RULES)
+        if strict:
+            return self._parse_strict(await self._client._get(path, log_body=False))
         response = await self._client._get(path)
         items = self._extract_items(response)
 
@@ -79,7 +128,11 @@ class NatRulesEndpoint:
             try:
                 rules.append(NatRule.model_validate(item))
             except ValidationError as err:
-                _LOGGER.debug("Skipping invalid NAT rule item: %s", err)
+                _LOGGER.debug(
+                    "Skipping invalid NAT rule item (%s: %s)",
+                    type(err).__name__,
+                    sanitized_validation_fields(err),
+                )
                 continue
 
         return rules

@@ -30,13 +30,14 @@ RULE_EXPORT_FORMAT_VERSION: Final = 1
 
 def _rule_fetchers(
     network_client: UniFiNetworkClient,
-) -> dict[str, tuple[bool, Callable[[str], Awaitable[list[Any]]]]]:
+) -> dict[str, tuple[bool, Callable[..., Awaitable[list[Any]]]]]:
     """
     Map each rule type to ``(uses_classic_site_name, list method)``.
 
     Firewall policies are official API and take the site id. Every other
     family is a classic or v2 endpoint and takes the site's verified classic
-    name (``internalReference``).
+    name (``internalReference``). Each list method accepts ``strict``, which
+    the export always sets.
     """
     return {
         "firewall_rule": (False, network_client.firewall.list_rules),
@@ -59,7 +60,7 @@ async def _async_export_family(
     rule_type: str,
     site_id: str,
     site_ref: str | None,
-    fetch: Callable[[str], Awaitable[list[Any]]],
+    fetch: Callable[..., Awaitable[list[Any]]],
     is_unsupported: Callable[[Exception], bool],
 ) -> dict[str, Any]:
     """Fetch one rule family of one site and report how the fetch ended."""
@@ -67,7 +68,10 @@ async def _async_export_family(
     rules: list[Any] = []
     if site_ref is not None:
         try:
-            rules = [_export_record(model) for model in await fetch(site_ref)]
+            # Strict: a broken or partly parsed answer raises instead of being
+            # exported as a shorter list of rules.
+            models = await fetch(site_ref, strict=True)
+            rules = [_export_record(model) for model in models]
             status = SECTION_OUTCOME_OK
         except Exception as err:
             if not is_unsupported(err):
