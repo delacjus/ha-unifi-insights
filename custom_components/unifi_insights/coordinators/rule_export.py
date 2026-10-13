@@ -115,7 +115,7 @@ async def async_build_rule_export(
     """
     Fetch the requested rule families now and return the export document.
 
-    Nothing is read from coordinator data: a backup must show what the
+    Nothing is read from coordinator data: an export must show what the
     console holds at this moment, and say so per family when it could not be
     read. Raises ``HomeAssistantError`` only when every fetch failed.
     """

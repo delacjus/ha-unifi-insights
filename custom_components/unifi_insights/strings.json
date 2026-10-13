@@ -231,7 +231,7 @@
     },
     "export_network_rules": {
       "name": "Export network rules",
-      "description": "Return the current firewall policies, policy-based routes, port forwards, traffic rules, NAT rules and static routes of one console as a versioned document. The rules are read from the console when you run the action. Requires an admin user. The action only returns data; it does not write a file.",
+      "description": "Return a snapshot of the firewall policies, policy-based routes, port forwards, traffic rules, NAT rules and static routes of one console as a versioned document, for comparison, versioning and manual recovery. It is not a complete console backup: the networks, zones, traffic matching lists, groups and VPN definitions that rules refer to are not included, and there is no import. The rules are read from the console when you run the action. Only a rule type with status ok is complete: failed means the console's answer could not be read, unsupported means the console does not offer that list. Requires an admin user. The action only returns data; it does not write a file.",
       "fields": {
         "site_id": {
           "name": "Site ID",
@@ -246,8 +246,8 @@
           "description": "The rule types to export. Leave empty to export all of them."
         },
         "redact": {
-          "name": "Redact addresses",
-          "description": "Remove IP addresses, domains, MAC addresses and site identifiers from the export, the same way diagnostics does. Turn this off for a full backup: the export then contains your complete rule configuration and is sensitive."
+          "name": "Redact sensitive values",
+          "description": "Keep only each rule's ID, enabled state, type, action, protocol and port settings. Names, descriptions, addresses, domains, interfaces, network and client references and anything unrecognised are replaced, site IDs become site-1, site-2 and so on, and the console title and entry ID are removed. Turn this off to get the records as the integration read them, including addresses and names. That export is sensitive."
         }
       }
     },

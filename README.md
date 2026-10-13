@@ -316,10 +316,23 @@ data:
 response_variable: rules
 ```
 
-The export is read from the console when the action runs. Each rule type of each site has a `status` of
-`ok`, `unsupported` or `failed`, so a partial backup is visible. With `redact: true` (the default) addresses,
-domains, MAC addresses and site identifiers are removed, as in diagnostics. Set `redact: false` for a full
-backup and store it like a secret. There is no import action: restore rules in the UniFi Network app.
+The export is a snapshot of six rule types: firewall policies, policy-based routes, port forwards, traffic
+rules, NAT rules and static routes. Use it to compare, version and manually recover rules. It is not a complete
+console backup: the networks, firewall zones, traffic matching lists, groups and VPN definitions that rules
+refer to are not included, and there is no import action.
+
+- **Status:** the rules are read from the console when the action runs. Each rule type of each site has a
+  `status`. Only `ok` is complete. `failed` means the console's answer could not be read or parsed, and no rules
+  of that type are returned. `unsupported` means the console does not offer that list.
+- **Redacted (default, `redact: true`):** keeps each rule's ID, whether it is enabled, its type, action,
+  protocol and port settings. It replaces names, descriptions, addresses, domains, interfaces, network and
+  client references and anything it does not recognise with `**REDACTED**`. Site IDs become `site-1`,
+  `site-2`, and so on, in sorted order of the original IDs. The site names and the console's title and entry ID
+  are removed.
+- **Unredacted (`redact: false`):** returns the records as the integration read them, with the real site IDs,
+  names and addresses. Store it like a secret.
+- **Stable output:** `generated_at` changes on every call. For an unchanged console everything else is
+  identical, because sites and rules are listed in a fixed order.
 
 `authorize_guest` doesn't send a duration or limits yet, so the `duration_minutes` and limit fields are ignored and a warning is logged. The guest network's default access time and limits from UniFi apply.
 
