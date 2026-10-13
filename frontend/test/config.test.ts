@@ -24,6 +24,7 @@ describe("validateConfig", () => {
             kinds: ["gateway", "switch"],
             density: "compact",
             orientation: "horizontal",
+            layout: "tiered",
             show_labels: false,
             max_clients: 120,
             grid_options: { columns: 12 },
@@ -41,6 +42,11 @@ describe("validateConfig", () => {
         [{ type: TYPE, clients: "all" }, /clients must be one of/],
         [{ type: TYPE, density: "tiny" }, /density must be one of/],
         [{ type: TYPE, orientation: "diagonal" }, /orientation must be one of/],
+        [
+            { type: TYPE, layout: "isometric" },
+            /layout must be one of: tree, tiered/,
+        ],
+        [{ type: TYPE, layout: 3 }, /layout must be one of/],
         [{ type: TYPE, kinds: [] }, /kinds must be a non-empty list/],
         [{ type: TYPE, kinds: ["router"] }, /kinds must be a non-empty list/],
         [
@@ -70,9 +76,19 @@ describe("resolveConfig", () => {
             kinds: [...NODE_KINDS],
             density: undefined,
             orientation: "vertical",
+            layout: "tree",
             show_labels: true,
             max_clients: 500,
         });
+    });
+
+    it("resolves a configured layout and keeps tree as the default", () => {
+        expect(resolveConfig({ type: TYPE, layout: "tiered" }).layout).toBe(
+            "tiered",
+        );
+        expect(resolveConfig({ type: TYPE, layout: "tree" }).layout).toBe(
+            "tree",
+        );
     });
 });
 
@@ -92,7 +108,10 @@ describe("site binding", () => {
     it("auto-picks the only site", () => {
         expect(
             resolveBinding(resolveConfig({ type: TYPE }), SOURCES_ONE),
-        ).toEqual({ entry_id: "entry-1", site_id: "site-1" });
+        ).toEqual({
+            entry_id: "entry-1",
+            site_id: "site-1",
+        });
     });
 
     it("does not guess between several sites", () => {

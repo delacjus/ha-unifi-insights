@@ -18,7 +18,7 @@ import {
     type TemplateResult,
 } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { Density, Orientation } from "../config";
+import type { Density, LayoutMode, Orientation } from "../config";
 import { defineOnce } from "../define";
 import { fireEvent } from "../ha-types";
 import { GROUP_ICON, iconFor } from "../icons";
@@ -33,6 +33,7 @@ import {
     CULL_THRESHOLD,
     fitTransform,
     layoutModel,
+    layoutTiered,
     visibleIds,
     type Layout,
     type Point,
@@ -81,6 +82,7 @@ export class UitGraphView extends LitElement {
         model: { attribute: false },
         density: { attribute: false },
         orientation: { attribute: false },
+        layoutMode: { attribute: false },
         showLabels: { attribute: false },
         selectedId: { attribute: false },
         localize: { attribute: false },
@@ -94,6 +96,7 @@ export class UitGraphView extends LitElement {
     declare model?: GraphModel;
     declare density: Density;
     declare orientation: Orientation;
+    declare layoutMode: LayoutMode;
     declare showLabels: boolean;
     declare selectedId?: string;
     declare localize?: LocalizeFunc;
@@ -120,6 +123,7 @@ export class UitGraphView extends LitElement {
         super();
         this.density = "comfortable";
         this.orientation = "vertical";
+        this.layoutMode = "tree";
         this.showLabels = true;
         this.siteName = "";
         this.ctrlZoom = true;
@@ -166,13 +170,12 @@ export class UitGraphView extends LitElement {
         if (
             changed.has("model") ||
             changed.has("density") ||
-            changed.has("orientation")
+            changed.has("orientation") ||
+            changed.has("layoutMode")
         ) {
-            const next = layoutModel(
-                this.model,
-                this.density,
-                this.orientation,
-            );
+            const arrange =
+                this.layoutMode === "tiered" ? layoutTiered : layoutModel;
+            const next = arrange(this.model, this.density, this.orientation);
             const previous = this.layout;
             this.entering = new Set(
                 previous

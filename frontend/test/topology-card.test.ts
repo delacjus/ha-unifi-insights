@@ -317,6 +317,13 @@ describe("interaction", () => {
         ).toBe(true);
     });
 
+    it("passes the configured layout to the graph", async () => {
+        const { el } = await loaded();
+        expect(graphOf(el).layoutMode).toBe("tree");
+        const tiered = await loaded({ layout: "tiered" });
+        expect(graphOf(tiered.el).layoutMode).toBe("tiered");
+    });
+
     it("lets the wheel zoom directly only in panel view", async () => {
         const { el } = await loaded();
         expect(graphOf(el).ctrlZoom).toBe(true);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeLocalize } from "../src/localize";
 import { describeVisual } from "../src/views/describe";
+import { SPACING, layoutModel, layoutTiered } from "../src/model/layout";
 import { zoomFilter, type UitGraphView } from "../src/views/graph-view";
 import { cleanup, fixtureModel, fixtureSnapshot, mount } from "./helpers";
 
@@ -181,6 +182,47 @@ describe("<uit-graph-view> interaction", () => {
             zoomFilter(new MouseEvent("mousedown", { button: 2 }), true),
         ).toBe("ignore");
         expect(zoomFilter(new MouseEvent("mousedown"), true)).toBe("zoom");
+    });
+});
+
+describe("<uit-graph-view> layout mode", () => {
+    const translate = (el: UitGraphView, id: string) =>
+        byId(el, id).getAttribute("style");
+
+    it("draws the tree by default and the tiered rows on request", async () => {
+        const tree = await graph();
+        expect(tree.layoutMode).toBe("tree");
+        const tiered = await graph({ layoutMode: "tiered" });
+        const model = fixtureModel();
+        const depth = SPACING.comfortable.depth;
+        const treeLayout = layoutModel(model, "comfortable", "vertical");
+        const tieredLayout = layoutTiered(model, "comfortable", "vertical");
+        const at = (p: { x: number; y: number }) =>
+            `transform: translate(${p.x}px, ${p.y}px)`;
+        for (const id of ["dev:uuid-ap", "dev:uuid-flex"]) {
+            expect(translate(tree, id)).toBe(at(treeLayout.positions.get(id)!));
+            expect(translate(tiered, id)).toBe(
+                at(tieredLayout.positions.get(id)!),
+            );
+        }
+        // The tree puts the AP two levels down, the tiers put it on row three.
+        expect(tieredLayout.positions.get("dev:uuid-ap")!.y).toBe(3 * depth);
+        expect(treeLayout.positions.get("dev:uuid-ap")!.y).toBe(2 * depth);
+    });
+
+    it("recomputes the positions when the layout changes", async () => {
+        const el = await graph();
+        const before = translate(el, "dev:uuid-ap");
+        el.layoutMode = "tiered";
+        await el.updateComplete;
+        const after = translate(el, "dev:uuid-ap");
+        expect(after).not.toBe(before);
+        expect(after).toBe(
+            `transform: translate(0px, ${3 * SPACING.comfortable.depth}px)`,
+        );
+        el.layoutMode = "tree";
+        await el.updateComplete;
+        expect(translate(el, "dev:uuid-ap")).toBe(before);
     });
 });
 

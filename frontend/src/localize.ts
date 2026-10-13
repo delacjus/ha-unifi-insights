@@ -99,6 +99,7 @@ const en = {
     "editor.kinds": "Show node types",
     "editor.density": "Density",
     "editor.orientation": "Orientation",
+    "editor.layout": "Layout",
     "editor.show_site_selector": "Show site selector",
     "editor.show_labels": "Show labels",
     "editor.max_clients": "Maximum clients",
@@ -110,6 +111,8 @@ const en = {
     "density.compact": "Compact",
     "orientation.vertical": "Top to bottom",
     "orientation.horizontal": "Left to right",
+    "layout.tree": "Tree",
+    "layout.tiered": "Tiered by role",
 } as const;
 
 export type LocalizeKey = keyof typeof en;
