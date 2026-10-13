@@ -252,6 +252,16 @@ def _prune_orphaned_switch_entities(
             "traffic_rules",
             coordinator.traffic_rules_available,
         ),
+        (
+            "_nat_rule",
+            "nat_rules",
+            coordinator.nat_rules_available,
+        ),
+        (
+            "_static_route",
+            "static_routes",
+            coordinator.static_routes_available,
+        ),
     )
 
     stale_unique_ids: set[str] = set()

@@ -1,4 +1,4 @@
-"""Switches for UniFi network rules (port forwards and traffic rules)."""
+"""Switches for UniFi network rules (port forwards, traffic rules, NAT, routes)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinators.config_sections import rule_display_name
+from .coordinators.config_sections import is_predefined_nat_rule, rule_display_name
 from .entity import async_call_coordinator_action, build_site_device_info
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ class UnifiInsightsNetworkRuleSwitchEntityDescription(
     action_method: str
     error_label: str
     attributes_fn: Callable[[dict[str, Any]], dict[str, Any]]
+    is_hidden_fn: Callable[[dict[str, Any]], bool] | None = None
 
 
 def _port_forward_attributes(rule: dict[str, Any]) -> dict[str, Any]:
@@ -55,6 +56,24 @@ def _traffic_rule_attributes(rule: dict[str, Any]) -> dict[str, Any]:
     return {
         "action": rule.get("action"),
         "matching_target": rule.get("matching_target"),
+    }
+
+
+def _nat_rule_attributes(rule: dict[str, Any]) -> dict[str, Any]:
+    """Return extra state attributes for a NAT rule."""
+    return {
+        "nat_type": rule.get("type"),
+        "protocol": rule.get("protocol"),
+        "ip_version": rule.get("ip_version"),
+        "logging": rule.get("logging"),
+    }
+
+
+def _static_route_attributes(rule: dict[str, Any]) -> dict[str, Any]:
+    """Return extra state attributes for a static route."""
+    return {
+        "route_type": rule.get("static-route_type"),
+        "distance": rule.get("static-route_distance"),
     }
 
 
@@ -90,14 +109,53 @@ TRAFFIC_RULE_SWITCH = UnifiInsightsNetworkRuleSwitchEntityDescription(
     attributes_fn=_traffic_rule_attributes,
 )
 
-NETWORK_RULE_SWITCH_TYPES = (PORT_FORWARD_SWITCH, TRAFFIC_RULE_SWITCH)
+NAT_RULE_SWITCH = UnifiInsightsNetworkRuleSwitchEntityDescription(
+    key="nat_rule",
+    translation_key="nat_rule",
+    unnamed_translation_key="nat_rule_unnamed",
+    entity_category=EntityCategory.CONFIG,
+    data_key="nat_rules",
+    unique_id_suffix="nat_rule",
+    name_field="description",
+    available_fn=lambda coordinator, site_id: coordinator.nat_rules_available(site_id),
+    action_method="async_set_nat_rule_enabled",
+    error_label="NAT rule",
+    attributes_fn=_nat_rule_attributes,
+    is_hidden_fn=is_predefined_nat_rule,
+)
+
+# Disabled by default: turning off a static route can cut the path Home Assistant
+# itself uses to reach the console, and then the switch cannot turn it back on.
+STATIC_ROUTE_SWITCH = UnifiInsightsNetworkRuleSwitchEntityDescription(
+    key="static_route",
+    translation_key="static_route",
+    unnamed_translation_key="static_route_unnamed",
+    entity_category=EntityCategory.CONFIG,
+    entity_registry_enabled_default=False,
+    data_key="static_routes",
+    unique_id_suffix="static_route",
+    name_field="name",
+    available_fn=lambda coordinator, site_id: coordinator.static_routes_available(
+        site_id
+    ),
+    action_method="async_set_static_route_enabled",
+    error_label="static route",
+    attributes_fn=_static_route_attributes,
+)
+
+NETWORK_RULE_SWITCH_TYPES = (
+    PORT_FORWARD_SWITCH,
+    TRAFFIC_RULE_SWITCH,
+    NAT_RULE_SWITCH,
+    STATIC_ROUTE_SWITCH,
+)
 
 
 class UnifiInsightsNetworkRuleSwitch(
     CoordinatorEntity["UnifiFacadeCoordinator"],
     SwitchEntity,
 ):
-    """Switch to enable or disable a UniFi port forward or traffic rule."""
+    """Switch to enable or disable one UniFi network rule."""
 
     entity_description: UnifiInsightsNetworkRuleSwitchEntityDescription
     _attr_has_entity_name = True
@@ -207,7 +265,7 @@ def discover_network_rule_switches(
     coordinator: UnifiFacadeCoordinator,
     known_keys: set[tuple[Any, ...]],
 ) -> list[SwitchEntity]:
-    """Discover port forward and traffic rule switch entities."""
+    """Discover the switch entities of every network rule family."""
     entities: list[SwitchEntity] = []
     data: Any = coordinator.data
     if not isinstance(data, dict):
@@ -224,6 +282,8 @@ def discover_network_rule_switches(
                 if not isinstance(rule, dict) or not isinstance(
                     rule.get("enabled"), bool
                 ):
+                    continue
+                if desc.is_hidden_fn is not None and desc.is_hidden_fn(rule):
                     continue
                 key = (site_id, rule_id, desc.key)
                 if key in known_keys:

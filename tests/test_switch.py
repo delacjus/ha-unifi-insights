@@ -307,6 +307,10 @@ _ORPHAN_TYPE_PARAMS = [
     pytest.param(
         "traffic_rules", "_traffic_rule", "traffic_rules_available", id="traffic_rule"
     ),
+    pytest.param("nat_rules", "_nat_rule", "nat_rules_available", id="nat_rule"),
+    pytest.param(
+        "static_routes", "_static_route", "static_routes_available", id="static_route"
+    ),
 ]
 
 
@@ -330,12 +334,16 @@ class TestPruneOrphanedSwitchEntities:
         coordinator.firewall_available = MagicMock(return_value=True)
         coordinator.port_forwards_available = MagicMock(return_value=True)
         coordinator.traffic_rules_available = MagicMock(return_value=True)
+        coordinator.nat_rules_available = MagicMock(return_value=True)
+        coordinator.static_routes_available = MagicMock(return_value=True)
         coordinator.data = {
             "policy_based_routes": {"site1": {"route1": {}}},
             "firewall_rules": {"site1": {"rule1": {}}},
             "vpn_clients": {"site1": {"vpn1": {}}},
             "port_forwards": {"site1": {"pf1": {}}},
             "traffic_rules": {"site1": {"tr1": {}}},
+            "nat_rules": {"site1": {"nat1": {}}},
+            "static_routes": {"site1": {"sr1": {}}},
         }
         return coordinator
 

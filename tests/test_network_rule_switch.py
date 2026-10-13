@@ -12,8 +12,10 @@ from homeassistant.exceptions import HomeAssistantError
 from custom_components.unifi_insights.api.exceptions import UniFiConnectionError
 from custom_components.unifi_insights.const import DOMAIN
 from custom_components.unifi_insights.network_rule_switch import (
+    NAT_RULE_SWITCH,
     NETWORK_RULE_SWITCH_TYPES,
     PORT_FORWARD_SWITCH,
+    STATIC_ROUTE_SWITCH,
     TRAFFIC_RULE_SWITCH,
     UnifiInsightsNetworkRuleSwitch,
     UnifiInsightsNetworkRuleSwitchEntityDescription,
@@ -21,7 +23,9 @@ from custom_components.unifi_insights.network_rule_switch import (
 )
 from custom_components.unifi_insights.switch import async_setup_entry
 from tests.fixtures.network_rule_responses import (
+    nat_rule_record,
     port_forward_record,
+    static_route_record,
     traffic_rule_record,
 )
 
@@ -159,6 +163,8 @@ async def test_discovery_adds_new_rule_on_listener_tick_without_duplicates(
     [
         (PORT_FORWARD_SWITCH, "pf1", " Plex "),
         (TRAFFIC_RULE_SWITCH, "tr1", " Bedtime "),
+        (NAT_RULE_SWITCH, "nat1", " DNS "),
+        (STATIC_ROUTE_SWITCH, "sr1", " Lab "),
     ],
 )
 def test_unique_id_and_named_translation(
@@ -177,7 +183,10 @@ def test_unique_id_and_named_translation(
     assert switch.translation_placeholders == {"rule_name": rule_name.strip()}
 
 
-@pytest.mark.parametrize("desc", [PORT_FORWARD_SWITCH, TRAFFIC_RULE_SWITCH])
+@pytest.mark.parametrize(
+    "desc",
+    [PORT_FORWARD_SWITCH, TRAFFIC_RULE_SWITCH, NAT_RULE_SWITCH, STATIC_ROUTE_SWITCH],
+)
 @pytest.mark.parametrize("name_val", [None, "", "   "])
 def test_unnamed_rule_uses_rule_id_placeholder(
     mock_coordinator: MagicMock,
@@ -313,6 +322,8 @@ def test_traffic_rule_attributes(mock_coordinator: MagicMock) -> None:
     [
         (PORT_FORWARD_SWITCH, "pf1", "async_set_port_forward_enabled"),
         (TRAFFIC_RULE_SWITCH, "tr1", "async_set_traffic_rule_enabled"),
+        (NAT_RULE_SWITCH, "nat1", "async_set_nat_rule_enabled"),
+        (STATIC_ROUTE_SWITCH, "sr1", "async_set_static_route_enabled"),
     ],
 )
 @pytest.mark.parametrize("turn_on", [True, False])
@@ -327,6 +338,9 @@ async def test_turn_on_off_calls_facade_then_refreshes(
     """turn_on / turn_off invokes facade method, updates local state and refreshes."""
     setattr(mock_coordinator, method_name, AsyncMock())
     mock_coordinator.async_request_refresh = AsyncMock()
+
+    if desc.data_key not in mock_coordinator.data:
+        mock_coordinator.data[desc.data_key] = {"site1": {rule_id: {"enabled": True}}}
 
     mock_coordinator.data[desc.data_key]["site1"][rule_id]["enabled"] = not turn_on
 
@@ -448,3 +462,134 @@ def test_update_local_state_guards_against_non_dict_data(
     mock_coordinator.data = {"port_forwards": {"site1": {}}}
     switch._update_local_state(enabled=True)
     assert switch._get_rule_data() == {}
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_adds_nat_rule_and_static_route_switches(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """Platform setup adds NAT rule and static route switches."""
+    mock_coordinator.nat_rules_available = MagicMock(return_value=True)
+    mock_coordinator.static_routes_available = MagicMock(return_value=True)
+    mock_coordinator.data["nat_rules"] = {
+        "site1": {
+            "nat-dns": nat_rule_record(_id="nat-dns"),
+        }
+    }
+    mock_coordinator.data["static_routes"] = {
+        "site1": {
+            "route-lab": static_route_record(_id="route-lab"),
+        }
+    }
+    mock_entry = MagicMock()
+    mock_entry.options = {}
+    mock_entry.entry_id = "test_entry_id"
+    mock_entry.runtime_data = MagicMock()
+    mock_entry.runtime_data.coordinator = mock_coordinator
+
+    async_add_entities = MagicMock()
+    await async_setup_entry(hass, mock_entry, async_add_entities)
+
+    entities = async_add_entities.call_args[0][0]
+    rule_switches = [
+        entity
+        for entity in entities
+        if isinstance(entity, UnifiInsightsNetworkRuleSwitch)
+    ]
+    assert len(rule_switches) == 4
+    assert {e._rule_id for e in rule_switches} == {
+        "pf1",
+        "tr1",
+        "nat-dns",
+        "route-lab",
+    }
+
+
+def test_discovery_hides_predefined_nat_rules(
+    mock_coordinator: MagicMock,
+) -> None:
+    """Discovery hides predefined/auto NAT rules; static routes never hidden."""
+    r5 = nat_rule_record(_id="r5")
+    del r5["is_predefined"]
+    del r5["setting_preference"]
+    mock_coordinator.data["nat_rules"] = {
+        "site1": {
+            "r1": nat_rule_record(_id="r1", is_predefined=True),
+            "r2": nat_rule_record(_id="r2", setting_preference="auto"),
+            "r3": nat_rule_record(_id="r3", setting_preference=None),
+            "r4": nat_rule_record(_id="r4"),
+            "r5": r5,
+        }
+    }
+    mock_coordinator.nat_rules_available = MagicMock(return_value=True)
+    known_keys: set[tuple[Any, ...]] = set()
+    entities = discover_network_rule_switches(mock_coordinator, known_keys)
+    nat_entities = [e for e in entities if e.entity_description.key == "nat_rule"]
+    assert len(nat_entities) == 2
+    assert {e._rule_id for e in nat_entities} == {"r4", "r5"}
+    assert STATIC_ROUTE_SWITCH.is_hidden_fn is None
+
+
+def test_static_route_switch_is_disabled_by_default(
+    mock_coordinator: MagicMock,
+) -> None:
+    """Static route switch is disabled by default in registry; others enabled."""
+    assert STATIC_ROUTE_SWITCH.entity_registry_enabled_default is False
+    assert PORT_FORWARD_SWITCH.entity_registry_enabled_default is True
+    assert TRAFFIC_RULE_SWITCH.entity_registry_enabled_default is True
+    assert NAT_RULE_SWITCH.entity_registry_enabled_default is True
+
+    sr_entity = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, STATIC_ROUTE_SWITCH, "site1", "sr1"
+    )
+    assert sr_entity.entity_registry_enabled_default is False
+
+    for desc in (PORT_FORWARD_SWITCH, TRAFFIC_RULE_SWITCH, NAT_RULE_SWITCH):
+        entity = UnifiInsightsNetworkRuleSwitch(mock_coordinator, desc, "site1", "r1")
+        assert entity.entity_registry_enabled_default is True
+
+
+def test_nat_rule_attributes_exclude_addresses(
+    mock_coordinator: MagicMock,
+) -> None:
+    """NAT rule extra state attributes contain metadata but no IP addresses."""
+    mock_coordinator.data["nat_rules"] = {
+        "site1": {
+            "nat-dns": nat_rule_record(),
+        }
+    }
+    switch = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, NAT_RULE_SWITCH, "site1", "nat-dns"
+    )
+    attrs = switch.extra_state_attributes
+    expected_keys = {
+        "rule_id",
+        "nat_type",
+        "protocol",
+        "ip_version",
+        "logging",
+    }
+    assert set(attrs.keys()) == expected_keys
+    dumped = str(attrs)
+    assert "192.0.2.53" not in dumped
+    assert "192.0.2.54" not in dumped
+
+
+def test_static_route_attributes_exclude_addresses(
+    mock_coordinator: MagicMock,
+) -> None:
+    """Static route extra state attributes contain type and distance but no IPs/MACs."""
+    mock_coordinator.data["static_routes"] = {
+        "site1": {
+            "route-lab": static_route_record(),
+        }
+    }
+    switch = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, STATIC_ROUTE_SWITCH, "site1", "route-lab"
+    )
+    attrs = switch.extra_state_attributes
+    expected_keys = {"rule_id", "route_type", "distance"}
+    assert set(attrs.keys()) == expected_keys
+    dumped = str(attrs)
+    assert "192.168.2.0/24" not in dumped
+    assert "aa:bb:cc:dd:ee:ff" not in dumped
