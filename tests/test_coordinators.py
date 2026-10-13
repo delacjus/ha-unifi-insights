@@ -26,6 +26,7 @@ from custom_components.unifi_insights.api import (
     UniFiNotFoundError,
     UniFiRateLimitError,
     UniFiResponseError,
+    UniFiRuleNotEditableError,
     UniFiTimeoutError,
 )
 from custom_components.unifi_insights.api.innerspace import (
@@ -7869,6 +7870,30 @@ class TestUnifiFacadeCoordinator:
         facade_coordinator.network_client.nat_rules.update_nat_rule.assert_called_once_with(
             "alpha", "nat1", enabled=False
         )
+
+    @pytest.mark.asyncio
+    async def test_async_set_nat_rule_enabled_console_managed_refreshes_and_raises(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """UniFiRuleNotEditableError requests refresh and raises translated error."""
+        facade_coordinator._config_coordinator.data = {
+            "sites": {"site1": {"id": "site1", "internalReference": "default"}},
+            "nat_rules": {"site1": {"nat1": {"description": "DNS"}}},
+        }
+        facade_coordinator.network_client.nat_rules.update_nat_rule = AsyncMock(
+            side_effect=UniFiRuleNotEditableError(
+                "NAT rule nat1 is managed by the console"
+            )
+        )
+        facade_coordinator.async_request_refresh = AsyncMock()
+
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await facade_coordinator.async_set_nat_rule_enabled(
+                "site1", "nat1", enabled=False
+            )
+
+        facade_coordinator.async_request_refresh.assert_awaited_once()
+        assert exc_info.value.translation_key == "network_rule_console_managed"
 
     @pytest.mark.asyncio
     async def test_async_set_static_route_enabled_uses_internal_reference(

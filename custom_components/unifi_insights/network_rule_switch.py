@@ -203,6 +203,8 @@ class UnifiInsightsNetworkRuleSwitch(
     def available(self) -> bool:
         """Return if the switch is available."""
         desc = self.entity_description
+        if desc.is_hidden_fn is not None and desc.is_hidden_fn(self._get_rule_data()):
+            return False
         return bool(desc.available_fn(self.coordinator, self._site_id)) and isinstance(
             self._get_rule_data().get("enabled"), bool
         )

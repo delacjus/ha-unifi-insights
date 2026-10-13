@@ -11,8 +11,12 @@ from custom_components.unifi_insights.api.const import ENDPOINT_NAT_RULES
 from custom_components.unifi_insights.api.exceptions import (
     UniFiNotFoundError,
     UniFiResponseError,
+    UniFiRuleNotEditableError,
 )
-from custom_components.unifi_insights.api.network.models.nat_rule import NatRule
+from custom_components.unifi_insights.api.network.models.nat_rule import (
+    NatRule,
+    is_predefined_nat_rule,
+)
 
 if TYPE_CHECKING:
     from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
@@ -94,6 +98,11 @@ class NatRulesEndpoint:
         if current is None:
             msg = f"NAT rule {rule_id} not found"
             raise UniFiNotFoundError(msg, status_code=404)
+
+        if is_predefined_nat_rule(current):
+            raise UniFiRuleNotEditableError(
+                f"NAT rule {rule_id} is managed by the console"
+            )
 
         payload = dict(current)
         payload["enabled"] = enabled

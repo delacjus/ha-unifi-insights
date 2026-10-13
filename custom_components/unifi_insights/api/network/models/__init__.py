@@ -50,7 +50,7 @@ from .lag import (
     McLagPeer,
     McLagRole,
 )
-from .nat_rule import NatRule
+from .nat_rule import NatRule, is_predefined_nat_rule
 from .network import Network, NetworkPurpose, NetworkType
 from .port_forward import PortForward
 from .report import (
@@ -157,6 +157,7 @@ __all__ = [
     "WANStatus",
     # NAT Rule
     "NatRule",
+    "is_predefined_nat_rule",
     # Port Forward
     "PortForward",
     # Routes

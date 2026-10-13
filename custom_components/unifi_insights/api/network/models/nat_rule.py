@@ -2,7 +2,27 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def is_predefined_nat_rule(rule_data: Any) -> bool:
+    """
+    Return True when a NAT rule is managed by the controller, not the user.
+
+    Reference-derived (sirkirby/unifi-mcp ``_editable``): a rule is predefined
+    when ``is_predefined`` is True, or when ``setting_preference`` is present
+    and is not ``"manual"``. A record that carries neither key is a user rule.
+    """
+    if not isinstance(rule_data, dict):
+        return False
+    if rule_data.get("is_predefined") is True:
+        return True
+    return (
+        "setting_preference" in rule_data
+        and rule_data["setting_preference"] != "manual"
+    )
 
 
 class NatRule(BaseModel):
@@ -25,3 +45,11 @@ class NatRule(BaseModel):
     id: str = Field(alias="_id")
     description: str | None = None
     enabled: bool | None = None
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _enabled_must_be_bool(cls, value: Any) -> bool | None:
+        """
+        Ensure enabled is strictly boolean or None without type coercion.
+        """
+        return value if isinstance(value, bool) else None

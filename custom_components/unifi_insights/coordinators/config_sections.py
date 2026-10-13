@@ -7,6 +7,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from custom_components.unifi_insights.api import UniFiAuthenticationError
+from custom_components.unifi_insights.api.network.models import is_predefined_nat_rule
 from custom_components.unifi_insights.topology_contract import normalize_mac
 
 from .internet_activity import resolve_report_site_name
@@ -337,24 +338,6 @@ def is_predefined_firewall_rule(rule_data: dict[str, Any]) -> bool:
         rule_data.get("predefined")
         or rule_data.get("isPredefined")
         or rule_data.get("isSystem")
-    )
-
-
-def is_predefined_nat_rule(rule_data: Any) -> bool:
-    """
-    Return True when a NAT rule is managed by the controller, not the user.
-
-    Reference-derived (sirkirby/unifi-mcp ``_editable``): a rule is predefined
-    when ``is_predefined`` is True, or when ``setting_preference`` is present
-    and is not ``"manual"``. A record that carries neither key is a user rule.
-    """
-    if not isinstance(rule_data, dict):
-        return False
-    if rule_data.get("is_predefined") is True:
-        return True
-    return (
-        "setting_preference" in rule_data
-        and rule_data["setting_preference"] != "manual"
     )
 
 

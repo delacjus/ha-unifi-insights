@@ -15,6 +15,7 @@ from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
     UniFiNotFoundError,
     UniFiResponseError,
+    UniFiRuleNotEditableError,
 )
 from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
 from custom_components.unifi_insights.api.network.endpoints.nat_rules import (
@@ -1037,3 +1038,68 @@ def test_nat_and_static_route_models_require_string_id() -> None:
     assert sr2.id == "sr-2"
     with pytest.raises(ValidationError):
         StaticRoute.model_validate({})
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"is_predefined": True},
+        {"setting_preference": "auto"},
+        {"setting_preference": None},
+    ],
+)
+async def test_update_nat_rule_predefined_raises_and_sends_no_put(
+    marker: dict[str, Any],
+) -> None:
+    """Console-managed NAT rules raise UniFiRuleNotEditableError and send no PUT."""
+    record = nat_rule_record(**marker)
+    session = _Session([[record]])
+    client = _client(session)
+
+    with pytest.raises(UniFiRuleNotEditableError):
+        await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+
+    assert len(session.requests) == 1
+    _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
+
+
+async def test_update_nat_rule_manual_marker_is_writable() -> None:
+    """Manual NAT rule is writable and sends PUT after GET."""
+    record = nat_rule_record(is_predefined=False, setting_preference="manual")
+    expected_put = dict(record, enabled=False)
+    session = _Session([[record], expected_put])
+    client = _client(session)
+
+    result = await client.nat_rules.update_nat_rule("default", "nat-dns", enabled=False)
+
+    assert len(session.requests) == 2
+    _assert_request(session.requests[0], "GET", "/v2/api/site/default/nat")
+    _assert_request(
+        session.requests[1],
+        "PUT",
+        "/v2/api/site/default/nat/nat-dns",
+        body=expected_put,
+    )
+    assert result.enabled is False
+
+
+@pytest.mark.parametrize("non_bool", ["true", "false", 1, 0])
+def test_nat_rule_model_keeps_record_with_non_bool_enabled_as_none(
+    non_bool: Any,
+) -> None:
+    """NatRule keeps record with non-boolean enabled coerced to None."""
+    raw = nat_rule_record(enabled=non_bool)
+    model = NatRule.model_validate(raw)
+    assert model.id == "nat-dns"
+    assert model.enabled is None
+
+
+@pytest.mark.parametrize("non_bool", ["true", "false", 1, 0])
+def test_static_route_model_keeps_record_with_non_bool_enabled_as_none(
+    non_bool: Any,
+) -> None:
+    """StaticRoute keeps record with non-boolean enabled coerced to None."""
+    raw = static_route_record(enabled=non_bool)
+    model = StaticRoute.model_validate(raw)
+    assert model.id == "route-lab"
+    assert model.enabled is None

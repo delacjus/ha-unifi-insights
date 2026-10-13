@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StaticRoute(BaseModel):
@@ -25,3 +27,11 @@ class StaticRoute(BaseModel):
     id: str = Field(alias="_id")
     name: str | None = None
     enabled: bool | None = None
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _enabled_must_be_bool(cls, value: Any) -> bool | None:
+        """
+        Ensure enabled is strictly boolean or None without type coercion.
+        """
+        return value if isinstance(value, bool) else None

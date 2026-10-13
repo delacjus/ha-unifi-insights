@@ -36,6 +36,7 @@ from custom_components.unifi_insights.api import (
     UniFiError,
     UniFiGlobalAlarmManagerError,
     UniFiNotFoundError,
+    UniFiRuleNotEditableError,
 )
 from custom_components.unifi_insights.api.validation import sanitized_validation_fields
 from custom_components.unifi_insights.client_wake import (
@@ -850,6 +851,17 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("%s: it no longer exists on the console", msg)
             await self.async_request_refresh()
             raise HomeAssistantError(msg) from err
+        except UniFiRuleNotEditableError as err:
+            _LOGGER.warning("%s: it is managed by the console", msg)
+            await self.async_request_refresh()
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="network_rule_console_managed",
+                translation_placeholders={
+                    "rule_type": label,
+                    "rule_name": display_name,
+                },
+            ) from err
         except HomeAssistantError:
             raise
         except Exception as err:

@@ -10,6 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.unifi_insights.api.exceptions import UniFiConnectionError
+from custom_components.unifi_insights.api.network.models import NatRule, StaticRoute
 from custom_components.unifi_insights.const import DOMAIN
 from custom_components.unifi_insights.network_rule_switch import (
     NAT_RULE_SWITCH,
@@ -593,3 +594,59 @@ def test_static_route_attributes_exclude_addresses(
     dumped = str(attrs)
     assert "192.168.2.0/24" not in dumped
     assert "aa:bb:cc:dd:ee:ff" not in dumped
+
+
+def test_nat_rule_switch_unavailable_after_rule_turns_predefined(
+    mock_coordinator: MagicMock,
+) -> None:
+    """NAT rule switch becomes unavailable when rule turns predefined."""
+    mock_coordinator.nat_rules_available = MagicMock(return_value=True)
+    mock_coordinator.data["nat_rules"] = {
+        "site1": {
+            "nat1": {"description": "DNS", "enabled": True, "is_predefined": False}
+        }
+    }
+    switch = UnifiInsightsNetworkRuleSwitch(
+        mock_coordinator, NAT_RULE_SWITCH, "site1", "nat1"
+    )
+    assert switch.available is True
+
+    # Rule transitions to predefined on next update
+    mock_coordinator.data["nat_rules"]["site1"]["nat1"]["is_predefined"] = True
+    assert switch.available is False
+
+
+def test_discovery_skips_nat_rule_and_static_route_with_non_bool_enabled(
+    mock_coordinator: MagicMock,
+) -> None:
+    """Records with non-bool enabled produce zero switches in discovery."""
+    mock_coordinator.nat_rules_available = MagicMock(return_value=True)
+    mock_coordinator.static_routes_available = MagicMock(return_value=True)
+
+    nat_raw = [
+        nat_rule_record(_id=f"nat_{val}", enabled=val)
+        for val in ("true", "false", 1, 0)
+    ]
+    route_raw = [
+        static_route_record(_id=f"sr_{val}", enabled=val)
+        for val in ("true", "false", 1, 0)
+    ]
+
+    mock_coordinator.data["nat_rules"] = {
+        "site1": {
+            rec["_id"]: NatRule.model_validate(rec).model_dump(by_alias=True)
+            for rec in nat_raw
+        }
+    }
+    mock_coordinator.data["static_routes"] = {
+        "site1": {
+            rec["_id"]: StaticRoute.model_validate(rec).model_dump(by_alias=True)
+            for rec in route_raw
+        }
+    }
+    known_keys: set[tuple[Any, ...]] = set()
+    entities = discover_network_rule_switches(mock_coordinator, known_keys)
+    target_entities = [
+        e for e in entities if e.entity_description.key in ("nat_rule", "static_route")
+    ]
+    assert len(target_entities) == 0
