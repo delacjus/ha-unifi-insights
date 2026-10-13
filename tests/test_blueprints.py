@@ -399,7 +399,9 @@ async def _wait_until(condition: Callable[[], bool], expected: str) -> None:
     wait for them to finish, which is exactly what the caller wants to watch.
     """
     if not await _poll(condition, WAIT_TIMEOUT_SECONDS):
-        pytest.fail(f"Timed out after {WAIT_TIMEOUT_SECONDS:g} s waiting for {expected}")
+        pytest.fail(
+            f"Timed out after {WAIT_TIMEOUT_SECONDS:g} s waiting for {expected}"
+        )
 
 
 async def _advance_while_runs_wait(
