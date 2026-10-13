@@ -792,6 +792,18 @@
       },
       "sensor_event": {
         "name": "Door/Window"
+      },
+      "network_rule_changes": {
+        "name": "Network rule changes",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "added": "Added",
+              "modified": "Modified",
+              "deleted": "Deleted"
+            }
+          }
+        }
       }
     },
     "update": {

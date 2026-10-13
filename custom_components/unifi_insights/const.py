@@ -36,6 +36,7 @@ SITE_ENTITY_SUFFIXES: dict[str, frozenset[str]] = {
         }
     ),
     "button": frozenset({"generate_voucher"}),
+    "event": frozenset({"network_rule_changes"}),
     "image": frozenset({"voucher_qr_code"}),
 }
 

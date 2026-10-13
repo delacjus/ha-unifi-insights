@@ -15,6 +15,9 @@ from pathlib import Path
 from string import Formatter
 
 from custom_components.unifi_insights.binary_sensor import BINARY_SENSOR_TYPES
+from custom_components.unifi_insights.coordinators.rule_audit import (
+    RULE_CHANGE_TYPES,
+)
 from custom_components.unifi_insights.mobility_entity import (
     LOCATION_DESCRIPTION,
     ROUTER_SENSORS,
@@ -387,3 +390,22 @@ def test_storage_translations_and_icons_resolve_in_every_file() -> None:
         icon = icons.get(platform, {}).get(key, {}).get("default")
         assert icon is not None, f"{key} has no icon"
         assert icon.startswith("mdi:"), f"{key} icon invalid: {icon}"
+
+
+def test_network_rule_change_event_translations_and_icon() -> None:
+    """Network rule change events have matching translations and a valid icon."""
+    strings_event = json.loads(_STRINGS_JSON.read_text())["entity"]["event"][
+        "network_rule_changes"
+    ]
+    en_event = json.loads(_EN_JSON.read_text())["entity"]["event"][
+        "network_rule_changes"
+    ]
+    icons_event = json.loads(_ICONS_JSON.read_text())["entity"]["event"][
+        "network_rule_changes"
+    ]
+
+    assert strings_event == en_event
+    assert set(strings_event["state_attributes"]["event_type"]["state"].keys()) == set(
+        RULE_CHANGE_TYPES
+    )
+    assert icons_event["default"].startswith("mdi:")
