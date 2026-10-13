@@ -267,10 +267,6 @@ describe("node actions", () => {
     }
 
     function stubClipboard(writeText: (text: string) => Promise<void>) {
-        Object.defineProperty(window, "isSecureContext", {
-            configurable: true,
-            value: true,
-        });
         Object.defineProperty(navigator, "clipboard", {
             configurable: true,
             value: { writeText },
@@ -292,18 +288,16 @@ describe("node actions", () => {
         cleanup();
         delete (proto as Partial<HTMLDialogElement>).showModal;
         delete (proto as Partial<HTMLDialogElement>).close;
-        delete (window as { isSecureContext?: boolean }).isSecureContext;
         delete (navigator as { clipboard?: unknown }).clipboard;
         delete (document as { execCommand?: unknown }).execCommand;
     });
 
-    it("never calls the websocket for a non-administrator, who keeps the device link", async () => {
-        const callWS = answering({ "dev:uuid-core": DETAILS });
+    it("hides supplied device actions for a non-administrator, who keeps the device link", async () => {
         for (const admin of [false, undefined]) {
-            const el = await panel("dev:uuid-core");
-            el.hass = hassOf(admin, callWS);
+            const el = await adminPanel("dev:uuid-core", undefined, {
+                hass: hassOf(admin, vi.fn()),
+            });
             await settleAll(el);
-            expect(callWS).not.toHaveBeenCalled();
             expect(menuOf(el)).toBeNull();
             // The button next to the rows stays exactly as it was.
             expect(
@@ -312,17 +306,16 @@ describe("node actions", () => {
         }
     });
 
-    it("shows no menu to a non-administrator on a client that has no device link", async () => {
-        const callWS = answering({});
-        const el = await mount<UitDetailPanel>("uit-detail-panel", {
-            model: fixtureModel(),
-            localize,
-            selectedId: "cli:cli-tv",
-            hass: hassOf(false, callWS),
-        });
-        await settleAll(el);
-        expect(menuOf(el)).toBeNull();
-        expect(callWS).not.toHaveBeenCalled();
+    it("hides supplied client actions for non-administrators even without a device link", async () => {
+        for (const admin of [false, undefined]) {
+            const el = await adminPanel("cli:cli-tv", undefined, {
+                hass: hassOf(admin, vi.fn()),
+                details: CLIENT,
+            });
+            await settleAll(el);
+            expect(menuOf(el)).toBeNull();
+            expect(el.shadowRoot!.querySelector("button.action")).toBeNull();
+        }
     });
 
     it("starts every selection with a closed menu", async () => {
@@ -343,11 +336,14 @@ describe("node actions", () => {
         expect(menuOf(el)!.actions).toEqual(["copy_ip", "open_entity"]);
     });
 
-    it("asks nothing for a client group", async () => {
-        const callWS = answering({});
-        const el = await adminPanel("group:dev:uuid-u1", callWS);
+    it("renders no action menu for a client group even with supplied details", async () => {
+        const el = await adminPanel("group:dev:uuid-u1", undefined, {
+            details: DETAILS,
+        });
         await settleAll(el);
-        expect(callWS).not.toHaveBeenCalled();
+        expect(el.shadowRoot!.querySelector("h3")!.textContent).toBe(
+            "1 client",
+        );
         expect(menuOf(el)).toBeNull();
     });
 
@@ -635,11 +631,42 @@ describe("node actions", () => {
         expect(location.pathname).toBe("/config/devices/device/reg-core");
     });
 
+    it.each([false, undefined])(
+        "blocks a queued action after administrator access is lost (%s)",
+        async (admin) => {
+            const writeText = vi.fn(async () => undefined);
+            stubClipboard(writeText);
+            const el = await adminPanel("dev:uuid-core");
+            const menu = await openMenu(el);
+            const moreInfo = vi.fn();
+            el.addEventListener("hass-more-info", moreInfo);
+            const path = location.pathname;
+            // Before Lit removes the menu, a queued event must still be gated.
+            el.hass = hassOf(admin, vi.fn());
+            for (const action of [
+                "copy_ip",
+                "copy_mac",
+                "open_device",
+                "open_entity",
+            ]) {
+                menu.dispatchEvent(
+                    new CustomEvent("uit-action", {
+                        detail: { action },
+                        bubbles: true,
+                        composed: true,
+                    }),
+                );
+            }
+            await settleAll(el);
+            expect(writeText).not.toHaveBeenCalled();
+            expect(moreInfo).not.toHaveBeenCalled();
+            expect(location.pathname).toBe(path);
+            expect(status(el).textContent?.trim()).toBe("");
+        },
+    );
+
     it("opens a client's device from the details when the snapshot has none", async () => {
-        const callWS = answering({
-            "cli:cli-tv": { kind: "client", device_id: "reg/tv 1" },
-        });
-        const el = await adminPanel("cli:cli-tv", callWS, {
+        const el = await adminPanel("cli:cli-tv", undefined, {
             details: { kind: "client", device_id: "reg/tv 1" },
         });
         const menu = await openMenu(el);
@@ -779,8 +806,12 @@ describe("node actions", () => {
         dialog.dispatchEvent(cancel);
         expect(cancel.defaultPrevented).toBe(true);
         expect(dialog.open).toBe(true);
-        menu.hide();
         await settleAll(el);
+        expect(menu.open).toBe(false);
+        expect(menu.shadowRoot!.querySelector('[role="menu"]')).toBeNull();
+        expect(menu.shadowRoot!.activeElement).toBe(
+            menu.shadowRoot!.querySelector("button.trigger"),
+        );
         const closedCancel = new Event("cancel", { cancelable: true });
         dialog.dispatchEvent(closedCancel);
         expect(closedCancel.defaultPrevented).toBe(false);

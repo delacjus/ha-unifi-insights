@@ -36,8 +36,8 @@ function copyWithSelection(text: string, host: ParentNode): boolean {
 }
 
 /**
- * Copy text to the clipboard. Uses the async clipboard API in a secure
- * context and a temporary textarea otherwise, or when the API refuses.
+ * Copy text to the clipboard. Uses the async clipboard API when available
+ * and a temporary textarea otherwise, or when the API refuses.
  * Resolves to whether the text was copied; it never rejects.
  */
 export async function copyText(
