@@ -190,11 +190,6 @@ export class UitNodeMenu extends LitElement {
                 this.swallow(e);
                 this.hide();
                 return;
-            case "Enter":
-            case " ":
-                this.swallow(e);
-                this.focusedItem?.click();
-                return;
             case "Tab":
                 // Keep the focused item in the DOM until native Tab has moved
                 // focus. Removing it in Lit's microtask loses the tab origin.
@@ -243,10 +238,7 @@ export class UitNodeMenu extends LitElement {
                       aria-label=${label}
                       @click=${(e: Event) => e.stopPropagation()}
                       @pointerdown=${(e: Event) => e.stopPropagation()}
-                      @contextmenu=${(e: Event) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                      }}
+                      @contextmenu=${(e: Event) => e.stopPropagation()}
                       @keydown=${(e: KeyboardEvent) => this.onMenuKeydown(e)}
                   >
                       ${repeat(

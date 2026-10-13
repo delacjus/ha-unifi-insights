@@ -88,15 +88,15 @@ export const menuStyles = css`
     :host {
         position: relative;
         display: inline-flex;
-        flex-direction: column;
-        align-items: flex-start;
     }
     .trigger {
         border: none;
         padding: 0;
     }
     .menu {
-        margin-top: 4px;
+        position: absolute;
+        inset-block-start: calc(100% + 4px);
+        inset-inline-start: 0;
         z-index: 3;
         box-sizing: border-box;
         width: max-content;

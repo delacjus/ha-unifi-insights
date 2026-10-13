@@ -169,10 +169,6 @@ describe("WCAG 2.2 AA (axe-core)", () => {
         });
 
         it("after a failed copy, with the value shown for selecting", async () => {
-            Object.defineProperty(window, "isSecureContext", {
-                configurable: true,
-                value: true,
-            });
             Object.defineProperty(navigator, "clipboard", {
                 configurable: true,
                 value: {
@@ -192,8 +188,6 @@ describe("WCAG 2.2 AA (axe-core)", () => {
                 ).toBe("192.0.2.10");
                 expect(await audit(el)).toEqual([]);
             } finally {
-                delete (window as { isSecureContext?: boolean })
-                    .isSecureContext;
                 delete (navigator as { clipboard?: unknown }).clipboard;
             }
         });
