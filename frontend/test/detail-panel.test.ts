@@ -852,6 +852,35 @@ describe("node actions", () => {
         expect(menuOf(el)!.open).toBe(false);
     });
 
+    it.each(["arrive", "go away"])(
+        "rechecks overflow when selected client details %s and settles the dialog",
+        async (change) => {
+            const el = await adminPanel("cli:cli-tv", undefined, {
+                narrow: true,
+                details: change === "arrive" ? undefined : CLIENT,
+            });
+            await settleAll(el);
+            expect(el.modal).toBe(false);
+            const sheet = el.shadowRoot!.querySelector(".panel")!;
+            // jsdom has no layout; the browser case measures actual overflow.
+            Object.defineProperty(sheet, "scrollHeight", { value: 500 });
+            el.details = change === "arrive" ? CLIENT : undefined;
+            await settleAll(el);
+            const dialog = el.shadowRoot!.querySelector("dialog")!;
+            expect(el.modal).toBe(true);
+            expect(dialog.open).toBe(true);
+            expect(dialog.querySelector("uit-node-menu") !== null).toBe(
+                change === "arrive",
+            );
+            expect(proto.showModal).toHaveBeenCalledOnce();
+            expect(await el.updateComplete).toBe(true);
+            el.requestUpdate();
+            await settleAll(el);
+            expect(el.shadowRoot!.querySelector("dialog")).toBe(dialog);
+            expect(proto.showModal).toHaveBeenCalledOnce();
+        },
+    );
+
     describe("opened from a context request", () => {
         it("opens the menu on its first item for the selected node", async () => {
             const el = await adminPanel("dev:uuid-core");
