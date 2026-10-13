@@ -12,13 +12,9 @@ from custom_components.unifi_insights.api import (
     UniFiConnectionError,
     UniFiNotFoundError,
 )
-from custom_components.unifi_insights.coordinators.config import (
-    UnifiConfigCoordinator,
-)
 from custom_components.unifi_insights.api.network.endpoints.port_forwards import (
     PortForwardsEndpoint,
 )
-
 from custom_components.unifi_insights.api.network.models import (
     FirewallRule,
     NatRule,
@@ -26,6 +22,9 @@ from custom_components.unifi_insights.api.network.models import (
     PortForward,
     StaticRoute,
     TrafficRule,
+)
+from custom_components.unifi_insights.coordinators.config import (
+    UnifiConfigCoordinator,
 )
 from tests.test_coordinators import (
     _create_mock_model,
@@ -271,7 +270,7 @@ async def test_fetch_optional_section_records_outcomes(
 async def test_empty_2xx_body_reports_no_deletions(
     coordinator: UnifiConfigCoordinator,
 ) -> None:
-    """An empty 2xx response body returns [] and is not reported as all rules deleted."""
+    """An empty 2xx body is not reported as every rule being deleted."""
     stub_client = MagicMock()
     stub_client.build_legacy_api_path = MagicMock(return_value="/dummy/path")
     envelope = {"data": [{"_id": "pf1", "name": "PF 1", "enabled": True}]}

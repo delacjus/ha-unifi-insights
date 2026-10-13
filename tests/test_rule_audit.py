@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from enum import Enum
-
 import json
 import logging
+from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
 import pytest
 
+from custom_components.unifi_insights.coordinators import (
+    rule_audit as rule_audit_module,
+)
 from custom_components.unifi_insights.coordinators.rule_audit import (
     RULE_CHANGE_BUFFER_SIZE,
     RULE_FAMILIES,
@@ -20,6 +22,7 @@ from custom_components.unifi_insights.coordinators.rule_audit import (
 )
 
 _ALL_OK = {(family.data_key, "s1"): "ok" for family in RULE_FAMILIES}
+_SIMULATED_ERROR = "simulated comparison error"
 
 
 def _data(**sections: Any) -> dict[str, Any]:
@@ -366,7 +369,8 @@ def test_buffer_is_bounded_and_overflow_is_logged(
     assert any("only the newest" in record.message for record in caplog.records)
     assert not any("Rule 0" in record.message for record in caplog.records)
 
-    # 60 changes, then 60 more -> 100 kept and NO overflow warning in caplog for second batch
+    # 60 changes, then 60 more: 100 are kept and the second batch logs no
+    # overflow warning.
     tracker2 = RuleAuditTracker()
     tracker2.process(_data(), _ALL_OK)
     batch1 = {f"b1_{i}": {"name": f"B1 {i}", "enabled": True} for i in range(60)}
@@ -408,7 +412,8 @@ def test_malformed_data_is_tolerated(malformed: dict[str, Any]) -> None:
     assert res_again == {}
 
     if malformed.get("firewall_rules") is None and malformed.get("sites"):
-        # A malformed section does not count as empty; a following empty poll is held pending (kills R10)
+        # A malformed section does not count as empty, so a following empty
+        # poll is still only held pending.
         empty_data = _data(firewall_rules={"s1": {}})
         tracker3 = RuleAuditTracker()
         tracker3.process(good_data, _ALL_OK)
@@ -469,7 +474,7 @@ def test_single_empty_poll_is_not_believed() -> None:
 
 
 def test_empty_confirmed_by_second_poll_reports_deleted() -> None:
-    """An empty section confirmed by a second successful poll reports all rules deleted."""
+    """A second empty poll confirms the first and reports every rule deleted."""
     tracker = RuleAuditTracker()
     rules = {
         "pf1": {"name": "PF 1", "enabled": True},
@@ -492,7 +497,7 @@ def test_empty_confirmed_by_second_poll_reports_deleted() -> None:
 
 
 def test_failed_poll_between_two_empty_polls_still_confirms() -> None:
-    """A failed poll between two empty polls neither confirms nor clears pending empty."""
+    """A failed poll between two empty polls neither confirms nor clears the wait."""
     tracker = RuleAuditTracker()
     rules = {
         "pf1": {"name": "PF 1", "enabled": True},
@@ -568,7 +573,7 @@ def test_error_in_one_family_keeps_other_changes_for_the_next_poll(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An error in one family fails the site comparison and keeps all changes for next poll."""
+    """An error in one family keeps the whole site's changes for the next poll."""
     tracker = RuleAuditTracker()
     data1 = _data(
         firewall_rules={"s1": {"fw1": {"name": "FW 1", "enabled": True}}},
@@ -580,13 +585,11 @@ def test_error_in_one_family_keeps_other_changes_for_the_next_poll(
         firewall_rules={"s1": {"fw1": {"name": "FW 1", "enabled": False}}},
         static_routes={"s1": {"sr1": {"name": "SR 1", "enabled": True}}},
     )
-    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
-
     real_snapshot = rule_audit_module._snapshot
 
     def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
         if family.rule_type == "static_route":
-            raise RuntimeError("simulated static route error")
+            raise RuntimeError(_SIMULATED_ERROR)
         return real_snapshot(family, record)
 
     monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
@@ -636,13 +639,11 @@ def test_error_in_one_site_does_not_block_other_sites(
         "s2": {"r2": {"name": "R2", "enabled": False}},
     }
 
-    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
-
     real_snapshot = rule_audit_module._snapshot
 
     def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
         if record.get("name") == "R1":
-            raise RuntimeError("simulated site s1 error")
+            raise RuntimeError(_SIMULATED_ERROR)
         return real_snapshot(family, record)
 
     monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
@@ -663,10 +664,8 @@ def test_persistent_error_is_logged_once(
     data = _data(firewall_rules={"s1": {"r1": {"name": "R1", "enabled": True}}})
     tracker.process(data, _ALL_OK)
 
-    import custom_components.unifi_insights.coordinators.rule_audit as rule_audit_module
-
     def failing_snapshot(family: RuleFamily, record: dict[str, Any]) -> Any:
-        raise RuntimeError("boom")
+        raise RuntimeError(_SIMULATED_ERROR)
 
     monkeypatch.setattr(rule_audit_module, "_snapshot", failing_snapshot)
 
@@ -689,7 +688,7 @@ def test_persistent_error_is_logged_once(
     assert len(error_records_after) == 2
 
 
-class _DummyEnum(str, Enum):
+class _DummyEnum(Enum):
     ALPHA = "alpha"
     BETA = "beta"
 

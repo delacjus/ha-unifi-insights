@@ -22,6 +22,9 @@ from custom_components.unifi_insights.const import CONF_SITE_IDS, SCAN_INTERVAL_
 
 from .base import UnifiBaseCoordinator
 from .config_sections import (
+    SECTION_OUTCOME_FAILED,
+    SECTION_OUTCOME_OK,
+    SECTION_OUTCOME_UNSUPPORTED,
     async_fetch_site_firewall,
     async_fetch_site_routes,
     async_fetch_site_rule_section,
@@ -45,12 +48,7 @@ from .internet_activity import (
     async_fetch_site_internet_activity,
     async_update_site_internet_activity,
 )
-from .rule_audit import (
-    SECTION_OUTCOME_FAILED,
-    SECTION_OUTCOME_OK,
-    SECTION_OUTCOME_UNSUPPORTED,
-    RuleAuditTracker,
-)
+from .rule_audit import RuleAuditTracker
 
 __all__ = [
     "WINDOW_1D_MS",

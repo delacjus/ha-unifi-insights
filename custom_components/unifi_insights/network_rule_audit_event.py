@@ -16,6 +16,7 @@ from .helpers import async_migrate_site_entity
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 

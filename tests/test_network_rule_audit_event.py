@@ -311,7 +311,7 @@ async def test_two_changes_in_one_refresh_are_two_state_changes(
 async def test_event_data_coerces_unexpected_value_types(
     hass: HomeAssistant, mock_coordinator: MagicMock
 ) -> None:
-    """Non-string field names, non-bool enabled, and non-string rule_name are coerced."""
+    """Unexpected value types are coerced before they reach the event data."""
     entity = UnifiInsightsNetworkRuleChangeEvent(
         mock_coordinator, "site1", unique_id=_UNIQUE_ID
     )

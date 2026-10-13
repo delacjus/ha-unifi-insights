@@ -8,9 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from .config_sections import (
-    SECTION_OUTCOME_FAILED,
     SECTION_OUTCOME_OK,
-    SECTION_OUTCOME_UNSUPPORTED,
     is_predefined_firewall_rule,
     is_predefined_nat_rule,
 )

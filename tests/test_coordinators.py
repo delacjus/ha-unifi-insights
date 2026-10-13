@@ -7914,7 +7914,7 @@ class TestUnifiFacadeCoordinator:
         endpoint_mock_path: str,
         rule_type_placeholder: str,
     ) -> None:
-        """Disappeared rule toggle raises translated not_found error and requests refresh."""
+        """A vanished rule raises the translated error and requests a refresh."""
         if "nat" in setter_name:
             section_key = "nat_rules"
             rule_id = "nat1"
