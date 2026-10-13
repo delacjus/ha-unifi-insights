@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeLocalize } from "../src/localize";
 import { describeVisual } from "../src/views/describe";
-import { SPACING, layoutModel, layoutTiered } from "../src/model/layout";
+import {
+    SPACING,
+    fitTransform,
+    layoutModel,
+    layoutTiered,
+} from "../src/model/layout";
 import { zoomFilter, type UitGraphView } from "../src/views/graph-view";
 import { cleanup, fixtureModel, fixtureSnapshot, mount } from "./helpers";
 
@@ -420,4 +425,50 @@ describe("<uit-graph-view> updates", () => {
     await el.updateComplete;
     expect(el.shadowRoot!.querySelectorAll("g.exits g.node")).toHaveLength(0);
   });
+});
+
+describe("plan v3 layout refit", () => {
+    it("starts a fresh fit when the mode changes after zooming", async () => {
+        const el = await graph();
+        el.zoomBy(2);
+        const fit = vi.spyOn(el, "fit");
+        el.layoutMode = "tiered";
+        await el.updateComplete;
+        expect(fit).toHaveBeenCalledExactlyOnceWith(false);
+        const next = layoutTiered(fixtureModel(), "comfortable", "vertical");
+        const t = fitTransform(next.bounds, 800, 600);
+        expect(
+            el
+                .shadowRoot!.querySelector("g.viewport")!
+                .getAttribute("transform"),
+        ).toBe(`translate(${t.x},${t.y}) scale(${t.k})`);
+        fit.mockClear();
+        el.model = fixtureModel({ clients: "expanded" });
+        await el.updateComplete;
+        el.setViewportSize(900, 700);
+        expect(fit).not.toHaveBeenCalled();
+        fit.mockRestore();
+    });
+
+    it("keeps logical tree keyboard movement in tiered mode", async () => {
+        const el = await graph({ layoutMode: "tiered" });
+        byId(el, "dev:uuid-core").focus();
+        for (const [key, id] of [
+            ["ArrowDown", "dev:uuid-flex"],
+            ["ArrowRight", "dev:uuid-lite"],
+            ["ArrowUp", "dev:uuid-core"],
+            ["Home", "dev:uuid-core"],
+            ["ArrowUp", "dev:uuid-gw"],
+        ]) {
+            svgOf(el).dispatchEvent(
+                new KeyboardEvent("keydown", { key, bubbles: true }),
+            );
+            await el.updateComplete;
+            await el.updateComplete;
+            expect(el.focusId).toBe(id);
+            expect(el.shadowRoot!.activeElement?.getAttribute("data-id")).toBe(
+                id,
+            );
+        }
+    });
 });

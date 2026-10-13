@@ -751,3 +751,25 @@ describe("lifecycle", () => {
     expect(fake.subs[1]!.unsubscribe).not.toHaveBeenCalled();
   });
 });
+
+it("keeps configured tiered layout independent of HA panel layout and refits on config changes", async () => {
+    const fake = fakeHass();
+    const { el } = await card({ layout: "tiered" }, fake);
+    fake.push(fixtureSnapshot());
+    await settle(el);
+    el.layout = "panel";
+    await settle(el);
+    const graph = graphOf(el);
+    graph.setViewportSize(800, 600);
+    expect(graph.layoutMode).toBe("tiered");
+    expect(graph.ctrlZoom).toBe(false);
+    const fit = vi.spyOn(graph, "fit");
+    el.setConfig({ type: TYPE, layout: "tree" });
+    await settle(el);
+    await settle(graph);
+    expect(graph.layoutMode).toBe("tree");
+    expect(el.layout).toBe("panel");
+    expect(graph.ctrlZoom).toBe(false);
+    expect(fit).toHaveBeenCalledExactlyOnceWith(false);
+    fit.mockRestore();
+});

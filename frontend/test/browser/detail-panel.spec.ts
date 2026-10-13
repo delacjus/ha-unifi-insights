@@ -491,7 +491,11 @@ test.describe("topology node action menu", () => {
         await page.evaluate(() => {
             Object.defineProperty(navigator, "clipboard", {
                 configurable: true,
-                value: undefined,
+                value: {
+                    writeText: async () => {
+                        throw new DOMException("denied", "NotAllowedError");
+                    },
+                },
             });
             document.execCommand = () => false;
         });
