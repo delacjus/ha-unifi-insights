@@ -174,6 +174,47 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 
 NAT rule and static route switches use the console's private API. Their record shapes and API-key write support come from open-source clients and have not yet been confirmed on UniFi hardware; if the console rejects a change, the switch reports an error and the rule is left as it was.
 
+### Network rule change events
+
+Each site has one event entity, **Network rule changes**. It fires `added`, `modified` or `deleted` when a firewall policy, policy-based route, port forward, traffic rule, NAT rule or static route changes on the console. Changes made from Home Assistant switches count too.
+
+It does not fire for: rule reordering, system-defined firewall policies, console-managed NAT rules, VPN clients.
+
+Changes are found when the configuration is polled, every 5 minutes. A change that is made and undone between two polls is not seen.
+
+The first poll after Home Assistant starts or the integration reloads only records the current rules. Changes made while Home Assistant was stopped or reloading are not reported.
+
+If the console cannot be reached, nothing fires; changes made meanwhile are reported after the next successful poll.
+
+Deleting the last rule of a type on a site is reported one poll later (the integration waits for a second empty answer before it believes that every rule is gone).
+
+Known limits: a rule the integration cannot parse is reported as `deleted`; a rule the console takes over (it becomes system-defined) is reported as `deleted`, and `added` if it is handed back; at most 100 changes per site are kept from one poll.
+
+| Property | Description |
+| --- | --- |
+| `event_type` | `added`, `modified` or `deleted` |
+| `site_id` | Site identifier |
+| `rule_type` | Family of rule (`firewall_rule`, `policy_based_route`, `port_forward`, `traffic_rule`, `nat_rule`, `static_route`) |
+| `rule_id` | Unique ID of the rule |
+| `rule_name` | Name or description of the rule |
+| `enabled` | Whether the rule is enabled (`true`, `false`, or `null`) |
+| `changed_fields` | List of field names that changed |
+
+`rule_name` is the name or description typed on the console. No other field value (addresses, ports, domains) is included; `changed_fields` lists field names only.
+
+Do not use a bare state trigger: Home Assistant re-sends the last event when the entity returns from unavailable (a failed poll, a reload, a restart).
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.<site>_network_rule_changes
+    not_from: unavailable
+    not_to: unavailable
+mode: queued
+```
+
+Do not add `unknown` to `not_from`: the entity is `unknown` before its first event, so that would suppress the first event.
+
 #### Hotspot voucher management
 
 The integration creates entities to configure, generate, and monitor UniFi Hotspot guest vouchers:
