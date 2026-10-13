@@ -1,0 +1,106 @@
+blueprint:
+  name: UniFi Insights - Infrastructure offline alert
+  description: |-
+    Run your actions when a UniFi device (access point, switch, gateway) stays
+    offline, and optionally when it comes back.
+
+    The blueprint watches the connectivity sensors (named **Status**) that
+    UniFi Insights creates for each device. A sensor counts as offline when it is `off`, or `unavailable`
+    (unless you turn that off below), for the chosen time.
+
+    **Limits you should know about:** a confirmed offline device currently
+    reports `unavailable`, not `off`. A failure to poll the controller also
+    makes every sensor report `unavailable`. The blueprint cannot tell a lost
+    device from a lost controller, so one controller outage alerts for every
+    selected device.
+
+    The actions can use `trigger.id` (`offline` or `recovery`),
+    `trigger.entity_id` and `trigger.to_state`.
+  domain: automation
+  homeassistant:
+    min_version: "2026.6.0"
+  input:
+    connectivity_sensors:
+      name: Connectivity sensors
+      description: >-
+        The **Status** connectivity sensors of the devices to watch.
+      selector:
+        entity:
+          integration: unifi_insights
+          domain: binary_sensor
+          device_class: connectivity
+          multiple: true
+    offline_duration:
+      name: Offline duration
+      description: >-
+        How long a sensor must stay offline before the offline actions run.
+      default:
+        hours: 0
+        minutes: 5
+        seconds: 0
+      selector:
+        duration: {}
+    treat_unavailable_as_offline:
+      name: Treat unavailable as offline
+      description: >-
+        A confirmed offline device reports `unavailable`, so leave this on to be
+        alerted about it. Turn it off to alert only when a sensor is `off`; you
+        then miss devices that report `unavailable`.
+      default: true
+      selector:
+        boolean: {}
+    offline_actions:
+      name: Offline actions
+      description: >-
+        What to do when a device has been offline for the chosen time.
+      selector:
+        action: {}
+    recovery_actions:
+      name: Recovery actions (optional)
+      description: >-
+        What to do when a sensor returns to `on` from `off` or `unavailable`.
+        This also runs after an outage shorter than the offline duration, when
+        no offline actions ran.
+      default: []
+      selector:
+        action: {}
+
+mode: queued
+max: 100
+
+variables:
+  treat_unavailable_as_offline: !input treat_unavailable_as_offline
+
+triggers:
+  - trigger: state
+    id: offline
+    entity_id: !input connectivity_sensors
+    to:
+      - "off"
+      - unavailable
+    for: !input offline_duration
+  - trigger: state
+    id: recovery
+    entity_id: !input connectivity_sensors
+    from:
+      - "off"
+      - unavailable
+    to: "on"
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.id != 'offline'
+         or treat_unavailable_as_offline
+         or trigger.to_state.state != 'unavailable' }}
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: offline
+        sequence: !input offline_actions
+      - conditions:
+          - condition: trigger
+            id: recovery
+        sequence: !input recovery_actions
