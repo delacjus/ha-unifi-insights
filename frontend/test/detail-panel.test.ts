@@ -705,6 +705,70 @@ describe("node actions", () => {
         });
     });
 
+    it("navigates the inline menu with arrows, Home and End inside the panel", async () => {
+        const el = await adminPanel("dev:uuid-core");
+        const menu = await openMenu(el);
+        const items = [
+            ...menu.shadowRoot!.querySelectorAll<HTMLElement>(
+                '[role="menuitem"]',
+            ),
+        ];
+        for (const [key, index] of [
+            ["ArrowDown", 1],
+            ["ArrowUp", 0],
+            ["End", 3],
+            ["Home", 0],
+        ] as const) {
+            const event = new KeyboardEvent("keydown", {
+                key,
+                bubbles: true,
+                composed: true,
+                cancelable: true,
+            });
+            menu.shadowRoot!.activeElement!.dispatchEvent(event);
+            expect(event.defaultPrevented).toBe(true);
+            expect(menu.shadowRoot!.activeElement).toBe(items[index]);
+        }
+        expect(el.selectedId).toBe("dev:uuid-core");
+    });
+
+    it("closes on an outside press without moving focus from the pressed control", async () => {
+        const el = await adminPanel("dev:uuid-core");
+        const menu = await openMenu(el);
+        const button =
+            menu.shadowRoot!.querySelector<HTMLButtonElement>(
+                "button.trigger",
+            )!;
+        const focus = vi.spyOn(button, "focus");
+        const outside = document.createElement("button");
+        document.body.append(outside);
+        outside.dispatchEvent(
+            new Event("pointerdown", { bubbles: true, composed: true }),
+        );
+        outside.focus();
+        await settleAll(el);
+        expect(menu.open).toBe(false);
+        expect(focus).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(outside);
+        focus.mockRestore();
+    });
+
+    it("closes the menu when the native dialog closes or the panel detaches", async () => {
+        const el = await adminPanel("dev:uuid-core", undefined, {
+            modal: true,
+        });
+        const menu = await openMenu(el);
+        el.shadowRoot!.querySelector("dialog")!.close();
+        await settleAll(el);
+        expect(menu.open).toBe(false);
+        el.modal = false;
+        await settleAll(el);
+        const inline = await openMenu(el);
+        el.remove();
+        await inline.updateComplete;
+        expect(inline.open).toBe(false);
+    });
+
     it("prevents native dialog cancellation while the menu is open", async () => {
         const el = await adminPanel("dev:uuid-core", undefined, {
             modal: true,
