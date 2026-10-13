@@ -6137,6 +6137,16 @@ class TestUnifiFacadeCoordinator:
         assert facade_coordinator_no_protect.data["protect"]["cameras"] == {}
         assert facade_coordinator_no_protect.data["protect"]["lights"] == {}
 
+    def test_aggregate_data_includes_rule_changes(
+        self,
+        facade_coordinator: UnifiFacadeCoordinator,
+        config_coordinator: UnifiConfigCoordinator,
+    ) -> None:
+        """Rule change records in config data are included in facade data."""
+        config_coordinator.data["rule_changes"] = {"site1": [{"sequence": 1}]}
+        facade_coordinator._aggregate_data()
+        assert facade_coordinator.data["rule_changes"] == {"site1": [{"sequence": 1}]}
+
     def test_get_site(self, facade_coordinator: UnifiFacadeCoordinator):
         """Test get_site delegation to config coordinator."""
         facade_coordinator._aggregate_data()

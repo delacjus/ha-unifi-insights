@@ -28,6 +28,7 @@ __all__ = [
     "async_fetch_site_wifi_and_links",
     "client_links",
     "enrich_wifi",
+    "is_predefined_firewall_rule",
     "is_predefined_nat_rule",
     "map_legacy_site_names",
     "resolve_report_site_name",
@@ -257,12 +258,15 @@ async def async_fetch_site_firewall(
     coordinator: Any,
     site_id: str,
     failed_sections: set[tuple[str, str]],
+    *,
+    outcomes: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
     """Fetch firewall rules for one site."""
     firewall_models = await coordinator._fetch_optional_section(
         "firewall_rules",
         site_id,
         partial(coordinator.network_client.firewall.list_rules, site_id),
+        outcomes=outcomes,
     )
     if firewall_models is None:
         failed_sections.add(("firewall_rules", site_id))
@@ -324,6 +328,18 @@ def rule_display_name(
     return rule_id
 
 
+def is_predefined_firewall_rule(rule_data: dict[str, Any]) -> bool:
+    """Return True when a firewall rule appears to be system-defined."""
+    metadata = rule_data.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("origin") == "SYSTEM_DEFINED":
+        return True
+    return bool(
+        rule_data.get("predefined")
+        or rule_data.get("isPredefined")
+        or rule_data.get("isSystem")
+    )
+
+
 def is_predefined_nat_rule(rule_data: Any) -> bool:
     """
     Return True when a NAT rule is managed by the controller, not the user.
@@ -349,12 +365,14 @@ async def async_fetch_site_rule_section(
     site_name: str | None,
     fetch: Callable[[str], Awaitable[list[Any]]],
     failed_sections: set[tuple[str, str]],
+    *,
+    outcomes: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
     """Fetch one rule section (port forwards, traffic rules, NAT, routes)."""
     if site_name is None:
         return {}
     models = await coordinator._fetch_optional_section(
-        section, site_id, partial(fetch, site_name)
+        section, site_id, partial(fetch, site_name), outcomes=outcomes
     )
     if models is None:
         failed_sections.add((section, site_id))
@@ -373,8 +391,15 @@ async def async_fetch_site_routes(
     model_to_dict: Callable[[Any], dict[str, Any]],
     site_id: str,
     legacy_name: str | None,
+    *,
+    outcomes: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, Any]:
-    """Fetch policy-based routes (traffic routes) for a site."""
+    """
+    Fetch policy-based routes (traffic routes) for a site.
+
+    ``outcomes`` records whether this fetch was authoritative. The returned
+    data is unchanged by it: a failed fetch still yields ``{}``.
+    """
     if not legacy_name:
         return {}
     try:
@@ -404,7 +429,11 @@ async def async_fetch_site_routes(
             site_id,
             err,
         )
+        if outcomes is not None:
+            outcomes[("policy_based_routes", site_id)] = "failed"
         return {}
+    if outcomes is not None:
+        outcomes[("policy_based_routes", site_id)] = "ok"
     return routes_dict
 
 

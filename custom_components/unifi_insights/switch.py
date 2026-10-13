@@ -25,6 +25,9 @@ from .const import (
     VIDEO_MODE_DEFAULT,
     VIDEO_MODE_HIGH_FPS,
 )
+from .coordinators.config_sections import (
+    is_predefined_firewall_rule as _is_predefined_firewall_rule,
+)
 from .entity import (
     UnifiProtectEntity,
     async_call_coordinator_action,
@@ -56,18 +59,6 @@ def _get_firewall_rule_action(rule_data: dict[str, Any]) -> str | None:
         action_type = action.get("type")
         return str(action_type) if action_type is not None else None
     return str(action) if action is not None else None
-
-
-def _is_predefined_firewall_rule(rule_data: dict[str, Any]) -> bool:
-    """Return True when a firewall rule appears to be system-defined."""
-    metadata = rule_data.get("metadata")
-    if isinstance(metadata, dict) and metadata.get("origin") == "SYSTEM_DEFINED":
-        return True
-    return bool(
-        rule_data.get("predefined")
-        or rule_data.get("isPredefined")
-        or rule_data.get("isSystem")
-    )
 
 
 def _find_gateway_device_id(

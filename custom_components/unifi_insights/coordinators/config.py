@@ -45,6 +45,12 @@ from .internet_activity import (
     async_fetch_site_internet_activity,
     async_update_site_internet_activity,
 )
+from .rule_audit import (
+    SECTION_OUTCOME_FAILED,
+    SECTION_OUTCOME_OK,
+    SECTION_OUTCOME_UNSUPPORTED,
+    RuleAuditTracker,
+)
 
 __all__ = [
     "WINDOW_1D_MS",
@@ -120,7 +126,9 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             "client_links": {},
             "internet_activity": {},
             "internet_activity_unavailable": set(),
+            "rule_changes": {},
         }
+        self._rule_audit = RuleAuditTracker()
         self.available_sites: dict[str, str] = {}
         self._warned_no_selected_sites = False
         self._failed_sections: set[tuple[str, str]] = set()
@@ -175,10 +183,20 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
         section: str,
         site_id: str,
         fetch: Callable[[], Awaitable[list[Any]]],
+        *,
+        outcomes: dict[tuple[str, str], str] | None = None,
     ) -> list[Any] | None:
-        """Fetch an optional per-site section (WiFi, firewall, or site reports)."""
+        """
+        Fetch an optional per-site section (WiFi, firewall, or site reports).
+
+        ``outcomes``, when given, records how the fetch ended (``ok``,
+        ``unsupported`` or ``failed``) under ``(section, site_id)``. The return
+        value alone cannot tell an empty list from an unsupported endpoint.
+        """
+        if outcomes is None:
+            outcomes = {}
         try:
-            return await fetch()
+            result = await fetch()
         except UniFiAuthenticationError as err:
             if not self._is_unsupported_response(err):
                 raise
@@ -203,14 +221,19 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     site_id,
                     err_msg,
                 )
+                outcomes[(section, site_id)] = SECTION_OUTCOME_FAILED
                 return None
             unsupported = err
+        else:
+            outcomes[(section, site_id)] = SECTION_OUTCOME_OK
+            return result
         _LOGGER.debug(
             "Config coordinator: %s not available for site %s: %s",
             section,
             site_id,
             unsupported,
         )
+        outcomes[(section, site_id)] = SECTION_OUTCOME_UNSUPPORTED
         return []
 
     async def _call_site_report(
@@ -301,6 +324,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     internet_activity_unavailable=set(),
                     last_update=datetime.now(tz=UTC),
                 )
+                self._update_rule_changes({})
                 self._available = True
                 return self.data
 
@@ -336,6 +360,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             vouchers_by_site: dict[str, tuple[int, dict[str, Any]]] = {}
             internet_activity_by_site: dict[str, dict[str, dict[str, int]]] = {}
             failed_sections: set[tuple[str, str]] = set()
+            section_outcomes: dict[tuple[str, str], str] = {}
             routes_by_site: dict[str, dict[str, Any]] = {}
             vpn_clients_by_site: dict[str, dict[str, Any]] = {}
             rule_sections_by_site: dict[str, dict[str, dict[str, Any]]] = {
@@ -354,7 +379,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     self, site_id, legacy_name, failed_sections
                 )
                 firewall_by_site[site_id] = await async_fetch_site_firewall(
-                    self, site_id, failed_sections
+                    self, site_id, failed_sections, outcomes=section_outcomes
                 )
                 v_seq = self._voucher_site_request_seq.get(site_id, 0) + 1
                 self._voucher_site_request_seq[site_id] = v_seq
@@ -373,7 +398,11 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     failed_sections=failed_sections,
                 )
                 routes_by_site[site_id] = await async_fetch_site_routes(
-                    self.network_client, self._model_to_dict, site_id, legacy_name
+                    self.network_client,
+                    self._model_to_dict,
+                    site_id,
+                    legacy_name,
+                    outcomes=section_outcomes,
                 )
                 vpn_clients_by_site[site_id] = await async_fetch_site_vpn_clients(
                     self.network_client, self._model_to_dict, site_id, legacy_name
@@ -403,6 +432,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                             rule_site_name,
                             fetch,
                             failed_sections,
+                            outcomes=section_outcomes,
                         )
                         for section, fetch in zip(
                             _RULE_SECTIONS, rule_fetchers, strict=True
@@ -449,6 +479,7 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
                     site_id,
                 )
             self._failed_sections = failed_sections
+            self._update_rule_changes(section_outcomes)
             self._available = True
             return self.data
 
@@ -464,6 +495,19 @@ class UnifiConfigCoordinator(UnifiBaseCoordinator):
             self._handle_generic_error(err)
 
         return self.data  # pragma: no cover
+
+    def _update_rule_changes(self, outcomes: dict[tuple[str, str], str]) -> None:
+        """
+        Diff the rule sections against their last authoritative snapshot.
+
+        Runs only after a refresh has committed its data. A bug in the audit
+        must never fail the refresh that every rule switch depends on, so any
+        error is logged and the previous change list is kept.
+        """
+        try:
+            self.data["rule_changes"] = self._rule_audit.process(self.data, outcomes)
+        except Exception:
+            _LOGGER.exception("Config coordinator: rule change detection failed")
 
     async def async_refresh_vouchers(self, site_id: str) -> None:
         """Re-fetch one site's voucher inventory without full config refresh."""

@@ -363,6 +363,7 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "nat_rules": self._config_coordinator.data.get("nat_rules", {}),
             "static_routes": self._config_coordinator.data.get("static_routes", {}),
             "site_vpns": self._config_coordinator.data.get("site_vpns", {}),
+            "rule_changes": self._config_coordinator.data.get("rule_changes", {}),
             "network_info": self._config_coordinator.data.get("network_info", {}),
             "client_links": self._config_coordinator.data.get("client_links", {}),
             "internet_activity": self._config_coordinator.data.get(
