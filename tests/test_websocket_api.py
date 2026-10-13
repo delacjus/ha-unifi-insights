@@ -1795,6 +1795,21 @@ async def test_node_details_client_tracker_unique_id_formats(
     assert "device_id" not in msg["result"]
 
 
+async def test_node_details_omits_ambiguous_legacy_tracker_matches(
+    hass: HomeAssistant, init_integration: MockConfigEntry, hass_ws_client
+) -> None:
+    """Case-insensitive legacy matches are ambiguous even within one entry."""
+    _seed_details(init_integration)
+    _register_tracker(hass, init_integration, PHONE_MAC)
+    _register_tracker(hass, init_integration, PHONE_MAC.upper())
+    client = await hass_ws_client(hass)
+
+    msg = await _node_details(client, init_integration, "cli:cli-1")
+
+    assert msg["success"], msg
+    assert "entity_id" not in msg["result"]
+
+
 async def test_node_details_client_current_unique_id_takes_precedence(
     hass: HomeAssistant, init_integration: MockConfigEntry, hass_ws_client
 ) -> None:
