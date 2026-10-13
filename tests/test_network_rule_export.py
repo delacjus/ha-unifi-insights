@@ -5,6 +5,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from datetime import UTC, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -674,6 +677,132 @@ async def test_export_transport_logs_no_sensitive_values(
             "SSH",
         ):
             assert sentinel not in text, sentinel
+
+
+def _two_rules(rule_type: str) -> list[Any]:
+    """Return two parsed rules of one family, with distinct ids."""
+    if rule_type == "firewall_rule":
+        return [
+            FirewallRule.model_validate({"id": "fw-a", "name": "A", "index": 1}),
+            FirewallRule.model_validate({"id": "fw-b", "name": "B", "index": 2}),
+        ]
+    if rule_type == "policy_based_route":
+        return [
+            PolicyBasedRoute.model_validate({"_id": "pbr-a", "description": "A"}),
+            PolicyBasedRoute.model_validate({"_id": "pbr-b", "description": "B"}),
+        ]
+    if rule_type == "port_forward":
+        return [
+            PortForward.model_validate(port_forward_record(_id="pf-a", name="A")),
+            PortForward.model_validate(port_forward_record(_id="pf-b", name="B")),
+            # Same id as the first: the record content breaks the tie.
+            PortForward.model_validate(port_forward_record(_id="pf-a", name="A2")),
+        ]
+    if rule_type == "traffic_rule":
+        return [
+            TrafficRule.model_validate(traffic_rule_record(_id="tr-a")),
+            TrafficRule.model_validate(traffic_rule_record(_id="tr-b")),
+        ]
+    if rule_type == "nat_rule":
+        return [
+            NatRule.model_validate(nat_rule_record(_id="nat-a", rule_index=1)),
+            NatRule.model_validate(nat_rule_record(_id="nat-b", rule_index=2)),
+        ]
+    return [
+        StaticRoute.model_validate(static_route_record(_id="sr-a")),
+        StaticRoute.model_validate(static_route_record(_id="sr-b")),
+    ]
+
+
+_TWO_SITES: dict[str, Any] = {
+    "site-a": {"id": "site-a", "name": "A", "internalReference": "default"},
+    "site-b": {"id": "site-b", "name": "B", "internalReference": "lab"},
+}
+
+
+async def _export_two_sites(
+    rules: dict[str, list[Any]], sites: dict[str, Any]
+) -> dict[str, Any]:
+    return await async_build_rule_export(
+        _client(**rules),
+        sites,
+        console=_CONSOLE,
+        site_ids=None,
+        rule_types=None,
+        is_unsupported=UnifiBaseCoordinator._is_unsupported_response,
+    )
+
+
+async def test_export_unchanged_rules_diff_clean(freezer: Any) -> None:
+    """The same rules in another server order give the same document."""
+    freezer.move_to("2026-01-02 03:04:05+00:00")
+    forward = {rule_type: _two_rules(rule_type) for rule_type in RULE_TYPES}
+    backward = {rule_type: rules[::-1] for rule_type, rules in forward.items()}
+
+    first = await _export_two_sites(forward, _TWO_SITES)
+    second = await _export_two_sites(backward, dict(reversed(_TWO_SITES.items())))
+
+    assert first == second
+    assert json.dumps(first) == json.dumps(second)
+    assert list(second["sites"]) == ["site-a", "site-b"]
+    rules = first["sites"]["site-a"]["rule_types"]["port_forward"]["rules"]
+    assert [(rule["_id"], rule["name"]) for rule in rules] == [
+        ("pf-a", "A"),
+        ("pf-a", "A2"),
+        ("pf-b", "B"),
+    ]
+    # The order fields of a record are data, not a sort result.
+    nat = first["sites"]["site-a"]["rule_types"]["nat_rule"]["rules"]
+    assert [rule["rule_index"] for rule in nat] == [1, 2]
+
+
+async def test_export_real_change_still_differs(freezer: Any) -> None:
+    """A rule that changed on the console shows up as a different document."""
+    freezer.move_to("2026-01-02 03:04:05+00:00")
+    before = {rule_type: _two_rules(rule_type) for rule_type in RULE_TYPES}
+    after = {rule_type: _two_rules(rule_type) for rule_type in RULE_TYPES}
+    after["static_route"][0].enabled = False
+
+    first = await _export_two_sites(before, _TWO_SITES)
+    second = await _export_two_sites(after, _TWO_SITES)
+
+    assert first != second
+    changed = [
+        (site_id, rule_type)
+        for site_id in first["sites"]
+        for rule_type in RULE_TYPES
+        if first["sites"][site_id]["rule_types"][rule_type]
+        != second["sites"][site_id]["rule_types"][rule_type]
+    ]
+    assert changed == [("site-a", "static_route"), ("site-b", "static_route")]
+
+
+class _Color(Enum):
+    RED = "red"
+
+
+async def test_export_model_value_types_are_json_safe() -> None:
+    """Non-primitive values of an extra-allow model come out as plain JSON."""
+    model = PortForward.model_validate(
+        port_forward_record(
+            x_when=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+            x_color=_Color.RED,
+            x_amount=Decimal("1.50"),
+            x_tags={"tag"},
+            x_nested=StaticRoute.model_validate(static_route_record(_id="sr-n")),
+        )
+    )
+
+    document = await _build(_client(port_forward=[model]), site_ids=["site1"])
+
+    json.dumps(document)
+    rule = document["sites"]["site1"]["rule_types"]["port_forward"]["rules"][0]
+    assert rule["x_when"] == "2026-01-02T03:04:05Z"
+    assert rule["x_color"] == "red"
+    assert rule["x_amount"] == "1.50"
+    assert rule["x_tags"] == ["tag"]
+    assert isinstance(rule["x_nested"], dict)
+    assert rule["x_nested"]["_id"] == "sr-n"
 
 
 def test_redaction_removes_sensitive_values_of_every_family() -> None:

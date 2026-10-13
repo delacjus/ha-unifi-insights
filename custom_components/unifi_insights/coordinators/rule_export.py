@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
@@ -56,6 +57,20 @@ def _export_record(model: Any) -> Any:
     return model
 
 
+def _rule_sort_key(record: Any) -> tuple[str, str]:
+    """
+    Return the order key of an exported rule: its id, then its canonical JSON.
+
+    The console may list the same rules in another order from one call to the
+    next. The order fields inside a record (``index``, ``rule_index``) are not
+    touched, so a real reorder on the console still shows as changed values.
+    """
+    rule_id = (
+        (record.get("_id") or record.get("id")) if isinstance(record, dict) else None
+    )
+    return str(rule_id), json.dumps(record, sort_keys=True, default=str)
+
+
 async def _async_export_family(
     rule_type: str,
     site_id: str,
@@ -72,6 +87,7 @@ async def _async_export_family(
             # exported as a shorter list of rules.
             models = await fetch(site_ref, strict=True)
             rules = [_export_record(model) for model in models]
+            rules.sort(key=_rule_sort_key)
             status = SECTION_OUTCOME_OK
         except Exception as err:
             if not is_unsupported(err):
@@ -111,7 +127,9 @@ async def async_build_rule_export(
     ]
     exported_sites: dict[str, Any] = {}
     statuses: list[str] = []
-    for site_id, site in sites.items():
+    # Sorted, so two exports of an unchanged console list sites and rules alike.
+    for site_id in sorted(sites):
+        site = sites[site_id]
         if site_ids is not None and site_id not in site_ids:
             continue
         classic_name = verified_legacy_site_name(site)
