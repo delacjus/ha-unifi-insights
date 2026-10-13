@@ -109,6 +109,8 @@ export class UitListView extends LitElement {
     declare focusId?: string;
 
     private rows: ListRow[] = [];
+    private pointers = new Set<number>();
+    private gesture = { x: 0, y: 0, moved: false };
     private typeahead = "";
     private typeaheadTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -181,9 +183,32 @@ export class UitListView extends LitElement {
             tabindex=${row.id === this.focusId ? 0 : -1}
             style=${`--level: ${row.level}`}
             @click=${() => fireEvent(this, "uit-activate", { id: row.id })}
+            @pointerdown=${(e: PointerEvent) => {
+                if (e.isPrimary) {
+                    this.pointers = new Set([e.pointerId]);
+                    this.gesture = { x: e.clientX, y: e.clientY, moved: false };
+                } else {
+                    this.pointers.add(e.pointerId);
+                    this.gesture.moved = true;
+                }
+            }}
+            @pointermove=${(e: PointerEvent) => {
+                if (
+                    this.pointers.has(e.pointerId) &&
+                    Math.hypot(
+                        e.clientX - this.gesture.x,
+                        e.clientY - this.gesture.y,
+                    ) > 8
+                )
+                    this.gesture.moved = true;
+            }}
+            @pointerup=${(e: PointerEvent) => this.pointers.delete(e.pointerId)}
+            @pointercancel=${(e: PointerEvent) =>
+                this.pointers.delete(e.pointerId)}
             @contextmenu=${(e: Event) => {
                 e.preventDefault();
-                fireEvent(this, "uit-context", { id: row.id });
+                if (!this.gesture.moved && this.pointers.size <= 1)
+                    fireEvent(this, "uit-context", { id: row.id });
             }}
             @focus=${() => {
                 this.focusId = row.id;

@@ -24,7 +24,7 @@ const DETAILS: NodeDetails = {
     kind: "switch",
     ip_address: "192.0.2.10",
     mac_address: "aa:bb:cc:dd:ee:ff",
-    ha_device_id: "reg-a",
+    device_id: "reg-a",
     entity_id: "sensor.a",
 };
 
@@ -210,85 +210,129 @@ describe("NodeDetailsFetcher", () => {
         [{ code: "unauthorized", message: "Unauthorized" }],
         [{ code: "node_not_found", message: "" }],
         [{ code: "entry_not_loaded", message: "later" }],
-    ])("keeps the code and message of a rejection %j", async (rejection) => {
+    ])("returns no details for a rejection %j", async (rejection) => {
         const { fetcher, onChange, calls, callWS } = setup();
         fetcher.select(hassFor(true, callWS), KEY);
         calls[0]!.reject(rejection);
         await flush();
-        expect(fetcher.state).toEqual({ status: "error", error: rejection });
+        expect(fetcher.state).toEqual({ status: "idle" });
         expect(onChange).toHaveBeenCalledOnce();
     });
 
-    it("normalises a rejection that is not a websocket error", async () => {
+    it("discards a rejection that is not a websocket error", async () => {
         const { fetcher, calls, callWS } = setup();
         fetcher.select(hassFor(true, callWS), KEY);
         calls[0]!.reject(new Error("boom"));
         await flush();
-        expect(fetcher.state).toEqual({
-            status: "error",
-            error: { code: "unknown_error", message: "Error: boom" },
-        });
+        expect(fetcher.state).toEqual({ status: "idle" });
     });
 });
 
 describe("nodeActions", () => {
-    const device = { ha_device_id: "reg-snap" };
-
-    it("offers every action to an administrator, in menu order", () => {
-        expect(nodeActions(device, DETAILS, true)).toEqual([
+    it("offers all details in order only for administrators", () => {
+        expect(nodeActions(DETAILS, true)).toEqual([
             "copy_ip",
             "copy_mac",
             "open_device",
             "open_entity",
         ]);
-    });
-
-    it("gives a non-administrator only the snapshot's device link", () => {
-        expect(nodeActions(device, DETAILS, false)).toEqual(["open_device"]);
-        expect(nodeActions({}, DETAILS, false)).toEqual([]);
-        expect(nodeActions({}, undefined, false)).toEqual([]);
-    });
-
-    it("hides an action that has no data", () => {
-        expect(
-            nodeActions({}, { kind: "client", ip_address: "192.0.2.5" }, true),
-        ).toEqual(["copy_ip"]);
-        expect(
-            nodeActions({}, { kind: "client", mac_address: "aa" }, true),
-        ).toEqual(["copy_mac"]);
+        expect(nodeActions(DETAILS, false)).toEqual([]);
+        expect(nodeActions(undefined, true)).toEqual([]);
+        expect(nodeActions({ kind: "client" }, true)).toEqual([]);
         expect(
             nodeActions(
-                {},
-                { kind: "client", entity_id: "device_tracker.x" },
-                true,
-            ),
-        ).toEqual(["open_entity"]);
-        expect(nodeActions({}, { kind: "client" }, true)).toEqual([]);
-    });
-
-    it("treats an empty value as missing instead of showing a placeholder", () => {
-        expect(
-            nodeActions(
-                { ha_device_id: "" },
                 {
-                    kind: "switch",
+                    kind: "client",
                     ip_address: "",
                     mac_address: "",
-                    ha_device_id: "",
+                    device_id: "",
                     entity_id: "",
                 },
                 true,
             ),
         ).toEqual([]);
     });
+    it.each([
+        ["ip_address", "copy_ip"],
+        ["mac_address", "copy_mac"],
+        ["device_id", "open_device"],
+        ["entity_id", "open_entity"],
+    ] as const)("offers only %s when present", (field, action) => {
+        expect(nodeActions({ kind: "client", [field]: "value" }, true)).toEqual(
+            [action],
+        );
+    });
+});
 
-    it("keeps the device link while the details are still loading or failed", () => {
-        expect(nodeActions(device, undefined, true)).toEqual(["open_device"]);
+describe("plan v3 fetcher lifecycle", () => {
+    it("does not request group ids", () => {
+        const callWS = vi.fn();
+        const fetcher = new NodeDetailsFetcher(vi.fn());
+        fetcher.select(hassFor(true, callWS), {
+            ...KEY,
+            node_id: "group:dev:a",
+        });
+        expect(callWS).not.toHaveBeenCalled();
+        expect(fetcher.state).toEqual({ status: "idle" });
     });
 
-    it("opens a client's device from the details when the snapshot has none", () => {
-        expect(
-            nodeActions({}, { kind: "client", ha_device_id: "reg-cli" }, true),
-        ).toEqual(["open_device"]);
+    it("clears the cache and drops responses on connection changes", async () => {
+        const stale = deferred<NodeDetails>();
+        const fresh = deferred<NodeDetails>();
+        const callWS = vi
+            .fn()
+            .mockImplementationOnce(() => stale.promise)
+            .mockImplementation(() => fresh.promise);
+        const fetcher = new NodeDetailsFetcher(vi.fn());
+        const first = {
+            ...hassFor(true, callWS),
+            connection: {},
+        } as HomeAssistant;
+        fetcher.select(first, KEY);
+        const next = { ...first, connection: {} } as HomeAssistant;
+        fetcher.select(next, KEY);
+        expect(callWS).toHaveBeenCalledTimes(2);
+        stale.resolve(DETAILS);
+        await flush();
+        expect(fetcher.state).toEqual({ status: "loading" });
+        fresh.resolve({ ...DETAILS, ip_address: "192.0.2.20" });
+        await flush();
+        expect(fetcher.state).toEqual({
+            status: "ready",
+            details: { ...DETAILS, ip_address: "192.0.2.20" },
+        });
+        fetcher.select({ ...next, connection: {} } as HomeAssistant, KEY);
+        expect(fetcher.state).toEqual({ status: "loading" });
+    });
+
+    it("ignores a response after teardown", async () => {
+        const pending = deferred<NodeDetails>();
+        const changed = vi.fn();
+        const fetcher = new NodeDetailsFetcher(changed);
+        fetcher.select(
+            hassFor(
+                true,
+                vi.fn(() => pending.promise),
+            ),
+            KEY,
+        );
+        fetcher.stop();
+        pending.resolve(DETAILS);
+        await flush();
+        expect(fetcher.state).toEqual({ status: "idle" });
+        expect(changed).not.toHaveBeenCalled();
+    });
+
+    it("returns no details on errors and does not retry the same key", async () => {
+        const callWS = vi.fn(async () => {
+            throw { code: "node_not_found" };
+        });
+        const hass = hassFor(true, callWS);
+        const fetcher = new NodeDetailsFetcher(vi.fn());
+        fetcher.select(hass, KEY);
+        await flush();
+        expect(fetcher.state).toEqual({ status: "idle" });
+        fetcher.select(hass, KEY);
+        expect(callWS).toHaveBeenCalledOnce();
     });
 });

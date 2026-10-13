@@ -247,3 +247,38 @@ describe("<uit-list-view>", () => {
         });
     });
 });
+
+describe("plan v3 list gestures", () => {
+    it.each(["pan", "pinch"])(
+        "suppresses contextmenu during %s",
+        async (gesture) => {
+            const el = await mount<UitListView>("uit-list-view", {
+                model: fixtureModel(),
+                localize,
+            });
+            const row = rowsOf(el)[0]!;
+            const emitted = vi.fn();
+            el.addEventListener("uit-context", emitted);
+            const pointer = (type: string, id: number, x: number) => {
+                const event = new Event(type, { bubbles: true });
+                Object.assign(event, {
+                    pointerId: id,
+                    isPrimary: id === 1,
+                    clientX: x,
+                    clientY: 0,
+                });
+                row.dispatchEvent(event);
+            };
+            pointer("pointerdown", 1, 0);
+            if (gesture === "pan") pointer("pointermove", 1, 20);
+            else pointer("pointerdown", 2, 0);
+            const event = new MouseEvent("contextmenu", {
+                bubbles: true,
+                cancelable: true,
+            });
+            row.dispatchEvent(event);
+            expect(event.defaultPrevented).toBe(true);
+            expect(emitted).not.toHaveBeenCalled();
+        },
+    );
+});
