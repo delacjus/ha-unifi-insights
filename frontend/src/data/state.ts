@@ -2,9 +2,7 @@ import type { SiteBinding } from "../config";
 import {
     ERR_ENTRY_NOT_FOUND,
     ERR_ENTRY_NOT_LOADED,
-    ERR_NODE_NOT_FOUND,
     ERR_SITE_NOT_SELECTED,
-    ERR_UNAUTHORIZED,
     ISSUE_CLIENTS_TRUNCATED,
     ISSUE_DEVICES_UNAVAILABLE,
     ISSUE_ENTRY_UNLOADED,
@@ -86,9 +84,6 @@ const ERROR_TEXT: Record<string, NoticeText> = {
         key: "error.entry_not_loaded",
         action: "integration",
     },
-    // Node details only: the menu shows these without a card action.
-    [ERR_NODE_NOT_FOUND]: { key: "error.node_not_found" },
-    [ERR_UNAUTHORIZED]: { key: "error.access_denied" },
 };
 
 export function issueNotice(

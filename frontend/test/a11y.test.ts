@@ -93,7 +93,7 @@ describe("WCAG 2.2 AA (axe-core)", () => {
             kind: "switch" as const,
             ip_address: "192.0.2.10",
             mac_address: "aa:bb:cc:dd:ee:ff",
-            ha_device_id: "reg-core",
+            device_id: "reg-core",
             entity_id: "sensor.core_status",
         };
 
@@ -122,7 +122,7 @@ describe("WCAG 2.2 AA (axe-core)", () => {
             await settle(panel);
             const menu =
                 panel.shadowRoot!.querySelector<UitNodeMenu>("uit-node-menu")!;
-            await settle(menu);
+            if (menu) await settle(menu);
             return { el, panel, menu };
         }
 
@@ -134,7 +134,7 @@ describe("WCAG 2.2 AA (axe-core)", () => {
             expect(await audit(el)).toEqual([]);
         });
 
-        it("open while the details are still loading", async () => {
+        it("hides Actions while details load", async () => {
             const fake = fakeHass({ admin: true });
             const answerSources = fake.hass.callWS;
             fake.hass.callWS = ((message: MessageBase) =>
@@ -142,9 +142,7 @@ describe("WCAG 2.2 AA (axe-core)", () => {
                     ? new Promise(() => undefined)
                     : answerSources(message)) as never;
             const { el, menu } = await menuOpened(fake);
-            expect(
-                menu.shadowRoot!.querySelector('[aria-disabled="true"]'),
-            ).not.toBeNull();
+            expect(menu).toBeNull();
             expect(await audit(el)).toEqual([]);
         });
 

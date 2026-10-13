@@ -1,6 +1,5 @@
 import {
     LitElement,
-    css,
     html,
     nothing,
     type PropertyValues,
@@ -18,7 +17,7 @@ import {
     mdiOpenInNew,
 } from "../icons";
 import type { LocalizeFunc, LocalizeKey } from "../localize";
-import { controlStyles, themeTokens } from "../styles";
+import { controlStyles, menuStyles, themeTokens } from "../styles";
 
 const ACTION_KEYS: Record<NodeAction, LocalizeKey> = {
     copy_ip: "menu.copy_ip",
@@ -36,18 +35,6 @@ const ACTION_ICONS: Record<NodeAction, string> = {
 
 let menuCount = 0;
 
-/** Elements a press focuses: native controls and anything with a tabindex. */
-const FOCUSABLE_ON_PRESS =
-    'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable]:not([contenteditable="false"])';
-
-function takesFocusOnPress(target: EventTarget): boolean {
-    return (
-        target instanceof Element &&
-        target.matches(FOCUSABLE_ON_PRESS) &&
-        !target.matches(":disabled")
-    );
-}
-
 /**
  * A button that opens a keyboard-operable menu of node actions.
  *
@@ -59,27 +46,21 @@ function takesFocusOnPress(target: EventTarget): boolean {
 export class UitNodeMenu extends LitElement {
     static override properties = {
         actions: { attribute: false },
-        loading: { attribute: false },
         localize: { attribute: false },
         open: { state: true },
     };
 
     declare actions: NodeAction[];
-    /** More actions may follow: show a disabled "Loading" item after the real ones. */
-    declare loading: boolean;
     declare localize?: LocalizeFunc;
     declare open: boolean;
 
     private readonly menuId = `uit-node-menu-${++menuCount}`;
     private listening = false;
-    private focusWasInMenu = false;
-    /** The user moved off the first item, so a changing list must not move focus. */
-    private navigated = false;
+    private tabClose: ReturnType<typeof setTimeout> | undefined;
 
     constructor() {
         super();
         this.actions = [];
-        this.loading = false;
         this.open = false;
     }
 
@@ -109,7 +90,7 @@ export class UitNodeMenu extends LitElement {
     }
 
     private get hasContent(): boolean {
-        return this.actions.length > 0 || this.loading;
+        return this.actions.length > 0;
     }
 
     override connectedCallback(): void {
@@ -119,42 +100,37 @@ export class UitNodeMenu extends LitElement {
 
     override disconnectedCallback(): void {
         super.disconnectedCallback();
+        this.hide(false);
         this.listenOutside(false);
     }
 
     /** Open the menu and focus its first or last item. */
     async show(where: "first" | "last" = "first"): Promise<void> {
         if (!this.hasContent) return;
-        this.navigated = false;
+        clearTimeout(this.tabClose);
         this.open = true;
         await this.updateComplete;
         const items = this.items;
-        items[where === "first" ? 0 : items.length - 1]?.focus();
+        const target = items[where === "first" ? 0 : items.length - 1];
+        for (const item of items) item.tabIndex = item === target ? 0 : -1;
+        target?.focus();
     }
 
-    /** Close the menu. Whichever way it closes, focus goes back to the button. */
-    hide(): void {
+    /** Restore focus for Escape and actions; outside presses and Tab keep their focus flow. */
+    hide(restoreFocus = true): void {
+        clearTimeout(this.tabClose);
+        this.tabClose = undefined;
         if (!this.open) return;
         this.open = false;
-        this.trigger?.focus();
+        if (restoreFocus) this.trigger?.focus();
     }
 
     protected override willUpdate(): void {
         if (!this.hasContent) this.open = false;
-        this.focusWasInMenu = this.focusedItem !== null;
     }
 
     protected override updated(changed: PropertyValues<this>): void {
         if (changed.has("open")) this.listenOutside(this.open);
-        // The list changed under focus (the real items arrived while the menu
-        // was open): never drop focus, and while it still rests on the first
-        // item keep it on the new first one.
-        if (this.open && this.focusWasInMenu) {
-            const first = this.items[0];
-            const focused = this.focusedItem;
-            if (focused === null || (!this.navigated && focused !== first))
-                first?.focus();
-        }
     }
 
     private listenOutside(on: boolean): void {
@@ -173,33 +149,8 @@ export class UitNodeMenu extends LitElement {
     private readonly onOutsidePress = (e: Event): void => {
         const path = e.composedPath();
         if (path.includes(this)) return;
-        this.hide();
-        // A press on a control focuses that control, as it should. Any other
-        // press leaves focus on nothing (or on a container such as the dialog),
-        // so it is put back on the button once the press has been handled.
-        if (!path.some(takesFocusOnPress)) this.keepFocusOnButtonAfterPress();
+        this.hide(false);
     };
-
-    /**
-     * The browser moves focus as part of the press, after the handler above.
-     * Touch sends its mouse events once the pointer is released, so the
-     * button gets focus again then as well.
-     */
-    private keepFocusOnButtonAfterPress(): void {
-        const focusButton = (): void => {
-            setTimeout(() => {
-                if (!this.open) this.trigger?.focus();
-            }, 0);
-        };
-        focusButton();
-        const released = (): void => {
-            document.removeEventListener("pointerup", released, true);
-            document.removeEventListener("pointercancel", released, true);
-            focusButton();
-        };
-        document.addEventListener("pointerup", released, true);
-        document.addEventListener("pointercancel", released, true);
-    }
 
     private onTriggerKeydown(e: KeyboardEvent): void {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -218,6 +169,7 @@ export class UitNodeMenu extends LitElement {
     }
 
     private onMenuKeydown(e: KeyboardEvent): void {
+        e.stopPropagation();
         const items = this.items;
         const at = this.focusedItem ? items.indexOf(this.focusedItem) : -1;
         let target: number | undefined;
@@ -238,15 +190,22 @@ export class UitNodeMenu extends LitElement {
                 this.swallow(e);
                 this.hide();
                 return;
+            case "Enter":
+            case " ":
+                this.swallow(e);
+                this.focusedItem?.click();
+                return;
             case "Tab":
-                // Focus passes through the button, then the key moves it on.
-                this.hide();
+                // Keep the focused item in the DOM until native Tab has moved
+                // focus. Removing it in Lit's microtask loses the tab origin.
+                this.tabClose = setTimeout(() => this.hide(false), 0);
                 return;
             default:
                 return;
         }
         e.preventDefault();
-        this.navigated = true;
+        for (const item of items)
+            item.tabIndex = item === items[target] ? 0 : -1;
         items[target]?.focus();
     }
 
@@ -264,13 +223,17 @@ export class UitNodeMenu extends LitElement {
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded=${String(this.open)}
-                aria-controls=${this.open ? this.menuId : nothing}
+                aria-controls=${this.menuId}
                 aria-label=${label}
                 title=${label}
-                @click=${() => (this.open ? this.hide() : void this.show())}
+                @click=${(e: Event) => {
+                    e.stopPropagation();
+                    if (this.open) this.hide();
+                    else void this.show();
+                }}
                 @keydown=${(e: KeyboardEvent) => this.onTriggerKeydown(e)}
             >
-                ${iconTemplate(mdiDotsVertical)}
+                ${iconTemplate(mdiDotsVertical)}<span>${label}</span>
             </button>
             ${this.open
                 ? html`<div
@@ -278,6 +241,12 @@ export class UitNodeMenu extends LitElement {
                       class="menu"
                       role="menu"
                       aria-label=${label}
+                      @click=${(e: Event) => e.stopPropagation()}
+                      @pointerdown=${(e: Event) => e.stopPropagation()}
+                      @contextmenu=${(e: Event) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                      }}
                       @keydown=${(e: KeyboardEvent) => this.onMenuKeydown(e)}
                   >
                       ${repeat(
@@ -296,80 +265,11 @@ export class UitNodeMenu extends LitElement {
                                   >
                               </button>`,
                       )}
-                      ${this.loading
-                          ? html`<div
-                                role="menuitem"
-                                tabindex="-1"
-                                aria-disabled="true"
-                                class="loading"
-                            >
-                                ${localize("menu.loading")}
-                            </div>`
-                          : nothing}
                   </div>`
                 : nothing}`;
     }
 
-    static override styles = [
-        themeTokens,
-        controlStyles,
-        css`
-            :host {
-                position: relative;
-                display: inline-flex;
-            }
-            .trigger {
-                border: none;
-                padding: 0;
-            }
-            .menu {
-                position: absolute;
-                inset-block-start: calc(100% + 4px);
-                inset-inline-end: 0;
-                z-index: 3;
-                box-sizing: border-box;
-                width: max-content;
-                min-width: 13em;
-                max-width: min(22em, 80vw);
-                padding: 4px;
-                background: var(--card-background-color);
-                border: 1px solid var(--uit-line);
-                border-radius: 12px;
-                box-shadow: var(
-                    --ha-card-box-shadow,
-                    0 4px 14px rgba(0, 0, 0, 0.18)
-                );
-            }
-            [role="menuitem"] {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                box-sizing: border-box;
-                width: 100%;
-                min-height: 44px;
-                padding: 0 12px;
-                border: none;
-                border-radius: 8px;
-                font: inherit;
-                color: var(--primary-text-color);
-                background: none;
-                text-align: start;
-                cursor: pointer;
-            }
-            button[role="menuitem"]:hover,
-            button[role="menuitem"]:focus {
-                background: color-mix(
-                    in srgb,
-                    var(--uit-focus) 14%,
-                    transparent
-                );
-            }
-            .loading {
-                color: var(--secondary-text-color);
-                cursor: default;
-            }
-        `,
-    ];
+    static override styles = [themeTokens, controlStyles, menuStyles];
 }
 
 defineOnce("uit-node-menu", UitNodeMenu);

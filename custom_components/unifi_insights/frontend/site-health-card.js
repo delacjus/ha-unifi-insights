@@ -1,20 +1,20 @@
-import{It as e,J as t,N as n,X as r,a as i,f as a,it as o,j as s,n as c,p as l,rt as u,st as d,t as f,w as p,y as m}from"./chunks/register-dashboard-card-mqPoi0AV.js";f({tag:a,editorTag:l,card:class extends c{static editorTag=l;get cardType(){return`custom:${a}`}get sourceCommand(){return e}get subscribeCommand(){return`unifi_insights/site_health/subscribe`}get defaultTitle(){return`Site Health`}get headerIcon(){return o}get headerAccent(){let e=String(this.snapshot?.health?.level??`healthy`);return e===`critical`?`var(--uit-offline)`:e===`degraded`?`var(--uit-warning)`:`var(--uit-online)`}renderHeaderBadge(){if(!this.snapshot)return s;let e=this.snapshot.health??{},t=String(e.level??`unknown`);return n`<span class="chip ${t}">
+import{Ft as e,M as t,P as n,T as r,Y as i,Z as a,at as o,b as s,ct as c,it as l,m as u,n as d,o as f,p,t as m}from"./chunks/register-dashboard-card-CY2sucn5.js";m({tag:p,editorTag:u,card:class extends d{static editorTag=u;get cardType(){return`custom:${p}`}get sourceCommand(){return e}get subscribeCommand(){return`unifi_insights/site_health/subscribe`}get defaultTitle(){return`Site Health`}get headerIcon(){return o}get headerAccent(){let e=String(this.snapshot?.health?.level??`healthy`);return e===`critical`?`var(--uit-offline)`:e===`degraded`?`var(--uit-warning)`:`var(--uit-online)`}renderHeaderBadge(){if(!this.snapshot)return t;let e=this.snapshot.health??{},r=String(e.level??`unknown`);return n`<span class="chip ${r}">
             <span class="status-dot"></span>
-            <span>${t}</span>
-        </span>`}renderContent(){let e=this.snapshot;if(!e)return n`<div class="state">Choose site.</div>`;let i=e.health??{},a=e.gateway??{},o=e.clients??{},c=e.devices??{},l=String(i.level??`unknown`),f=String(a.internet??`unknown`),h=Number(o.total??0),g=Number(o.wired??0),_=Number(o.wireless??0),v=h>0?Math.round(_/h*100):50,y=0,b=0;for(let e of Object.values(c))if(e&&typeof e==`object`){let t=Number(e.online??0),n=Number(e.offline??0),r=Number(e.unknown??0);y+=t,b+=t+n+r}let x=typeof a.name==`string`&&a.name?a.name:`UniFi Gateway`,S=m(a.uptime_s);return n`
+            <span>${r}</span>
+        </span>`}renderContent(){let e=this.snapshot;if(!e)return n`<div class="state">Choose site.</div>`;let o=e.health??{},u=e.gateway??{},d=e.clients??{},f=e.devices??{},p=String(o.level??`unknown`),m=String(u.internet??`unknown`),h=Number(d.total??0),g=Number(d.wired??0),_=Number(d.wireless??0),v=h>0?Math.round(_/h*100):50,y=0,b=0;for(let e of Object.values(f))if(e&&typeof e==`object`){let t=Number(e.online??0),n=Number(e.offline??0),r=Number(e.unknown??0);y+=t,b+=t+n+r}let x=typeof u.name==`string`&&u.name?u.name:`UniFi Gateway`,S=s(u.uptime_s);return n`
             <div class="hero-banner">
                 <div class="hero-left">
-                    ${p(u)}
+                    ${r(l)}
                     <div>
                         <div class="hero-title">${x}</div>
                         <div class="hero-meta">
-                            Status: ${l}${S?` · Uptime ${S}`:``}
+                            Status: ${p}${S?` · Uptime ${S}`:``}
                         </div>
                     </div>
                 </div>
-                <span class="chip ${f===`online`?`ok`:`warning`}">
+                <span class="chip ${m===`online`?`ok`:`warning`}">
                     <span class="status-dot"></span>
-                    ${f}
+                    ${m}
                 </span>
             </div>
 
@@ -22,16 +22,16 @@ import{It as e,J as t,N as n,X as r,a as i,f as a,it as o,j as s,n as c,p as l,r
                 <div class="kpi-tile">
                     <div class="kpi-top">
                         <span>Internet</span>
-                        ${p(r)}
+                        ${r(a)}
                     </div>
-                    <div class="kpi-value">${f}</div>
-                    <div class="kpi-sub">WAN Health · ${l}</div>
+                    <div class="kpi-value">${m}</div>
+                    <div class="kpi-sub">WAN Health · ${p}</div>
                 </div>
 
                 <div class="kpi-tile">
                     <div class="kpi-top">
                         <span>Clients</span>
-                        ${p(d)}
+                        ${r(c)}
                     </div>
                     <div class="kpi-value">${h}</div>
                     <div class="bar-track" aria-hidden="true">
@@ -48,12 +48,12 @@ import{It as e,J as t,N as n,X as r,a as i,f as a,it as o,j as s,n as c,p as l,r
                 ${b>0?n`<div class="kpi-tile">
                           <div class="kpi-top">
                               <span>Devices</span>
-                              ${p(t)}
+                              ${r(i)}
                           </div>
                           <div class="kpi-value">
                               ${y}/${b}
                           </div>
                           <div class="kpi-sub">Infrastructure online</div>
-                      </div>`:s}
+                      </div>`:t}
             </div>
-        `}},editor:class extends i{constructor(){super(a,e)}},name:`UniFi Site Health`,description:`Compact site health summary with WAN, gateway, device, and client status.`});
+        `}},editor:class extends f{constructor(){super(p,e)}},name:`UniFi Site Health`,description:`Compact site health summary with WAN, gateway, device, and client status.`});

@@ -44,7 +44,7 @@ export async function copyText(
     text: string,
     host: ParentNode = document.body,
 ): Promise<boolean> {
-    if (window.isSecureContext && navigator.clipboard?.writeText) {
+    if (navigator.clipboard?.writeText) {
         try {
             await navigator.clipboard.writeText(text);
             return true;

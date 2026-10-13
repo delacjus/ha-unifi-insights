@@ -1,80 +1,74 @@
-import { WS_NODE_DETAILS, type NodeDetails } from "../contract";
 import {
-    isAdmin,
-    toWsError,
-    type HomeAssistant,
-    type WsError,
-} from "../ha-types";
+    WS_NODE_DETAILS,
+    type NodeDetails,
+    type NodeDetailsRequest,
+} from "../contract";
+import { isAdmin, type Connection, type HomeAssistant } from "../ha-types";
 
-export interface NodeDetailsKey {
-    entry_id: string;
-    site_id: string;
-    node_id: string;
-}
+export type NodeDetailsKey = Omit<NodeDetailsRequest, "type">;
 
 export type DetailsState =
     | { status: "idle" }
     | { status: "loading" }
-    | { status: "ready"; details: NodeDetails }
-    | { status: "error"; error: WsError };
+    | { status: "ready"; details: NodeDetails };
 
 const IDLE: DetailsState = { status: "idle" };
 
-/**
- * The details of the one selected node, fetched on demand.
- *
- * Only administrators can call the command, so for anyone else this never
- * touches the socket. Each selection (entry, site and node) gets its own
- * request token: an answer that arrives after another node or site was
- * selected is dropped, and nothing is cached across selections, so one node's
- * addresses can never show under another.
- */
+/** One selected node's details; a new key, connection or lifecycle invalidates all answers. */
 export class NodeDetailsFetcher {
     private current: DetailsState = IDLE;
     private keyId: string | undefined;
-    private token = 0;
-    private readonly onChange: () => void;
+    private connection: Connection | undefined;
+    private generation = 0;
 
-    /** `onChange` runs when an answer or a failure arrives, never during `select`. */
-    constructor(onChange: () => void) {
-        this.onChange = onChange;
-    }
+    constructor(private readonly onChange: () => void) {}
 
     get state(): DetailsState {
         return this.current;
     }
 
-    /** Point the fetcher at a node; a no-op while the selection is unchanged. */
+    /** Point at one selection; unchanged keys share only their current result. */
     select(
         hass: HomeAssistant | undefined,
         key: NodeDetailsKey | undefined,
     ): void {
         const keyId =
-            key && hass && isAdmin(hass)
+            key && isAdmin(hass) && !key.node_id.startsWith("group:")
                 ? JSON.stringify([key.entry_id, key.site_id, key.node_id])
                 : undefined;
-        if (keyId === this.keyId) return;
+        const connection = hass?.connection;
+        if (keyId === this.keyId && connection === this.connection) return;
+        this.stop();
         this.keyId = keyId;
-        const token = ++this.token;
-        if (!key || !hass || keyId === undefined) {
-            this.current = IDLE;
-            return;
-        }
+        this.connection = connection;
+        if (!hass || !key || keyId === undefined) return;
+        const generation = this.generation;
         this.current = { status: "loading" };
-        hass.callWS<NodeDetails>({
-            type: WS_NODE_DETAILS,
-            entry_id: key.entry_id,
-            site_id: key.site_id,
-            node_id: key.node_id,
-        }).then(
-            (details) => this.settle(token, { status: "ready", details }),
-            (err: unknown) =>
-                this.settle(token, { status: "error", error: toWsError(err) }),
-        );
+        const request: NodeDetailsRequest = { type: WS_NODE_DETAILS, ...key };
+        // Both synchronous throws and rejected promises mean no details; no retry.
+        void this.fetch(hass, request, generation);
     }
 
-    private settle(token: number, next: DetailsState): void {
-        if (token !== this.token) return;
+    stop(): void {
+        this.generation++;
+        this.current = IDLE;
+        this.keyId = undefined;
+        this.connection = undefined;
+    }
+
+    private async fetch(
+        hass: HomeAssistant,
+        request: NodeDetailsRequest,
+        generation: number,
+    ): Promise<void> {
+        let next: DetailsState;
+        try {
+            const details = await hass.callWS<NodeDetails>(request);
+            next = { status: "ready", details };
+        } catch {
+            next = IDLE;
+        }
+        if (generation !== this.generation) return;
         this.current = next;
         this.onChange();
     }
@@ -85,22 +79,16 @@ export type NodeAction = "copy_ip" | "copy_mac" | "open_device" | "open_entity";
 const has = (value: string | undefined): value is string =>
     typeof value === "string" && value !== "";
 
-/**
- * Menu actions that have data, in menu order. The snapshot's own device id
- * serves everyone; the addresses and the entity come from the details and so
- * exist for administrators only.
- */
+/** Only supplied administrator details provide menu actions, in contract order. */
 export function nodeActions(
-    node: { ha_device_id?: string | undefined },
     details: NodeDetails | undefined,
     admin: boolean,
 ): NodeAction[] {
-    const known = admin ? details : undefined;
+    if (!admin || !details) return [];
     const actions: NodeAction[] = [];
-    if (has(known?.ip_address)) actions.push("copy_ip");
-    if (has(known?.mac_address)) actions.push("copy_mac");
-    if (has(node.ha_device_id) || has(known?.ha_device_id))
-        actions.push("open_device");
-    if (has(known?.entity_id)) actions.push("open_entity");
+    if (has(details.ip_address)) actions.push("copy_ip");
+    if (has(details.mac_address)) actions.push("copy_mac");
+    if (has(details.device_id)) actions.push("open_device");
+    if (has(details.entity_id)) actions.push("open_entity");
     return actions;
 }

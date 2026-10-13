@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WS_NODE_DETAILS, type NodeDetails } from "../src/contract";
+import { type NodeDetails } from "../src/contract";
 import type { HomeAssistant } from "../src/ha-types";
 import { makeLocalize } from "../src/localize";
 import { UitDetailPanel } from "../src/views/detail-panel";
@@ -186,7 +186,7 @@ describe("node actions", () => {
         kind: "switch",
         ip_address: "192.0.2.10",
         mac_address: "aa:bb:cc:dd:ee:ff",
-        ha_device_id: "reg-core",
+        device_id: "reg-core",
         entity_id: "sensor.core_status",
     };
     const CLIENT: NodeDetails = {
@@ -228,6 +228,11 @@ describe("node actions", () => {
             localize,
             selectedId,
             hass: hassOf(true, callWS),
+            details: selectedId?.startsWith("dev:")
+                ? DETAILS
+                : selectedId?.startsWith("cli:")
+                  ? CLIENT
+                  : undefined,
             ...props,
         });
 
@@ -299,8 +304,7 @@ describe("node actions", () => {
             el.hass = hassOf(admin, callWS);
             await settleAll(el);
             expect(callWS).not.toHaveBeenCalled();
-            expect(menuOf(el)!.actions).toEqual(["open_device"]);
-            expect(menuOf(el)!.loading).toBe(false);
+            expect(menuOf(el)).toBeNull();
             // The button next to the rows stays exactly as it was.
             expect(
                 el.shadowRoot!.querySelector("button.action")!.textContent,
@@ -321,43 +325,12 @@ describe("node actions", () => {
         expect(callWS).not.toHaveBeenCalled();
     });
 
-    it("asks the integration about the selected node and fills the menu in", async () => {
-        let answer!: (details: NodeDetails) => void;
-        const callWS = vi.fn(
-            () =>
-                new Promise<NodeDetails>((resolve) => {
-                    answer = resolve;
-                }),
-        );
-        const el = await adminPanel("dev:uuid-core", callWS);
-        expect(callWS).toHaveBeenCalledExactlyOnceWith({
-            type: WS_NODE_DETAILS,
-            entry_id: "entry-1",
-            site_id: "site-1",
-            node_id: "dev:uuid-core",
-        });
-        // Until the answer arrives the menu offers what it has and says it is loading.
-        expect(menuOf(el)!.loading).toBe(true);
-        expect(menuOf(el)!.actions).toEqual(["open_device"]);
-        answer(DETAILS);
-        await settleAll(el);
-        expect(menuOf(el)!.loading).toBe(false);
-        expect(menuOf(el)!.actions).toEqual([
-            "copy_ip",
-            "copy_mac",
-            "open_device",
-            "open_entity",
-        ]);
-        // Addresses are never rendered as rows or placeholders.
-        expect(el.shadowRoot!.textContent).not.toContain("192.0.2.10");
-        expect(callWS).toHaveBeenCalledOnce();
-    });
-
     it("starts every selection with a closed menu", async () => {
         const el = await adminPanel("dev:uuid-core");
         const menu = await openMenu(el);
         expect(menu.shadowRoot!.querySelector('[role="menu"]')).not.toBeNull();
         el.selectedId = "cli:cli-tv";
+        el.details = CLIENT;
         await settleAll(el);
         const next = menuOf(el)!;
         expect(next).not.toBe(menu);
@@ -378,44 +351,6 @@ describe("node actions", () => {
         expect(menuOf(el)).toBeNull();
     });
 
-    it("drops the answer of a node that is no longer selected", async () => {
-        let answerCore!: (details: NodeDetails) => void;
-        const callWS = vi.fn((message: { node_id: string }) =>
-            message.node_id === "dev:uuid-core"
-                ? new Promise<NodeDetails>((resolve) => {
-                      answerCore = resolve;
-                  })
-                : Promise.resolve(CLIENT),
-        );
-        const el = await adminPanel("dev:uuid-core", callWS);
-        el.selectedId = "cli:cli-tv";
-        await settleAll(el);
-        expect(menuOf(el)!.actions).toEqual(["copy_ip", "open_entity"]);
-
-        answerCore(DETAILS);
-        await settleAll(el);
-        expect(menuOf(el)!.actions).toEqual(["copy_ip", "open_entity"]);
-        expect(callWS).toHaveBeenCalledTimes(2);
-    });
-
-    it("shows a rejected request as a localised message and keeps the device link", async () => {
-        for (const [code, text] of [
-            [
-                "unauthorized",
-                "Access denied. Node actions need an administrator account.",
-            ],
-            ["node_not_found", "This device or client is no longer available."],
-        ] as const) {
-            const callWS = vi.fn(async () => {
-                throw { code, message: "server text" };
-            });
-            const el = await adminPanel("dev:uuid-core", callWS);
-            await settleAll(el);
-            expect(status(el).textContent).toContain(text);
-            expect(menuOf(el)!.actions).toEqual(["open_device"]);
-        }
-    });
-
     it("always has a polite live region, empty until there is something to say", async () => {
         const el = await adminPanel("dev:uuid-core");
         await settleAll(el);
@@ -432,7 +367,9 @@ describe("node actions", () => {
         itemOf(menu, "copy_ip").click();
         await settleAll(el);
         expect(writeText).toHaveBeenCalledExactlyOnceWith("192.0.2.10");
-        expect(status(el).textContent).toContain("Copied to the clipboard.");
+        expect(status(el).textContent).toContain(
+            "IP address copied to the clipboard.",
+        );
         expect(status(el).querySelector(".manual")).toBeNull();
         expect(menu.shadowRoot!.querySelector('[role="menu"]')).toBeNull();
     });
@@ -451,6 +388,7 @@ describe("node actions", () => {
         stubClipboard(async () => {
             throw new DOMException("denied", "NotAllowedError");
         });
+        const selection = vi.spyOn(window.getSelection()!, "addRange");
         const el = await adminPanel("dev:uuid-core");
         const menu = await openMenu(el);
         itemOf(menu, "copy_mac").click();
@@ -458,9 +396,17 @@ describe("node actions", () => {
         expect(status(el).textContent).toContain(
             "Couldn't copy. Select the value below to copy it by hand.",
         );
-        expect(status(el).querySelector(".manual")!.textContent).toBe(
-            "aa:bb:cc:dd:ee:ff",
-        );
+        const manual = status(el).querySelector(".manual")!;
+        expect(manual.textContent).toBe("aa:bb:cc:dd:ee:ff");
+        expect(selection).toHaveBeenCalledOnce();
+        const range = selection.mock.calls[0]![0];
+        expect(range.startContainer).toBe(manual);
+        expect(range.endOffset).toBe(manual.childNodes.length);
+        expect(range.toString()).toBe("aa:bb:cc:dd:ee:ff");
+        selection.mockRestore();
+        expect(
+            UitDetailPanel.styles.map((style) => style.cssText).join("\n"),
+        ).toMatch(/user-select:\s*text/);
     });
 
     it("copies through the textarea fallback inside the open dialog", async () => {
@@ -480,7 +426,9 @@ describe("node actions", () => {
         await settleAll(el);
         expect(host).toBe(el.shadowRoot!.querySelector("dialog"));
         expect(el.shadowRoot!.querySelector("textarea")).toBeNull();
-        expect(status(el).textContent).toContain("Copied to the clipboard.");
+        expect(status(el).textContent).toContain(
+            "IP address copied to the clipboard.",
+        );
     });
 
     it("clears the message when another node is selected", async () => {
@@ -489,7 +437,7 @@ describe("node actions", () => {
         const menu = await openMenu(el);
         itemOf(menu, "copy_ip").click();
         await settleAll(el);
-        expect(status(el).textContent).toContain("Copied");
+        expect(status(el).textContent).toContain("copied");
         el.selectedId = "cli:cli-tv";
         await settleAll(el);
         expect(status(el).textContent?.trim()).toBe("");
@@ -658,7 +606,7 @@ describe("node actions", () => {
             finish();
             await settleAll(el);
             expect(status(el).textContent).toContain(
-                "Copied to the clipboard.",
+                "IP address copied to the clipboard.",
             );
         });
     });
@@ -686,9 +634,11 @@ describe("node actions", () => {
 
     it("opens a client's device from the details when the snapshot has none", async () => {
         const callWS = answering({
-            "cli:cli-tv": { kind: "client", ha_device_id: "reg/tv 1" },
+            "cli:cli-tv": { kind: "client", device_id: "reg/tv 1" },
         });
-        const el = await adminPanel("cli:cli-tv", callWS);
+        const el = await adminPanel("cli:cli-tv", callWS, {
+            details: { kind: "client", device_id: "reg/tv 1" },
+        });
         const menu = await openMenu(el);
         expect(labelsOf(menu)).toEqual(["Open device"]);
         itemOf(menu, "open_device").click();
@@ -752,10 +702,66 @@ describe("node actions", () => {
         });
     });
 
+    it("prevents native dialog cancellation while the menu is open", async () => {
+        const el = await adminPanel("dev:uuid-core", undefined, {
+            modal: true,
+        });
+        const menu = await openMenu(el);
+        const dialog = el.shadowRoot!.querySelector("dialog")!;
+        const cancel = new Event("cancel", { cancelable: true });
+        dialog.dispatchEvent(cancel);
+        expect(cancel.defaultPrevented).toBe(true);
+        expect(dialog.open).toBe(true);
+        menu.hide();
+        await settleAll(el);
+        const closedCancel = new Event("cancel", { cancelable: true });
+        dialog.dispatchEvent(closedCancel);
+        expect(closedCancel.defaultPrevented).toBe(false);
+    });
+
+    it("hides Actions when supplied details have no action values", async () => {
+        const el = await adminPanel("dev:uuid-core", undefined, {
+            details: { kind: "switch" },
+        });
+        await settleAll(el);
+        expect(menuOf(el)).toBeNull();
+    });
+
+    it("rejects requests from another entry or site and clears pending selection requests", async () => {
+        const el = await adminPanel("dev:uuid-core");
+        for (const key of [
+            { entry_id: "wrong", site_id: "site-1" },
+            { entry_id: "entry-1", site_id: "wrong" },
+        ]) {
+            el.menuRequest = { ...key, node_id: "dev:uuid-core" };
+            await settleAll(el);
+            expect(menuOf(el)!.open).toBe(false);
+        }
+        el.details = undefined;
+        el.menuRequest = {
+            entry_id: "entry-1",
+            site_id: "site-1",
+            node_id: "dev:uuid-core",
+        };
+        await settleAll(el);
+        el.selectedId = "cli:cli-tv";
+        el.details = CLIENT;
+        await settleAll(el);
+        expect(menuOf(el)!.open).toBe(false);
+        el.selectedId = "dev:uuid-core";
+        el.details = DETAILS;
+        await settleAll(el);
+        expect(menuOf(el)!.open).toBe(false);
+    });
+
     describe("opened from a context request", () => {
         it("opens the menu on its first item for the selected node", async () => {
             const el = await adminPanel("dev:uuid-core");
-            el.menuRequest = { id: "dev:uuid-core" };
+            el.menuRequest = {
+                entry_id: "entry-1",
+                site_id: "site-1",
+                node_id: "dev:uuid-core",
+            };
             await settleAll(el);
             const menu = menuOf(el)!;
             expect(
@@ -767,23 +773,20 @@ describe("node actions", () => {
             );
         });
 
-        it("opens while the details still load, then keeps focus in the menu", async () => {
-            let answer!: (details: NodeDetails) => void;
-            const callWS = vi.fn(
-                () =>
-                    new Promise<NodeDetails>((resolve) => {
-                        answer = resolve;
-                    }),
-            );
-            const el = await adminPanel("dev:uuid-core", callWS, {
-                menuRequest: { id: "dev:uuid-core" },
+        it("waits until supplied details arrive before opening", async () => {
+            const el = await adminPanel("dev:uuid-core", undefined, {
+                details: undefined,
+                menuRequest: {
+                    entry_id: "entry-1",
+                    site_id: "site-1",
+                    node_id: "dev:uuid-core",
+                },
             });
             await settleAll(el);
-            const menu = menuOf(el)!;
-            expect(labelsOf(menu)).toEqual(["Open device", "Loading actions…"]);
-            answer(DETAILS);
+            expect(menuOf(el)).toBeNull();
+            el.details = DETAILS;
             await settleAll(el);
-            // The items arrive around the first one; focus stays on the first.
+            const menu = menuOf(el)!;
             expect(labelsOf(menu)).toEqual([
                 "Copy IP address",
                 "Copy MAC address",
@@ -798,7 +801,11 @@ describe("node actions", () => {
         it("opens inside the dialog when the panel is modal", async () => {
             const el = await adminPanel("dev:uuid-core");
             el.modal = true;
-            el.menuRequest = { id: "dev:uuid-core" };
+            el.menuRequest = {
+                entry_id: "entry-1",
+                site_id: "site-1",
+                node_id: "dev:uuid-core",
+            };
             await settleAll(el);
             const dialog = el.shadowRoot!.querySelector("dialog")!;
             const menu = menuOf(el)!;
@@ -822,7 +829,11 @@ describe("node actions", () => {
             });
             try {
                 const el = await adminPanel("dev:uuid-core", undefined, {
-                    menuRequest: { id: "dev:uuid-core" },
+                    menuRequest: {
+                        entry_id: "entry-1",
+                        site_id: "site-1",
+                        node_id: "dev:uuid-core",
+                    },
                 });
                 await settleAll(el);
                 expect(el.modal).toBe(true);
@@ -846,7 +857,11 @@ describe("node actions", () => {
 
         it("ignores a request for another node, a request without a menu, and a repeat", async () => {
             const el = await adminPanel("dev:uuid-core");
-            el.menuRequest = { id: "cli:cli-tv" };
+            el.menuRequest = {
+                entry_id: "entry-1",
+                site_id: "site-1",
+                node_id: "cli:cli-tv",
+            };
             await settleAll(el);
             expect(
                 menuOf(el)!.shadowRoot!.querySelector('[role="menu"]'),
@@ -857,14 +872,22 @@ describe("node actions", () => {
                 localize,
                 selectedId: "cli:cli-tv",
                 hass: hassOf(false, answering({})),
-                menuRequest: { id: "cli:cli-tv" },
+                menuRequest: {
+                    entry_id: "entry-1",
+                    site_id: "site-1",
+                    node_id: "cli:cli-tv",
+                },
             });
             await settleAll(plain);
             expect(menuOf(plain)).toBeNull();
 
             // The same request object is consumed once: closing the menu
             // sticks across later renders.
-            const request = { id: "dev:uuid-core" };
+            const request = {
+                entry_id: "entry-1",
+                site_id: "site-1",
+                node_id: "dev:uuid-core",
+            };
             el.menuRequest = request;
             await settleAll(el);
             const menu = menuOf(el)!;
@@ -873,5 +896,24 @@ describe("node actions", () => {
             await settleAll(el);
             expect(menu.shadowRoot!.querySelector('[role="menu"]')).toBeNull();
         });
+    });
+});
+
+describe("plan v3 panel inputs", () => {
+    it("never fetches details itself and hides Actions until supplied", async () => {
+        const callWS = vi.fn(async () => ({
+            kind: "switch",
+            ip_address: "192.0.2.10",
+        }));
+        const el = await mount<UitDetailPanel>("uit-detail-panel", {
+            model: fixtureModel(),
+            localize,
+            selectedId: "dev:uuid-core",
+            hass: { user: { is_admin: true }, callWS },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await el.updateComplete;
+        expect(callWS).not.toHaveBeenCalled();
+        expect(el.shadowRoot!.querySelector("uit-node-menu")).toBeNull();
     });
 });

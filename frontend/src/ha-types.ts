@@ -35,7 +35,7 @@ export interface HomeAssistant {
     callWS<T>(message: MessageBase): Promise<T>;
     language?: string;
     locale?: { language: string };
-    user?: { is_admin?: boolean };
+    user?: { is_admin: boolean };
 }
 
 /** Whether the signed-in user is an administrator; anything unknown counts as no. */

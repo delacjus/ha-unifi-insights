@@ -10,11 +10,10 @@ import { keyed } from "lit/directives/keyed.js";
 import { copyText } from "../clipboard";
 import type { NodeDetails, TopologyNode } from "../contract";
 import {
-    NodeDetailsFetcher,
     nodeActions,
     type NodeAction,
+    type NodeDetailsKey,
 } from "../data/node-details";
-import { errorNotice } from "../data/state";
 import { defineOnce } from "../define";
 import {
     fireEvent,
@@ -57,6 +56,7 @@ export class UitDetailPanel extends LitElement {
         localize: { attribute: false },
         hass: { attribute: false },
         menuRequest: { attribute: false },
+        details: { attribute: false },
         narrow: { type: Boolean, reflect: true },
         memberQuery: { state: true },
         modal: { state: true },
@@ -66,10 +66,11 @@ export class UitDetailPanel extends LitElement {
     declare model?: GraphModel;
     declare selectedId?: string;
     declare localize?: LocalizeFunc;
-    /** For the administrator-only node details; only `callWS` and `user` are read. */
+    /** User rights determine whether supplied details may offer actions. */
     declare hass?: HomeAssistant;
     /** A fresh object asks to open the menu of that node, on its first item. */
-    declare menuRequest?: { id: string } | undefined;
+    declare menuRequest?: NodeDetailsKey | undefined;
+    declare details?: NodeDetails | undefined;
     declare narrow: boolean;
     declare memberQuery: string;
     declare modal: boolean;
@@ -85,9 +86,6 @@ export class UitDetailPanel extends LitElement {
      */
     private copyScope: string | undefined;
     private copyGeneration = 0;
-    private readonly details = new NodeDetailsFetcher(() =>
-        this.requestUpdate(),
-    );
 
     constructor() {
         super();
@@ -100,6 +98,10 @@ export class UitDetailPanel extends LitElement {
         super.disconnectedCallback();
         // HA detaches hidden or cached panels. An open dialog would come back
         // as a clipped box inside the card, so close the details instead.
+        this.closeMenu();
+        this.menuPending = false;
+        this.copyGeneration++;
+        this.copyStatus = undefined;
         this.renderRoot.querySelector("dialog")?.close();
     }
 
@@ -112,31 +114,25 @@ export class UitDetailPanel extends LitElement {
             isAdmin(this.hass),
         ]);
         if (scope !== this.copyScope) {
+            this.closeMenu();
+            this.menuPending = false;
             this.copyScope = scope;
             this.copyGeneration++;
             this.copyStatus = undefined;
         }
         if (this.selectedId === undefined) this.modal = false;
-        const node = this.selectedNode;
-        this.details.select(
-            this.hass,
-            node && this.model
-                ? {
-                      entry_id: this.model.snapshot.entry_id,
-                      site_id: this.model.snapshot.site_id,
-                      node_id: node.id,
-                  }
-                : undefined,
-        );
-        if (
-            changed.has("menuRequest") &&
-            this.menuRequest !== undefined &&
-            this.menuRequest.id === this.selectedId
-        )
-            this.menuPending = true;
+        if (changed.has("menuRequest")) {
+            const request = this.menuRequest;
+            this.menuPending =
+                request !== undefined &&
+                request.node_id === this.selectedId &&
+                request.entry_id === this.model?.snapshot.entry_id &&
+                request.site_id === this.model?.snapshot.site_id;
+        }
     }
 
     protected override updated(changed: PropertyValues<this>): void {
+        if (!this.isConnected) return;
         const dialog = this.renderRoot.querySelector("dialog");
         if (dialog) {
             if (!dialog.open) dialog.showModal();
@@ -155,15 +151,21 @@ export class UitDetailPanel extends LitElement {
         this.openRequestedMenu();
     }
 
-    /** The selected infrastructure node or client, if the selection is one. */
-    private get selectedNode(): TopologyNode | undefined {
-        return this.selectedId === undefined
-            ? undefined
-            : this.model?.nodes.get(this.selectedId);
+    private closeMenu(): void {
+        this.renderRoot
+            .querySelector<UitNodeMenu>("uit-node-menu")
+            ?.hide(false);
+    }
+
+    get menuOpen(): boolean {
+        return (
+            this.renderRoot.querySelector<UitNodeMenu>("uit-node-menu")
+                ?.open === true
+        );
     }
 
     private openRequestedMenu(): void {
-        if (!this.menuPending) return;
+        if (!this.menuPending || !this.details) return;
         this.menuPending = false;
         void this.renderRoot
             .querySelector<UitNodeMenu>("uit-node-menu")
@@ -172,6 +174,8 @@ export class UitDetailPanel extends LitElement {
 
     /** Closing the dialog restores focus and then fires `uit-close`. */
     private close(): void {
+        this.closeMenu();
+        this.menuPending = false;
         const dialog = this.renderRoot.querySelector("dialog");
         if (dialog) dialog.close();
         else fireEvent(this, "uit-close");
@@ -192,29 +196,39 @@ export class UitDetailPanel extends LitElement {
             node.kind === "client"
                 ? this.clientBody(model, node, localize)
                 : this.deviceBody(model, node, localize);
-        return this.shell(node.name, body, this.menu(node, localize));
+        return this.shell(node.name, body);
     }
 
-    private shell(
-        title: string,
-        body: TemplateResult,
-        menu: TemplateResult | typeof nothing = nothing,
-    ): TemplateResult {
-        const panel = this.panel(title, body, menu);
+    private shell(title: string, body: TemplateResult): TemplateResult {
+        const panel = this.panel(title, body);
         if (!this.modal) return panel;
         return html`<dialog
             aria-labelledby="title"
-            @close=${() => fireEvent(this, "uit-close")}
+            @close=${() => {
+                this.closeMenu();
+                this.menuPending = false;
+                fireEvent(this, "uit-close");
+            }}
+            @cancel=${(e: Event) => {
+                if (this.menuOpen) e.preventDefault();
+            }}
             @keydown=${(e: KeyboardEvent) => {
                 // Close only this dialog. The card's own Escape handling would
                 // skip focus restore and let the key reach an outer dialog.
                 if (e.key !== "Escape") return;
                 e.preventDefault();
                 e.stopPropagation();
-                this.close();
+                if (this.menuOpen) {
+                    this.renderRoot
+                        .querySelector<UitNodeMenu>("uit-node-menu")
+                        ?.hide();
+                } else this.close();
             }}
-            @pointerdown=${(e: Event) => {
-                this.pressedBackdrop = e.target === e.currentTarget;
+            @pointerdown=${{
+                capture: true,
+                handleEvent: (e: Event) => {
+                    this.pressedBackdrop = e.target === e.currentTarget;
+                },
             }}
             @click=${(e: Event) => {
                 // Only the backdrop targets the dialog itself. A text selection
@@ -227,11 +241,7 @@ export class UitDetailPanel extends LitElement {
         </dialog>`;
     }
 
-    private panel(
-        title: string,
-        body: TemplateResult,
-        menu: TemplateResult | typeof nothing,
-    ): TemplateResult {
+    private panel(title: string, body: TemplateResult): TemplateResult {
         const localize = this.localize!;
         // The dialog takes its name from the heading, so the section isn't a
         // second landmark with the same name.
@@ -239,10 +249,18 @@ export class UitDetailPanel extends LitElement {
             class="panel"
             role=${this.modal ? nothing : "region"}
             aria-label=${this.modal ? nothing : title}
+            @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Escape" && this.menuOpen) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.renderRoot
+                        .querySelector<UitNodeMenu>("uit-node-menu")
+                        ?.hide();
+                }
+            }}
         >
             <header>
                 <h3 id="title" title=${title}>${title}</h3>
-                ${menu}
                 <button
                     class="close"
                     aria-label=${localize("detail.close")}
@@ -261,24 +279,16 @@ export class UitDetailPanel extends LitElement {
         node: TopologyNode,
         localize: LocalizeFunc,
     ): TemplateResult | typeof nothing {
-        const state = this.details.state;
-        const actions = nodeActions(
-            node,
-            state.status === "ready" ? state.details : undefined,
-            isAdmin(this.hass),
-        );
-        const loading = state.status === "loading";
-        if (actions.length === 0 && !loading) return nothing;
+        const actions = nodeActions(this.details, isAdmin(this.hass));
+        if (actions.length === 0) return nothing;
         // Keyed: a new selection starts with a closed menu.
         return html`${keyed(
             node.id,
             html`<uit-node-menu
                 .actions=${actions}
-                .loading=${loading}
                 .localize=${localize}
                 @uit-action=${(e: Event) =>
                     this.runAction(
-                        node,
                         (e as CustomEvent<{ action: NodeAction }>).detail
                             .action,
                     )}
@@ -292,15 +302,12 @@ export class UitDetailPanel extends LitElement {
      * the value as plain selectable text.
      */
     private statusRegion(localize: LocalizeFunc): TemplateResult {
-        const failed = this.details.state;
         // A value to copy by hand is an address: only an administrator sees one.
         const copied =
             this.copyStatus?.value === undefined || isAdmin(this.hass)
                 ? this.copyStatus
                 : undefined;
-        const status: Status | undefined =
-            copied ??
-            (failed.status === "error" ? errorNotice(failed.error) : undefined);
+        const status = copied;
         return html`<div
             class="status ${status ? "has-message" : ""}"
             role="status"
@@ -315,19 +322,18 @@ export class UitDetailPanel extends LitElement {
         </div>`;
     }
 
-    private runAction(node: TopologyNode, action: NodeAction): void {
-        const state = this.details.state;
-        const details: NodeDetails | undefined =
-            state.status === "ready" ? state.details : undefined;
+    private runAction(action: NodeAction): void {
+        if (!isAdmin(this.hass)) return;
+        const details = this.details;
         switch (action) {
             case "copy_ip":
-                void this.copy(details?.ip_address);
+                void this.copy(details?.ip_address, "menu.copied_ip");
                 break;
             case "copy_mac":
-                void this.copy(details?.mac_address);
+                void this.copy(details?.mac_address, "menu.copied_mac");
                 break;
             case "open_device": {
-                const deviceId = node.ha_device_id || details?.ha_device_id;
+                const deviceId = details?.device_id;
                 if (deviceId) this.openDevice(deviceId);
                 break;
             }
@@ -341,7 +347,10 @@ export class UitDetailPanel extends LitElement {
         }
     }
 
-    private async copy(value: string | undefined): Promise<void> {
+    private async copy(
+        value: string | undefined,
+        successKey: LocalizeKey,
+    ): Promise<void> {
         if (!value) return;
         this.copyStatus = undefined;
         const generation = this.copyGeneration;
@@ -352,8 +361,20 @@ export class UitDetailPanel extends LitElement {
         );
         if (generation !== this.copyGeneration) return;
         this.copyStatus = ok
-            ? { key: "menu.copied" }
+            ? { key: successKey }
             : { key: "menu.copy_failed", value };
+        if (!ok) {
+            await this.updateComplete;
+            if (generation !== this.copyGeneration) return;
+            const text = this.renderRoot.querySelector(".manual");
+            if (text) {
+                const range = document.createRange();
+                range.selectNodeContents(text);
+                const selection = window.getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+            }
+        }
     }
 
     private openDevice(haDeviceId: string): void {
@@ -427,7 +448,7 @@ export class UitDetailPanel extends LitElement {
     ): TemplateResult {
         const counts = model.clientCounts.get(node.id);
         const hidden = model.links.get(node.id)?.viaHidden ?? [];
-        return html`${this.rows([
+        return html`${this.menu(node, localize)}${this.rows([
             ["detail.kind", localize(KIND_KEYS[node.kind])],
             ["detail.model", node.model],
             ["detail.state", localize(STATE_KEYS[node.state])],
@@ -464,7 +485,7 @@ export class UitDetailPanel extends LitElement {
         node: TopologyNode,
         localize: LocalizeFunc,
     ): TemplateResult {
-        return this.rows([
+        return html`${this.menu(node, localize)}${this.rows([
             ["detail.state", localize(STATE_KEYS[node.state])],
             [
                 "detail.connection",
@@ -478,7 +499,7 @@ export class UitDetailPanel extends LitElement {
             ],
             ["detail.network", node.network_name],
             ...this.uplinkRows(model, node.id, localize, false),
-        ]);
+        ])}`;
     }
 
     private groupBody(
@@ -654,7 +675,7 @@ export class UitDetailPanel extends LitElement {
                 border-radius: 8px;
                 color: var(--primary-text-color);
                 overflow-wrap: anywhere;
-                user-select: all;
+                user-select: text;
             }
             dialog {
                 pointer-events: auto;

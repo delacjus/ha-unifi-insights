@@ -420,7 +420,8 @@ export class UitGraphView extends LitElement {
      */
     private onContextMenu(e: Event, id: string): void {
         e.preventDefault();
-        if (!this.gesture.moved) fireEvent(this, "uit-context", { id });
+        if (!this.gesture.moved && this.pointers.size <= 1)
+            fireEvent(this, "uit-context", { id });
     }
 
     protected override render(): TemplateResult | typeof nothing {

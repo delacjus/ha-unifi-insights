@@ -119,9 +119,16 @@ export interface NodeDetails {
     ip_address?: string;
     mac_address?: string;
     /** Home Assistant device registry id. */
-    ha_device_id?: string;
+    device_id?: string;
     entity_id?: string;
 }
+
+export type NodeDetailsRequest = {
+    type: typeof WS_NODE_DETAILS;
+    entry_id: string;
+    site_id: string;
+    node_id: string;
+};
 
 export interface TopologySite {
     id: string;
@@ -150,9 +157,7 @@ export const ERR_ENTRY_NOT_FOUND = "entry_not_found";
 export const ERR_ENTRY_NOT_LOADED = "entry_not_loaded";
 export const ERR_SITE_NOT_SELECTED = "site_not_selected";
 /** The node id matches no device or client of the site, or more than one. */
-export const ERR_NODE_NOT_FOUND = "node_not_found";
 /** Home Assistant's own error for a command that needs an administrator. */
-export const ERR_UNAUTHORIZED = "unauthorized";
 
 /** The backend speaks a schema this card was not built for. */
 export class IncompatibleSchemaError extends Error {
