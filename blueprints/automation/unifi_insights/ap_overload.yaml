@@ -15,7 +15,11 @@ blueprint:
     A reading that follows `unknown` or `unavailable` (for example after a
     restart or an outage) is ignored, so a recovering sensor does not raise a
     false alert. The actions can use `trigger.id` (`client_overload` or
-    `utilisation`), `trigger.entity_id` and `trigger.to_state`.
+    `utilisation`), `trigger.entity_id` and `trigger.to_state`. The inputs are
+    available as `client_sensors`, `client_threshold`, `utilisation_sensors`,
+    `utilisation_threshold` and `duration`. The trigger values are available as
+    `trigger_id`, `entity_id`, `from_state` and `to_state`, alongside Home
+    Assistant's `trigger` object.
   domain: automation
   homeassistant:
     min_version: "2026.6.0"
@@ -94,7 +98,6 @@ variables:
   from_state: >-
     {{ trigger.from_state.as_dict() if trigger.from_state is not none else none }}
   to_state: "{{ trigger.to_state.as_dict() }}"
-  alert_actions: !input alert_actions
 
 triggers:
   - trigger: numeric_state
