@@ -20,8 +20,8 @@ Monitor and control your UniFi system from Home Assistant: UniFi Network, UniFi 
 - [Installation](#installation)
 - [Configuration](#configuration)
 - Products: [Network](#unifi-network), [Protect](#unifi-protect), [InnerSpace](#unifi-innerspace), [Mobility](#unifi-mobility), [Site Manager](#unifi-site-manager), [Carrier Fabric (ISP)](#unifi-carrier-fabric-isp)
-- [Dashboard cards](#dashboard-cards)
 - [Automation blueprints](#automation-blueprints)
+- [Dashboard cards](#dashboard-cards)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -467,6 +467,52 @@ These actions need **Enable service actions** and an API key with the required s
 
 The integration does not assign plans, create or change subscribers, or attach or detach hosts.
 
+## Automation blueprints
+
+This repository includes three automation blueprints for network health alerts. They are native Home Assistant YAML and need no external service or API. They use the entities that UniFi Insights creates, and they need Home Assistant 2026.6.0 or newer, like the integration. Each one runs the actions you choose.
+
+| Blueprint                      | Runs your actions when                                                                                      | Needs                                                                                                                            |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Infrastructure offline alert   | A gateway, switch or access point stays offline for a set time, and optionally when it comes back           | The **Status** connectivity sensors in [Network entities](#network-entities)                                                     |
+| AP overload alert              | An access point has too many wireless clients, or optionally too high a channel utilization, for a set time | The **Wireless Clients** sensors in [Network entities](#network-entities); an external utilization sensor for utilization alerts |
+| Secure subnet new client alert | A new tracked client matches a secure subnet prefix                                                         | Client tracking and IP prefixes for secure subnets                                                                               |
+
+### Install the blueprints
+
+HACS installs the integration only. It does not install blueprints, so add them yourself in one of two ways:
+
+- **Import from GitHub.** Select an **Import Blueprint** badge below, or go to **Settings** → **Automations & scenes** → **Blueprints**, select **Import blueprint** and paste the URL.
+- **Copy the files.** Download the YAML files from [`blueprints/automation/unifi_insights`](https://github.com/tinkerologie/ha-unifi-insights/tree/main/blueprints/automation/unifi_insights) and put them in `<config>/blueprints/automation/unifi_insights/`. `<config>` is your Home Assistant configuration folder, the one that contains `configuration.yaml`.
+
+| Blueprint                      | Import                                                                                                                                                                                                                                                                                                        | URL                                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Infrastructure offline alert   | [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Finfrastructure_offline.yaml)     | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/infrastructure_offline.yaml`   |
+| AP overload alert              | [![Import Blueprint](https://my.home-assistant.com/badges/blueprint_import.svg)](https://my.home-assistant.com/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Fap_overload.yaml)              | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/ap_overload.yaml`              |
+| Secure subnet new client alert | [![Import Blueprint](https://my.home-assistant.com/badges/blueprint_import.svg)](https://my.home-assistant.com/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Fsecure_subnet_new_client.yaml) | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/secure_subnet_new_client.yaml` |
+
+To check the install, open the Blueprints page. It lists three blueprints named "UniFi Insights - ...". To use one, create an automation from it and fill in its inputs.
+
+### Blueprint inputs
+
+- **Infrastructure offline alert:** **Connectivity sensors**, **Offline delay** (default 5 minutes), **Treat unavailable as offline** (default on), **Offline actions** and, optionally, **Recovery actions**. The selected sensors are the **Status** entities in [Network entities](#network-entities). Actions can use `trigger.id` (`offline`, `unavailable` or `recovery`), `trigger.entity_id` and `trigger.to_state`.
+- **AP overload alert:** **Access point client sensors**, **Client threshold** (default 30; range 1–500), **Channel utilisation sensors (optional)**, **Utilisation threshold** (default 80%; range 1–100%), **Duration** (default 5 minutes) and **Actions**. The client sensors are **Wireless Clients** entities in [Network entities](#network-entities). Actions can use `trigger.id` (`client_overload` or `utilisation`), `trigger.entity_id` and `trigger.to_state`.
+- **Secure subnet new client alert:** **Secure subnet prefixes** (enter each IP prefix, for example `10.0.50.`), **Allowed trackers (optional)** from [Network entities](#network-entities) and **Actions**. Actions can use `tracker` (the device tracker's entity ID), `ip_address` and `matched_prefix`. Trackers listed under **Allowed trackers (optional)** never alert; the MAC address is not exposed.
+
+### Blueprint prerequisites
+
+- **Secure subnet new client alert:** turn on **Track WiFi Clients** or **Track Wired Clients** in [Options](#options). Client tracking is off by default. The blueprint reacts to a newly created device tracker, so it does nothing until tracking is on.
+- **AP overload alert, channel utilization:** UniFi Insights has no channel utilization sensor. To alert on utilization, select a sensor from another source, in percent, under **Channel utilisation sensors (optional)**. Leave it empty to alert on the client count only.
+
+### Blueprint limits
+
+- **Run modes:** the offline and AP overload blueprints queue runs, with a maximum of 100. The secure subnet blueprint runs in parallel, with a maximum of 100 concurrent runs.
+- **Offline and controller loss look the same.** A device that the controller reports as offline and a failed poll of the controller both make the **Status** sensor `unavailable`. The offline alert can't tell them apart, so one controller outage alerts for every device you selected. **Treat unavailable as offline** is on by default because an offline device reports `unavailable`. If you turn it off, you are alerted only when a sensor is `off`, and you miss offline devices.
+- **The subnet is inferred from the IP address.** Device trackers carry no VLAN or network name. Give each secure subnet its own IP prefix, such as `10.0.50.`. A client matches when its IP address starts with that prefix. The blueprint waits 10 seconds after tracker creation before checking its IP; a missing IP does not match.
+- **A client alerts once.** Only creation of a tracker triggers the blueprint. A client that reconnects or changes address does not alert again.
+- **Turning on client tracking creates a burst.** The first time you turn on **Track WiFi Clients** or **Track Wired Clients**, a tracker is created for every connected client at once. The blueprint runs at most 100 instances concurrently; additional runs are dropped and Home Assistant logs a warning. Turn tracking on first and create the automation afterwards if you do not want that burst.
+- **Client counts can be stale, then unknown.** If an access point's statistics request fails, its **Wireless Clients** sensor keeps the last good count for up to three polls in a row (polls run every 30 seconds), then shows `unknown`. The AP overload alert ignores a reading that follows `unknown` or `unavailable`. An access point that is already over the threshold when its sensor recovers therefore alerts only after its count has dropped to the threshold or lower and risen above it again.
+- **Cached presence stays during a controller outage.** Client trackers don't become unavailable when the controller can't be reached. They keep their last known home or away state until the integration reaches the controller again, so `person` entities don't drop to `unknown`. Automations that read tracker states see this cached state.
+
 ## Dashboard cards
 
 The integration installs six dashboard cards. There is no separate download and no dashboard resource to add. To add a card, edit a dashboard, select **Add card** and search for its name. The cards use the integration's existing data and don't create entities.
@@ -490,7 +536,7 @@ The **UniFi Topology** card draws each site's network: the gateway, switches and
 - **List** view: the same network as an indented list with search. It is the recommended view for screen readers.
 - Clients are grouped under their switch or access point ("12 clients"). Select a group to expand it.
 - The filter buttons hide gateways, switches, access points, clients or other devices. Devices under a hidden one stay visible, linked with a dashed line.
-- Select a device or client and use the **Node actions** button (three dots) in its details to open its device or, for administrators, copy its addresses. See **Node actions** below.
+- Select a device or client and use the **Actions** menu in its details, or use a context-menu gesture. See **Actions menu** below.
 
 **Options** (all optional, all available in the card editor):
 
@@ -510,65 +556,22 @@ The **UniFi Topology** card draws each site's network: the gateway, switches and
 
 **Layout:** `tree` places every device one level below the device it connects through. `tiered` gives each device role its own row: gateways at the top, then switches, access points, other devices and, at the bottom, the clients. A device behind one of the same or a higher role, such as a switch behind an access point, goes on a row just below it. Empty rows take no space. With `orientation: horizontal` the rows become columns. Only the graph view uses `layout`; the list view ignores it.
 
-**Node actions:** the **Node actions** button shows in the details of a device or client when at least one action is available or details are loading. You can also open the menu without the button. Right-click a node, or long-press it on a touch screen, or focus it and press the ContextMenu key or Shift + F10. This works in the graph and the list view, and it selects the node. Client groups ("12 clients") have no menu.
+### Actions menu
 
-| Action           | Who sees it                                                                                                                  | What it does                                                                                |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Copy IP address  | Administrators                                                                                                               | Copies the node's IP address to the clipboard                                               |
-| Copy MAC address | Administrators                                                                                                               | Copies the node's MAC address to the clipboard                                              |
-| Open device      | Everyone, for gateways, switches, access points and other devices. Administrators also, for a client that has its own device | Opens the node's Home Assistant device page                                                 |
-| Open entity      | Administrators                                                                                                               | Opens the more-info dialog of a device's **Status** sensor, or of a client's device tracker |
+The **Actions** menu is for administrators and its button appears in a node's details when at least one action is available. Right-click a node, long-press it on a touch screen, or focus it and press the ContextMenu key or Shift+F10 to select it and open the menu. These gestures work in graph and list views. Client groups ("12 clients") have no menu. Non-administrators may still see the separate **Open device** link in node details when a device page is available.
 
-An action is left out when the card has nothing to offer for that node, for example when the console reports no IP address or a client has no device tracker (see **Track WiFi Clients** and **Track Wired Clients** in [Options](#options)). If you are not an administrator, the menu offers **Open device** for gateways, switches, access points and other devices only.
+| Action           | Who can use it | What it does                                                                                |
+| ---------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| Copy IP address  | Administrators | Copies the node's IP address to the clipboard                                               |
+| Copy MAC address | Administrators | Copies the node's MAC address to the clipboard                                              |
+| Open device      | Administrators | Opens the node's Home Assistant device page                                                 |
+| Open entity      | Administrators | Opens the more-info dialog of a device's **Status** sensor, or of a client's device tracker |
 
-In the menu, use the Up and Down arrow keys, Home and End to move, Enter to choose and Escape to close it. Escape closes only the menu, not the details, and focus returns to the **Node actions** button. On that button, the Up and Down arrow keys open the menu. After a copy the card says "Copied to the clipboard." If the browser blocks copying, the card says so and shows the value, so you can select it and copy it by hand.
+An action is omitted when no target is available, for example when there is no IP address or a client has no tracker (see **Track WiFi Clients** and **Track Wired Clients** in [Options](#options)).
 
-**Privacy:** the topology data that every user receives contains names, models, states, ports and VLANs. MAC addresses, IP addresses, hostnames and firmware versions are never included. When an administrator selects a device or client, the card asks Home Assistant for that one node's IP address and MAC address, and for the Home Assistant device and entity it maps to. It does this with the admin-only command `unifi_insights/topology/node_details`. Other users are refused and never receive an address. Hostnames and firmware versions are still never sent. The card does not keep an address after the selection changes.
+Use the Up and Down arrow keys, Home and End to move through the menu, Enter to choose an action and Escape to close it. Escape closes only the menu and restores focus to its button. The Up and Down arrow keys on the button open the menu. If copying fails, the card shows the value as selectable text for manual copying.
 
-## Automation blueprints
-
-This repository includes three automation blueprints for network health alerts. They are native Home Assistant YAML and need no external service or API. They use the entities that UniFi Insights creates, and they need Home Assistant 2026.6.0 or newer, like the integration. Each one runs the actions you choose.
-
-| Blueprint                    | Runs your actions when                                                                                      | Needs                                                                                               |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Infrastructure offline alert | A gateway, switch or access point stays offline for a set time, and optionally when it comes back           | The **Status** connectivity sensor of each device                                                   |
-| AP overload alert            | An access point has too many wireless clients, or optionally too high a channel utilization, for a set time | The **Wireless Clients** sensor of each access point. For channel utilization, a sensor you provide |
-| Secure VLAN new client alert | A new client appears on a secure VLAN                                                                       | Client tracking turned on, and the IP prefix of each secure VLAN                                    |
-
-### Install the blueprints
-
-HACS installs the integration only. It does not install blueprints, so add them yourself in one of two ways:
-
-- **Import from GitHub.** Select an **Import Blueprint** badge below, or go to **Settings** → **Automations & scenes** → **Blueprints**, select **Import blueprint** and paste the URL.
-- **Copy the files.** Download the YAML files from [`blueprints/automation/unifi_insights`](https://github.com/tinkerologie/ha-unifi-insights/tree/main/blueprints/automation/unifi_insights) and put them in `<config>/blueprints/automation/unifi_insights/`. `<config>` is your Home Assistant configuration folder, the one that contains `configuration.yaml`.
-
-| Blueprint                    | Import                                                                                                                                                                                                                                                                                                          | URL                                                                                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Infrastructure offline alert | [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Finfrastructure_offline_alert.yaml) | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/infrastructure_offline_alert.yaml` |
-| AP overload alert            | [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Fap_overload_alert.yaml)            | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/ap_overload_alert.yaml`            |
-| Secure VLAN new client alert | [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Ftinkerologie%2Fha-unifi-insights%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Funifi_insights%2Fsecure_vlan_new_client_alert.yaml) | `https://github.com/tinkerologie/ha-unifi-insights/blob/main/blueprints/automation/unifi_insights/secure_vlan_new_client_alert.yaml` |
-
-To check the install, open the Blueprints page. It lists three blueprints named "UniFi Insights - ...". To use one, create an automation from it and fill in its inputs.
-
-### Blueprint inputs
-
-- **Infrastructure offline alert:** **Connectivity sensors**, **Offline duration** (default 5 minutes), **Treat unavailable as offline** (default on), **Offline actions** and, optionally, **Recovery actions**. Your actions can use `trigger.id` (`offline` or `recovery`), `trigger.entity_id` and `trigger.to_state`.
-- **AP overload alert:** **Access point client sensors**, **Client threshold** (default 30), **Channel utilisation sensors (optional)**, **Utilisation threshold** (default 80%), **Duration** (default 5 minutes) and **Actions**. Your actions can use `trigger.id` (`client_overload` or `utilisation`), `trigger.entity_id` and `trigger.to_state`.
-- **Secure VLAN new client alert:** **Secure subnet prefixes**, **Allowed trackers (optional)** and **Actions**. Your actions can use `client_entity` (the tracker's entity ID), `client_name` and `client_ip`. The MAC address is not available. Clients you list under **Allowed trackers (optional)** never alert.
-
-### Blueprint prerequisites
-
-- **Secure VLAN new client alert:** turn on **Track WiFi Clients** or **Track Wired Clients** in the [Options](#options). Client tracking is off by default. The blueprint reacts to a new device tracker, so it does nothing until tracking is on.
-- **AP overload alert, channel utilization:** UniFi Insights has no channel utilization sensor. To alert on utilization, select a sensor from another source, in percent, under **Channel utilisation sensors (optional)**. Leave it empty to alert on the client count only.
-
-### Blueprint limits
-
-- **Offline and controller loss look the same.** A device that the controller reports as offline and a failed poll of the controller both make the **Status** sensor `unavailable`. The offline alert can't tell them apart, so one controller outage alerts for every device you selected. **Treat unavailable as offline** is on by default because an offline device reports `unavailable`. If you turn it off, you are alerted only when a sensor is `off`, and you miss offline devices.
-- **The VLAN is inferred from the IP address.** Device trackers carry no VLAN or network name. Give each secure VLAN its own IP prefix with the trailing dot, such as `10.0.50.`. A client counts as on that VLAN when its IP address starts with the prefix. A tracker with no IP address never matches.
-- **A client alerts once.** The blueprint reacts when a device tracker is first registered. A client that reconnects or changes address does not alert again.
-- **Turning on client tracking creates a burst.** The first time you turn on **Track WiFi Clients** or **Track Wired Clients**, a tracker is created for every connected client at once, and each one on a secure prefix runs your actions, but only 100 runs can be active at the same time. The blueprint drops runs beyond 100 concurrent runs, so a large burst can miss clients. Turn tracking on first and create the automation afterwards if you don't want that.
-- **Client counts can be stale, then unknown.** If an access point's statistics request fails, its **Wireless Clients** sensor keeps the last good count for up to three polls in a row (polls run every 30 seconds), then shows `unknown`. The AP overload alert ignores a reading that follows `unknown` or `unavailable`. An access point that is already over the threshold when its sensor recovers therefore alerts only after its count has dropped to the threshold or lower and risen above it again.
-- **Cached presence stays during a controller outage.** Client trackers don't become unavailable when the controller can't be reached. They keep their last known home or away state until the integration reaches the controller again, so `person` entities don't drop to `unknown`. Automations that read tracker states see this cached state.
+**Privacy:** the topology data that every user receives contains names, models, states, ports and VLANs. MAC addresses, IP addresses, hostnames and firmware versions are never included. For an administrator, the card requests one selected node's details through the admin-only `unifi_insights/topology/node_details` command. The response includes IP and MAC addresses plus Home Assistant's `device_id` and `entity_id` when available. Non-administrators cannot call the command. Hostnames and firmware versions are not sent, and the card does not keep an address after the selection changes.
 
 ## Troubleshooting
 
