@@ -53,6 +53,8 @@ import {
 const RADIUS: Record<Density, number> = { comfortable: 22, compact: 16 };
 const EXIT_MS = 250;
 const LABEL_CHARS = 22;
+/** Pointer travel in CSS px beyond which a press is a pan, not a press-and-hold. */
+const PAN_SLOP_PX = 8;
 
 /**
  * d3-zoom gesture filter. In dashboard grids a plain wheel scrolls the page
@@ -118,6 +120,9 @@ export class UitGraphView extends LitElement {
     private fitted = false;
     private zoomBehavior: ZoomBehavior<SVGSVGElement, unknown> | undefined;
     private resizeObserver: ResizeObserver | undefined;
+    /** Pointers now down, and whether this gesture has panned or pinched. */
+    private pointers = new Set<number>();
+    private gesture = { x: 0, y: 0, moved: false };
 
     constructor() {
         super();
@@ -373,7 +378,49 @@ export class UitGraphView extends LitElement {
         } else if (e.key === "0") {
             e.preventDefault();
             this.fit();
+        } else if (
+            (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) &&
+            this.focusId !== undefined
+        ) {
+            e.preventDefault();
+            fireEvent(this, "uit-context", { id: this.focusId });
         }
+    }
+
+    private onPointerDown(e: PointerEvent): void {
+        if (e.isPrimary) {
+            this.pointers = new Set([e.pointerId]);
+            this.gesture = { x: e.clientX, y: e.clientY, moved: false };
+        } else {
+            // A second finger: this is a pinch.
+            this.pointers.add(e.pointerId);
+            this.gesture.moved = true;
+        }
+    }
+
+    private onPointerMove(e: PointerEvent): void {
+        const { gesture } = this;
+        if (
+            !gesture.moved &&
+            this.pointers.has(e.pointerId) &&
+            Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) >
+                PAN_SLOP_PX
+        )
+            gesture.moved = true;
+    }
+
+    private onPointerEnd(e: PointerEvent): void {
+        this.pointers.delete(e.pointerId);
+    }
+
+    /**
+     * A context click or a long press on a node asks the card for its action
+     * menu. The browser's own menu never shows. After a pan or a pinch the
+     * press is not a long press, so the node menu stays shut.
+     */
+    private onContextMenu(e: Event, id: string): void {
+        e.preventDefault();
+        if (!this.gesture.moved) fireEvent(this, "uit-context", { id });
     }
 
     protected override render(): TemplateResult | typeof nothing {
@@ -408,6 +455,10 @@ export class UitGraphView extends LitElement {
                     clients: model.stats.clients,
                 })}
                 @keydown=${this.onKeydown}
+                @pointerdown=${this.onPointerDown}
+                @pointermove=${this.onPointerMove}
+                @pointerup=${this.onPointerEnd}
+                @pointercancel=${this.onPointerEnd}
             >
                 <g class="viewport" transform=${this.transformAttr()}>
                     <g class="links">
@@ -509,6 +560,7 @@ export class UitGraphView extends LitElement {
       aria-expanded=${interactive && visual.type === "group" ? String(visual.expanded) : nothing}
       style=${`transform: translate(${p.x}px, ${p.y}px)`}
       @click=${interactive ? () => fireEvent(this, "uit-activate", { id }) : nothing}
+      @contextmenu=${interactive ? (e: Event) => this.onContextMenu(e, id) : nothing}
       @focus=${
           interactive
               ? () => {

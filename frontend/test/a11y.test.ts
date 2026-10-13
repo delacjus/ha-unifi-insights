@@ -1,7 +1,11 @@
 import axe from "axe-core";
 import { afterEach, describe, expect, it } from "vitest";
 import "../src/index";
+import { WS_NODE_DETAILS } from "../src/contract";
+import type { MessageBase } from "../src/ha-types";
 import type { UnifiInsightsTopologyCard } from "../src/topology-card";
+import type { UitDetailPanel } from "../src/views/detail-panel";
+import type { UitNodeMenu } from "../src/views/node-menu";
 import { cleanup, fakeHass, fixtureSnapshot, settle } from "./helpers";
 
 afterEach(cleanup);
@@ -23,8 +27,8 @@ async function audit(root: Element): Promise<string[]> {
 async function loadedCard(
     config: Record<string, unknown> = {},
     snapshot = fixtureSnapshot(),
+    fake = fakeHass(),
 ) {
-    const fake = fakeHass();
     const el = document.createElement(
         "unifi-insights-topology-card",
     ) as UnifiInsightsTopologyCard;
@@ -82,5 +86,96 @@ describe("WCAG 2.2 AA (axe-core)", () => {
         el.narrow = true;
         await settle(el);
         expect(await audit(el)).toEqual([]);
+    });
+
+    describe("node action menu", () => {
+        const DETAILS = {
+            kind: "switch" as const,
+            ip_address: "192.0.2.10",
+            mac_address: "aa:bb:cc:dd:ee:ff",
+            ha_device_id: "reg-core",
+            entity_id: "sensor.core_status",
+        };
+
+        async function menuOpened(
+            fake = fakeHass({
+                admin: true,
+                details: { "dev:uuid-core": DETAILS },
+            }),
+        ) {
+            const el = await loadedCard({}, fixtureSnapshot(), fake);
+            const graph = el.shadowRoot!.querySelector("uit-graph-view")!;
+            graph
+                .shadowRoot!.querySelector('[data-id="dev:uuid-core"]')!
+                .dispatchEvent(
+                    new MouseEvent("contextmenu", {
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                    }),
+                );
+            await settle(el);
+            const panel =
+                el.shadowRoot!.querySelector<UitDetailPanel>(
+                    "uit-detail-panel",
+                )!;
+            await settle(panel);
+            const menu =
+                panel.shadowRoot!.querySelector<UitNodeMenu>("uit-node-menu")!;
+            await settle(menu);
+            return { el, panel, menu };
+        }
+
+        it("open, with every action", async () => {
+            const { el, menu } = await menuOpened();
+            expect(
+                menu.shadowRoot!.querySelectorAll('[role="menuitem"]'),
+            ).toHaveLength(4);
+            expect(await audit(el)).toEqual([]);
+        });
+
+        it("open while the details are still loading", async () => {
+            const fake = fakeHass({ admin: true });
+            const answerSources = fake.hass.callWS;
+            fake.hass.callWS = ((message: MessageBase) =>
+                message.type === WS_NODE_DETAILS
+                    ? new Promise(() => undefined)
+                    : answerSources(message)) as never;
+            const { el, menu } = await menuOpened(fake);
+            expect(
+                menu.shadowRoot!.querySelector('[aria-disabled="true"]'),
+            ).not.toBeNull();
+            expect(await audit(el)).toEqual([]);
+        });
+
+        it("after a failed copy, with the value shown for selecting", async () => {
+            Object.defineProperty(window, "isSecureContext", {
+                configurable: true,
+                value: true,
+            });
+            Object.defineProperty(navigator, "clipboard", {
+                configurable: true,
+                value: {
+                    writeText: async () => {
+                        throw new Error("denied");
+                    },
+                },
+            });
+            try {
+                const { el, panel, menu } = await menuOpened();
+                menu.shadowRoot!.querySelector<HTMLElement>(
+                    '[data-action="copy_ip"]',
+                )!.click();
+                await settle(panel);
+                expect(
+                    panel.shadowRoot!.querySelector(".manual")!.textContent,
+                ).toBe("192.0.2.10");
+                expect(await audit(el)).toEqual([]);
+            } finally {
+                delete (window as { isSecureContext?: boolean })
+                    .isSecureContext;
+                delete (navigator as { clipboard?: unknown }).clipboard;
+            }
+        });
     });
 });

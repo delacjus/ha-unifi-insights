@@ -181,6 +181,10 @@ export class UitListView extends LitElement {
             tabindex=${row.id === this.focusId ? 0 : -1}
             style=${`--level: ${row.level}`}
             @click=${() => fireEvent(this, "uit-activate", { id: row.id })}
+            @contextmenu=${(e: Event) => {
+                e.preventDefault();
+                fireEvent(this, "uit-context", { id: row.id });
+            }}
             @focus=${() => {
                 this.focusId = row.id;
             }}
@@ -229,6 +233,11 @@ export class UitListView extends LitElement {
         const index = rows.findIndex((r) => r.id === this.focusId);
         const row = rows[index];
         if (!row) return;
+        if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+            e.preventDefault();
+            fireEvent(this, "uit-context", { id: row.id });
+            return;
+        }
         let target: string | undefined;
         switch (e.key) {
             case "ArrowDown":
