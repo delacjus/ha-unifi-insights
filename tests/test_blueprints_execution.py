@@ -54,6 +54,13 @@ AUTOMATION_ENTITY_ID = "automation.blueprint_under_test"
 WAIT_TIMEOUT_SECONDS = 10.0
 STEP_SETTLE_SECONDS = 0.02
 
+# A Home Assistant log wording change makes these waits time out with a readable message.
+BLUEPRINT_DELAY_LOG = "Executing step delay 0:00:10"
+BLUEPRINT_CONDITION_ABORT_LOG = "Conditions not met, aborting automation"
+BLUEPRINT_REGISTRY_CREATE_LOG = (
+    "Bus:Handling <Event entity_registry_updated[L]: action=create,"
+)
+
 FIVE_MINUTES = {"hours": 0, "minutes": 5, "seconds": 0}
 
 
@@ -249,8 +256,7 @@ class _BlueprintProgress:
         """Count native create events since the automation loaded."""
         return sum(
             record.name == "homeassistant.core"
-            and "Bus:Handling <Event entity_registry_updated[L]: action=create,"
-            in record.getMessage()
+            and BLUEPRINT_REGISTRY_CREATE_LOG in record.getMessage()
             for record in self.caplog.records[self.start :]
         )
 
@@ -260,8 +266,8 @@ class _BlueprintProgress:
         return sum(
             record.name == "homeassistant.components.automation.blueprint_under_test"
             and (
-                "Executing step delay 0:00:10" in record.getMessage()
-                or "Conditions not met, aborting automation" in record.getMessage()
+                BLUEPRINT_DELAY_LOG in record.getMessage()
+                or BLUEPRINT_CONDITION_ABORT_LOG in record.getMessage()
             )
             for record in self.caplog.records[self.start :]
         )
@@ -1400,23 +1406,37 @@ async def test_ap_overload_runs_repeat_actions_with_action_scope_templates(
     assert _data(calls) == [{"item": "a"}, {"item": "b"}, {"item": "plain"}]
 
 
+@pytest.mark.parametrize(
+    ("offline_delay", "delay_seconds"),
+    [
+        pytest.param("00:05:00", 300, id="hh-mm-ss"),
+        pytest.param("00:05", 300, id="hh-mm"),
+        pytest.param(300, 300, id="seconds"),
+    ],
+)
+@pytest.mark.parametrize("elapsed", [299, 300], ids=["one-second-short", "at-delay"])
 async def test_recovery_accepts_string_offline_delay(
     hass: HomeAssistant,
     *,
     freezer: FrozenDateTimeFactory,
     blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
+    offline_delay: str | int,
+    delay_seconds: int,
+    elapsed: int,
 ) -> None:
-    """YAML string durations still permit recovery after the elapsed delay."""
+    """Duration forms permit recovery only once the full delay has elapsed."""
     hass.states.async_set(SWITCH_ONLINE, "off")
     await _use_blueprint(
-        hass, INFRASTRUCTURE_OFFLINE, _offline_inputs(offline_delay="00:05:00")
+        hass, INFRASTRUCTURE_OFFLINE, _offline_inputs(offline_delay=offline_delay)
     )
-    await _advance(hass, freezer, minutes=5)
+    await _advance(hass, freezer, seconds=elapsed)
     await _set_state(hass, SWITCH_ONLINE, "on")
-    assert _data(calls) == [
-        {"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}
-    ]
+    assert _data(calls) == (
+        [{"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}]
+        if elapsed == delay_seconds
+        else []
+    )
 
 
 @pytest.mark.parametrize("elapsed", [299, 300], ids=["below-delay", "exact-delay"])
