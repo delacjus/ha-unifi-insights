@@ -431,6 +431,7 @@
     "authorize_guest": "mdi:account-check",
     "generate_voucher": "mdi:ticket",
     "delete_voucher": "mdi:ticket-outline",
+    "export_network_rules": "mdi:database-export",
     "trigger_alarm": "mdi:alarm-light",
     "create_liveview": "mdi:view-grid",
     "set_liveview": "mdi:view-grid-plus",

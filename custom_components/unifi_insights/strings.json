@@ -229,6 +229,28 @@
         }
       }
     },
+    "export_network_rules": {
+      "name": "Export network rules",
+      "description": "Return the current firewall policies, policy-based routes, port forwards, traffic rules, NAT rules and static routes of one console as a versioned document. The rules are read from the console when you run the action. Requires an admin user. The action only returns data; it does not write a file.",
+      "fields": {
+        "site_id": {
+          "name": "Site ID",
+          "description": "Export only this site. Leave empty to export every site of the console."
+        },
+        "console_id": {
+          "name": "Console",
+          "description": "Which console to export, given as the integration entry title or its entry ID. Only needed when more than one console is configured and you do not set a site ID."
+        },
+        "rule_types": {
+          "name": "Rule types",
+          "description": "The rule types to export. Leave empty to export all of them."
+        },
+        "redact": {
+          "name": "Redact addresses",
+          "description": "Remove IP addresses, domains, MAC addresses and site identifiers from the export, the same way diagnostics does. Turn this off for a full backup: the export then contains your complete rule configuration and is sensitive."
+        }
+      }
+    },
     "remove_clients": {
       "name": "Remove Clients",
       "description": "Remove short-lived, unnamed historical clients from the UniFi Network. Forgets clients that have no name, hostname, or fixed IP and that were seen for 15 minutes or less. If a timestamp is missing, the client is not excluded by the age check. Processes the sites selected in the integration's settings, on consoles that have Network available. Clients with a timestamp that isn't a number are kept. Requires an admin user. Does not remove Home Assistant devices or entities."
@@ -939,6 +961,18 @@
     },
     "legacy_site_not_found": {
       "message": "No verified classic site name found for site {site_id}."
+    },
+    "export_console_required": {
+      "message": "More than one UniFi console is configured. Set a console or a site ID."
+    },
+    "export_site_not_on_console": {
+      "message": "Site {site_id} is not on console {console}."
+    },
+    "export_no_sites": {
+      "message": "The console has no UniFi Network site to export."
+    },
+    "export_network_rules_failed": {
+      "message": "Unable to read any network rules from the console."
     },
     "wake_on_lan_unavailable": {
       "message": "Home Assistant's Wake on LAN service is not available. Check the log for Wake on LAN setup errors, then restart Home Assistant."

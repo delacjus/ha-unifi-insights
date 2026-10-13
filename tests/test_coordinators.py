@@ -7872,6 +7872,38 @@ class TestUnifiFacadeCoordinator:
         )
 
     @pytest.mark.asyncio
+    async def test_async_export_network_rules_passes_console_and_sites(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """The facade hands its client, sites and console identity to the builder."""
+        sites = {"s": {"id": "s", "internalReference": "default"}}
+        facade_coordinator._config_coordinator.data = {"sites": sites}
+        document = {"format_version": 1, "sites": {}}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.facade."
+            "async_build_rule_export",
+            AsyncMock(return_value=document),
+        ) as build:
+            result = await facade_coordinator.async_export_network_rules(
+                ["s"], ["nat_rule"]
+            )
+
+        assert result is document
+        build.assert_awaited_once()
+        assert build.await_args is not None
+        assert build.await_args.args == (facade_coordinator.network_client, sites)
+        entry = facade_coordinator.config_entry
+        assert build.await_args.kwargs == {
+            "console": {"entry_id": entry.entry_id, "title": entry.title},
+            "site_ids": ["s"],
+            "rule_types": ["nat_rule"],
+            "is_unsupported": (
+                facade_coordinator._config_coordinator._is_unsupported_response
+            ),
+        }
+
+    @pytest.mark.asyncio
     async def test_async_set_nat_rule_enabled_console_managed_refreshes_and_raises(
         self, facade_coordinator: UnifiFacadeCoordinator
     ) -> None:

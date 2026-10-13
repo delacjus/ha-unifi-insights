@@ -59,6 +59,7 @@ from custom_components.unifi_insights.topology_contract import (
 )
 
 from .config_sections import rule_display_name, verified_legacy_site_name
+from .rule_export import async_build_rule_export
 from .voucher_state import VoucherSettings, refresh_latest_voucher, voucher_to_record
 
 _LOGGER = logging.getLogger(__name__)
@@ -881,6 +882,25 @@ class UnifiFacadeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "rule_name": display_name,
                 },
             ) from err
+
+    async def async_export_network_rules(
+        self,
+        site_ids: list[str] | None = None,
+        rule_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Fetch the current network rules and return a JSON-safe export."""
+        entry = self.config_entry
+        return await async_build_rule_export(
+            self.network_client,
+            self._config_coordinator.data.get("sites", {}),
+            console={
+                "entry_id": entry.entry_id if entry else None,
+                "title": entry.title if entry else None,
+            },
+            site_ids=site_ids,
+            rule_types=rule_types,
+            is_unsupported=self._config_coordinator._is_unsupported_response,
+        )
 
     async def async_update_camera(self, camera_id: str, **kwargs: Any) -> None:
         """Update a camera via the Protect cameras endpoint."""

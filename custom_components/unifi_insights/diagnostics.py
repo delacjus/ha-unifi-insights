@@ -27,6 +27,7 @@ from .coordinators.carrier_fabric import (
     SERVICE_PLAN_ALLOWLIST,
     SUBSCRIBER_ALLOWLIST,
 )
+from .coordinators.rule_audit import RULE_FAMILIES
 from .innerspace_transforms import build_innerspace_diagnostics_summary
 
 if TYPE_CHECKING:
@@ -343,6 +344,32 @@ def _redact_coordinator_data(data: Any) -> Any:
                         device_stats["clients"], CLIENT_TO_REDACT
                     )
 
+    return redacted
+
+
+def redact_network_rule_export(document: dict[str, Any]) -> dict[str, Any]:
+    """
+    Return a copy of a rule export with the diagnostics redaction applied.
+
+    Each rule family is redacted with the key set diagnostics uses for the
+    same section, then every MAC address in the document is anonymised.
+    """
+    section_by_rule_type = {
+        family.rule_type: family.data_key for family in RULE_FAMILIES
+    }
+    sites: dict[str, Any] = {}
+    for site_id, site in document.get("sites", {}).items():
+        rule_types: dict[str, Any] = {}
+        for rule_type, exported in site.get("rule_types", {}).items():
+            to_redact = RULE_SECTION_TO_REDACT[section_by_rule_type[rule_type]]
+            rule_types[rule_type] = {
+                **exported,
+                "rules": async_redact_data(exported.get("rules", []), to_redact),
+            }
+        sites[site_id] = {**site, "rule_types": rule_types}
+    redacted: dict[str, Any] = _anonymize_macs(
+        {**document, "redacted": True, "sites": sites}, {}
+    )
     return redacted
 
 

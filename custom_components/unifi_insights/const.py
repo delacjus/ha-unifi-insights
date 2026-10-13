@@ -508,6 +508,7 @@ SERVICE_RECONNECT_CLIENT: Final = "reconnect_client"
 SERVICE_REMOVE_CLIENTS: Final = "remove_clients"
 SERVICE_GENERATE_VOUCHER: Final = "generate_voucher"
 SERVICE_DELETE_VOUCHER: Final = "delete_voucher"
+SERVICE_EXPORT_NETWORK_RULES: Final = "export_network_rules"
 SERVICE_LIST_VOUCHERS: Final = "list_vouchers"
 # Default voucher name required by UniFi Network API when note is omitted
 DEFAULT_VOUCHER_NAME: Final = "Home Assistant"
