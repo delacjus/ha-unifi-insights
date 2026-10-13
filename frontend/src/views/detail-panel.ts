@@ -136,11 +136,15 @@ export class UitDetailPanel extends LitElement {
         const dialog = this.renderRoot.querySelector("dialog");
         if (dialog) {
             if (!dialog.open) dialog.showModal();
-        } else if (changed.has("selectedId") || changed.has("narrow")) {
+        } else if (
+            changed.has("selectedId") ||
+            changed.has("narrow") ||
+            changed.has("details")
+        ) {
             // A card too short for the details (#186) shows them over the
-            // dashboard instead. Checked only when the panel opens or the card
-            // crosses the narrow breakpoint, so a live update or a resize never
-            // opens a dialog the user didn't ask for.
+            // dashboard instead. Check when the panel opens, the card crosses
+            // the narrow breakpoint, or on-demand details change its content.
+            // Snapshot updates and resizes alone keep the current mode.
             const panel = this.renderRoot.querySelector<HTMLElement>(".panel");
             if (panel && panel.scrollHeight > panel.clientHeight + 1) {
                 // The dialog render recreates the menu; open it after that.
