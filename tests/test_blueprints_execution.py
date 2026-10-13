@@ -968,6 +968,10 @@ async def test_first_time_tracking_creates_many_trackers_and_each_secure_one_ale
     assert sorted(call["ip"] for call in _data(calls)) == sorted(
         f"10.0.{50 if n % 2 else 60}.{n}" for n in range(1, 7)
     )
+    assert {call["entity"]: call["prefix"] for call in _data(calls)} == {
+        f"device_tracker.camera_{n}": f"10.0.{50 if n % 2 else 60}."
+        for n in range(1, 7)
+    }
 
 
 async def test_blank_secure_prefix_never_matches_every_client(
@@ -1336,7 +1340,6 @@ async def test_ap_overload_exposes_inputs_and_trigger_values_to_actions(
                         "utilisation_sensors": "{{ utilisation_sensors }}",
                         "utilisation_threshold": "{{ utilisation_threshold }}",
                         "duration": "{{ duration }}",
-                        "action_count": "{{ alert_actions | length }}",
                         "id": "{{ trigger_id }}",
                         "entity": "{{ entity_id }}",
                         "previous": "{{ from_state.state }}",
@@ -1355,12 +1358,64 @@ async def test_ap_overload_exposes_inputs_and_trigger_values_to_actions(
             "utilisation_sensors": [],
             "utilisation_threshold": 80,
             "duration": FIVE_MINUTES,
-            "action_count": 1,
             "id": "client_overload",
             "entity": AP_CLIENTS,
             "previous": 12,
             "value": 31,
         }
+    ]
+
+
+async def test_ap_overload_runs_repeat_actions_with_action_scope_templates(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """Action templates retain access to repeat.item when the blueprint runs."""
+    hass.states.async_set(AP_CLIENTS, "12")
+    await _use_blueprint(
+        hass,
+        AP_OVERLOAD,
+        _ap_inputs(
+            alert_actions=[
+                {
+                    "repeat": {
+                        "for_each": ["a", "b"],
+                        "sequence": [
+                            {
+                                "action": "test.record",
+                                "data": {"item": "{{ repeat.item }}"},
+                            }
+                        ],
+                    }
+                },
+                {"action": "test.record", "data": {"item": "plain"}},
+            ]
+        ),
+    )
+    await _set_state(hass, AP_CLIENTS, "31")
+    await _advance(hass, freezer, minutes=6)
+    assert _data(calls) == [{"item": "a"}, {"item": "b"}, {"item": "plain"}]
+
+
+async def test_recovery_accepts_string_offline_delay(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """YAML string durations still permit recovery after the elapsed delay."""
+    hass.states.async_set(SWITCH_ONLINE, "off")
+    await _use_blueprint(
+        hass, INFRASTRUCTURE_OFFLINE, _offline_inputs(offline_delay="00:05:00")
+    )
+    await _advance(hass, freezer, minutes=5)
+    await _set_state(hass, SWITCH_ONLINE, "on")
+    assert _data(calls) == [
+        {"event": "recovery", "entity": SWITCH_ONLINE, "state": "on"}
     ]
 
 
