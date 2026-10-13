@@ -176,6 +176,186 @@ describe("<uit-graph-view> interaction", () => {
   });
 });
 
+describe("<uit-graph-view> context requests", () => {
+    const contexts = (el: UitGraphView) => {
+        const seen: CustomEvent[] = [];
+        el.addEventListener("uit-context", (e) => seen.push(e as CustomEvent));
+        return seen;
+    };
+    const contextmenu = (target: Element) => {
+        const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+        });
+        target.dispatchEvent(event);
+        return event;
+    };
+    const pointer = (
+        target: Element,
+        type: string,
+        init: PointerEventInit = {},
+    ) =>
+        target.dispatchEvent(
+            new PointerEvent(type, {
+                bubbles: true,
+                composed: true,
+                pointerId: 1,
+                // The first finger or the mouse is the primary pointer.
+                isPrimary: (init.pointerId ?? 1) === 1,
+                ...init,
+            }),
+        );
+    const key = (el: UitGraphView, k: string, init: KeyboardEventInit = {}) => {
+        const event = new KeyboardEvent("keydown", {
+            key: k,
+            bubbles: true,
+            cancelable: true,
+            ...init,
+        });
+        svgOf(el).dispatchEvent(event);
+        return event;
+    };
+
+    it("asks for the node's actions on a context click and hides the browser menu", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const event = contextmenu(byId(el, "dev:uuid-ap"));
+        expect(event.defaultPrevented).toBe(true);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.detail).toEqual({ id: "dev:uuid-ap" });
+        expect(seen[0]!.bubbles && seen[0]!.composed).toBe(true);
+    });
+
+    it("also reports client groups, which the card then keeps menu-less", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        contextmenu(byId(el, "group:dev:uuid-ap"));
+        expect(seen.map((e) => e.detail)).toEqual([
+            { id: "group:dev:uuid-ap" },
+        ]);
+    });
+
+    it("leaves the browser menu alone away from the nodes", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const event = contextmenu(svgOf(el));
+        expect(event.defaultPrevented).toBe(false);
+        expect(seen).toHaveLength(0);
+    });
+
+    it("asks on the ContextMenu key and on Shift+F10 for the focused node", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        byId(el, "dev:uuid-gw").focus();
+        await el.updateComplete;
+        const viaKey = key(el, "ContextMenu");
+        const viaShift = key(el, "F10", { shiftKey: true });
+        expect(viaKey.defaultPrevented && viaShift.defaultPrevented).toBe(true);
+        expect(seen.map((e) => e.detail)).toEqual([
+            { id: "dev:uuid-gw" },
+            { id: "dev:uuid-gw" },
+        ]);
+        // Follows the focus.
+        byId(el, "dev:uuid-core").focus();
+        await el.updateComplete;
+        key(el, "ContextMenu");
+        expect(seen.at(-1)!.detail).toEqual({ id: "dev:uuid-core" });
+    });
+
+    it("ignores F10 without Shift and keeps the existing keys", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const activated = vi.fn();
+        el.addEventListener("uit-activate", (e) =>
+            activated((e as CustomEvent).detail),
+        );
+        byId(el, "dev:uuid-gw").focus();
+        await el.updateComplete;
+        const plain = key(el, "F10");
+        key(el, "Enter");
+        key(el, " ");
+        expect(plain.defaultPrevented).toBe(false);
+        expect(seen).toHaveLength(0);
+        expect(activated).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not open the menu after a pan", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const node = byId(el, "dev:uuid-ap");
+        pointer(node, "pointerdown", { clientX: 100, clientY: 100 });
+        pointer(node, "pointermove", { clientX: 140, clientY: 100 });
+        const event = contextmenu(node);
+        // The browser menu is still hidden; only the node menu is skipped.
+        expect(event.defaultPrevented).toBe(true);
+        expect(seen).toHaveLength(0);
+    });
+
+    it("tolerates a little jitter and a stationary long press", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const node = byId(el, "dev:uuid-ap");
+        pointer(node, "pointerdown", { clientX: 100, clientY: 100 });
+        pointer(node, "pointermove", { clientX: 103, clientY: 102 });
+        contextmenu(node);
+        expect(seen).toHaveLength(1);
+    });
+
+    it("does not open the menu after a pinch, and recovers on the next press", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const node = byId(el, "dev:uuid-ap");
+        pointer(node, "pointerdown", {
+            pointerId: 1,
+            clientX: 10,
+            clientY: 10,
+        });
+        pointer(node, "pointerdown", {
+            pointerId: 2,
+            clientX: 60,
+            clientY: 60,
+        });
+        pointer(node, "pointerup", { pointerId: 2 });
+        // One finger is still down, but the gesture was a pinch.
+        contextmenu(node);
+        expect(seen).toHaveLength(0);
+
+        pointer(node, "pointerup", { pointerId: 1 });
+        pointer(node, "pointerdown", {
+            pointerId: 1,
+            clientX: 10,
+            clientY: 10,
+        });
+        contextmenu(node);
+        expect(seen).toHaveLength(1);
+    });
+
+    it("does not count a pointer that moves after its press ended", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const node = byId(el, "dev:uuid-ap");
+        pointer(node, "pointerdown", { clientX: 0, clientY: 0 });
+        pointer(node, "pointerup");
+        // A hovering mouse keeps sending moves; that is not a pan.
+        pointer(node, "pointermove", { clientX: 200, clientY: 0 });
+        contextmenu(node);
+        expect(seen).toHaveLength(1);
+    });
+
+    it("forgets a cancelled press", async () => {
+        const el = await graph();
+        const seen = contexts(el);
+        const node = byId(el, "dev:uuid-ap");
+        pointer(node, "pointerdown", { clientX: 0, clientY: 0 });
+        pointer(node, "pointermove", { clientX: 90, clientY: 0 });
+        pointer(node, "pointercancel");
+        pointer(node, "pointerdown", { clientX: 0, clientY: 0 });
+        contextmenu(node);
+        expect(seen).toHaveLength(1);
+    });
+});
+
 describe("<uit-graph-view> layout mode", () => {
     const translate = (el: UitGraphView, id: string) =>
         byId(el, id).getAttribute("style");
