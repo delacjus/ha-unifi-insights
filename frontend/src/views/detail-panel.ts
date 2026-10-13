@@ -6,13 +6,29 @@ import {
     type PropertyValues,
     type TemplateResult,
 } from "lit";
-import type { TopologyNode } from "../contract";
+import { keyed } from "lit/directives/keyed.js";
+import { copyText } from "../clipboard";
+import type { NodeDetails, TopologyNode } from "../contract";
+import {
+    NodeDetailsFetcher,
+    nodeActions,
+    type NodeAction,
+} from "../data/node-details";
+import { errorNotice } from "../data/state";
 import { defineOnce } from "../define";
-import { fireEvent, navigate } from "../ha-types";
+import {
+    fireEvent,
+    fireMoreInfo,
+    isAdmin,
+    navigate,
+    type HomeAssistant,
+} from "../ha-types";
 import { iconFor, iconTemplate, mdiClose, mdiOpenInNew } from "../icons";
-import type { LocalizeFunc, LocalizeKey } from "../localize";
+import type { LocalizeFunc, LocalizeKey, LocalizeVars } from "../localize";
 import type { GraphModel, GroupVisual } from "../model/graph-model";
 import { controlStyles, themeTokens } from "../styles";
+import "./node-menu";
+import type { UitNodeMenu } from "./node-menu";
 import {
     KIND_KEYS,
     MEDIUM_KEYS,
@@ -23,6 +39,13 @@ import {
 
 type Row = [LocalizeKey, string | undefined];
 
+/** What the live region says: a localised message and, after a failed copy, the value to copy by hand. */
+interface Status {
+    key: LocalizeKey;
+    vars?: LocalizeVars | undefined;
+    value?: string | undefined;
+}
+
 /**
  * Details of the selected device, client or client group; a side panel, or a
  * bottom sheet when narrow. Details too long for the card open as a dialog.
@@ -32,20 +55,32 @@ export class UitDetailPanel extends LitElement {
         model: { attribute: false },
         selectedId: { attribute: false },
         localize: { attribute: false },
+        hass: { attribute: false },
+        menuRequest: { attribute: false },
         narrow: { type: Boolean, reflect: true },
         memberQuery: { state: true },
         modal: { state: true },
+        copyStatus: { state: true },
     };
 
     declare model?: GraphModel;
     declare selectedId?: string;
     declare localize?: LocalizeFunc;
+    /** For the administrator-only node details; only `callWS` and `user` are read. */
+    declare hass?: HomeAssistant;
+    /** A fresh object asks to open the menu of that node, on its first item. */
+    declare menuRequest?: { id: string } | undefined;
     declare narrow: boolean;
     declare memberQuery: string;
     declare modal: boolean;
+    declare copyStatus?: Status | undefined;
 
     /** Whether the current press began on the backdrop rather than inside the dialog. */
     private pressedBackdrop = false;
+    private menuPending = false;
+    private readonly details = new NodeDetailsFetcher(() =>
+        this.requestUpdate(),
+    );
 
     constructor() {
         super();
@@ -62,24 +97,62 @@ export class UitDetailPanel extends LitElement {
     }
 
     protected override willUpdate(changed: PropertyValues<this>): void {
-        if (changed.has("selectedId")) this.memberQuery = "";
+        if (changed.has("selectedId")) {
+            this.memberQuery = "";
+            this.copyStatus = undefined;
+        }
         if (this.selectedId === undefined) this.modal = false;
+        const node = this.selectedNode;
+        this.details.select(
+            this.hass,
+            node && this.model
+                ? {
+                      entry_id: this.model.snapshot.entry_id,
+                      site_id: this.model.snapshot.site_id,
+                      node_id: node.id,
+                  }
+                : undefined,
+        );
+        if (
+            changed.has("menuRequest") &&
+            this.menuRequest !== undefined &&
+            this.menuRequest.id === this.selectedId
+        )
+            this.menuPending = true;
     }
 
     protected override updated(changed: PropertyValues<this>): void {
         const dialog = this.renderRoot.querySelector("dialog");
         if (dialog) {
             if (!dialog.open) dialog.showModal();
-            return;
+        } else if (changed.has("selectedId") || changed.has("narrow")) {
+            // A card too short for the details (#186) shows them over the
+            // dashboard instead. Checked only when the panel opens or the card
+            // crosses the narrow breakpoint, so a live update or a resize never
+            // opens a dialog the user didn't ask for.
+            const panel = this.renderRoot.querySelector<HTMLElement>(".panel");
+            if (panel && panel.scrollHeight > panel.clientHeight + 1) {
+                // The dialog render recreates the menu; open it after that.
+                this.modal = true;
+                return;
+            }
         }
-        // A card too short for the details (#186) shows them over the
-        // dashboard instead. Checked only when the panel opens or the card
-        // crosses the narrow breakpoint, so a live update or a resize never
-        // opens a dialog the user didn't ask for.
-        if (!changed.has("selectedId") && !changed.has("narrow")) return;
-        const panel = this.renderRoot.querySelector<HTMLElement>(".panel");
-        if (panel && panel.scrollHeight > panel.clientHeight + 1)
-            this.modal = true;
+        this.openRequestedMenu();
+    }
+
+    /** The selected infrastructure node or client, if the selection is one. */
+    private get selectedNode(): TopologyNode | undefined {
+        return this.selectedId === undefined
+            ? undefined
+            : this.model?.nodes.get(this.selectedId);
+    }
+
+    private openRequestedMenu(): void {
+        if (!this.menuPending) return;
+        this.menuPending = false;
+        void this.renderRoot
+            .querySelector<UitNodeMenu>("uit-node-menu")
+            ?.show();
     }
 
     /** Closing the dialog restores focus and then fires `uit-close`. */
@@ -104,11 +177,15 @@ export class UitDetailPanel extends LitElement {
             node.kind === "client"
                 ? this.clientBody(model, node, localize)
                 : this.deviceBody(model, node, localize);
-        return this.shell(node.name, body);
+        return this.shell(node.name, body, this.menu(node, localize));
     }
 
-    private shell(title: string, body: TemplateResult): TemplateResult {
-        const panel = this.panel(title, body);
+    private shell(
+        title: string,
+        body: TemplateResult,
+        menu: TemplateResult | typeof nothing = nothing,
+    ): TemplateResult {
+        const panel = this.panel(title, body, menu);
         if (!this.modal) return panel;
         return html`<dialog
             aria-labelledby="title"
@@ -135,7 +212,11 @@ export class UitDetailPanel extends LitElement {
         </dialog>`;
     }
 
-    private panel(title: string, body: TemplateResult): TemplateResult {
+    private panel(
+        title: string,
+        body: TemplateResult,
+        menu: TemplateResult | typeof nothing,
+    ): TemplateResult {
         const localize = this.localize!;
         // The dialog takes its name from the heading, so the section isn't a
         // second landmark with the same name.
@@ -146,6 +227,7 @@ export class UitDetailPanel extends LitElement {
         >
             <header>
                 <h3 id="title" title=${title}>${title}</h3>
+                ${menu}
                 <button
                     class="close"
                     aria-label=${localize("detail.close")}
@@ -155,8 +237,109 @@ export class UitDetailPanel extends LitElement {
                     ${iconTemplate(mdiClose)}
                 </button>
             </header>
-            ${body}
+            ${body}${this.statusRegion(localize)}
         </section>`;
+    }
+
+    /** What the menu offers right now, or nothing while there is nothing to offer. */
+    private menu(
+        node: TopologyNode,
+        localize: LocalizeFunc,
+    ): TemplateResult | typeof nothing {
+        const state = this.details.state;
+        const actions = nodeActions(
+            node,
+            state.status === "ready" ? state.details : undefined,
+            isAdmin(this.hass),
+        );
+        const loading = state.status === "loading";
+        if (actions.length === 0 && !loading) return nothing;
+        // Keyed: a new selection starts with a closed menu.
+        return html`${keyed(
+            node.id,
+            html`<uit-node-menu
+                .actions=${actions}
+                .loading=${loading}
+                .localize=${localize}
+                @uit-action=${(e: Event) =>
+                    this.runAction(
+                        node,
+                        (e as CustomEvent<{ action: NodeAction }>).detail
+                            .action,
+                    )}
+            ></uit-node-menu>`,
+        )}`;
+    }
+
+    /**
+     * Polite live region for the result of an action. It is always in the
+     * panel, so a message put into it is announced. A failed copy also shows
+     * the value as plain selectable text.
+     */
+    private statusRegion(localize: LocalizeFunc): TemplateResult {
+        const failed = this.details.state;
+        const status: Status | undefined =
+            this.copyStatus ??
+            (failed.status === "error" ? errorNotice(failed.error) : undefined);
+        return html`<div
+            class="status ${status ? "has-message" : ""}"
+            role="status"
+            aria-live="polite"
+        >
+            ${status
+                ? html`<span>${localize(status.key, status.vars)}</span
+                      >${status.value === undefined
+                          ? nothing
+                          : html`<code class="manual">${status.value}</code>`}`
+                : nothing}
+        </div>`;
+    }
+
+    private runAction(node: TopologyNode, action: NodeAction): void {
+        const state = this.details.state;
+        const details: NodeDetails | undefined =
+            state.status === "ready" ? state.details : undefined;
+        switch (action) {
+            case "copy_ip":
+                void this.copy(details?.ip_address);
+                break;
+            case "copy_mac":
+                void this.copy(details?.mac_address);
+                break;
+            case "open_device": {
+                const deviceId = node.ha_device_id || details?.ha_device_id;
+                if (deviceId) this.openDevice(deviceId);
+                break;
+            }
+            case "open_entity":
+                if (details?.entity_id) {
+                    // The more-info dialog must not open behind or under ours.
+                    this.renderRoot.querySelector("dialog")?.close();
+                    fireMoreInfo(this, details.entity_id);
+                }
+                break;
+        }
+    }
+
+    private async copy(value: string | undefined): Promise<void> {
+        if (!value) return;
+        this.copyStatus = undefined;
+        const selected = this.selectedId;
+        // Inside an open modal dialog only its own content can be selected.
+        const ok = await copyText(
+            value,
+            this.renderRoot.querySelector("dialog") ?? this.renderRoot,
+        );
+        if (this.selectedId !== selected) return;
+        this.copyStatus = ok
+            ? { key: "menu.copied" }
+            : { key: "menu.copy_failed", value };
+    }
+
+    private openDevice(haDeviceId: string): void {
+        // Leaving the dashboard must not leave the dialog open.
+        this.renderRoot.querySelector("dialog")?.close();
+        navigate(`/config/devices/device/${encodeURIComponent(haDeviceId)}`);
     }
 
     private rows(rows: Row[]): TemplateResult {
@@ -249,13 +432,7 @@ export class UitDetailPanel extends LitElement {
         ${node.ha_device_id
             ? html`<button
                   class="action"
-                  @click=${() => {
-                      // Leaving the dashboard must not leave the dialog open.
-                      this.renderRoot.querySelector("dialog")?.close();
-                      navigate(
-                          `/config/devices/device/${encodeURIComponent(node.ha_device_id!)}`,
-                      );
-                  }}
+                  @click=${() => this.openDevice(node.ha_device_id!)}
               >
                   ${iconTemplate(mdiOpenInNew)}${localize("detail.open_device")}
               </button>`
@@ -444,6 +621,20 @@ export class UitDetailPanel extends LitElement {
             }
             .action {
                 margin-top: 8px;
+            }
+            .status.has-message {
+                margin-top: 8px;
+                color: var(--secondary-text-color);
+            }
+            .manual {
+                display: block;
+                margin-top: 4px;
+                padding: 6px 8px;
+                border: 1px solid var(--uit-line);
+                border-radius: 8px;
+                color: var(--primary-text-color);
+                overflow-wrap: anywhere;
+                user-select: all;
             }
             dialog {
                 pointer-events: auto;
