@@ -53,9 +53,15 @@ def _rule_fetchers(
 
 
 def _export_record(model: Any) -> Any:
-    """Return one rule as JSON-safe data, with the console's own key names."""
+    """
+    Return one rule as JSON-safe data, with the console's own key names.
+
+    Only the fields the console sent are exported: a model default such as
+    ``logging: False`` or ``enabled: True`` would otherwise read as a fact
+    about the console. A key the console sent as ``null`` is kept.
+    """
     if hasattr(model, "model_dump"):
-        return model.model_dump(mode="json", by_alias=True)
+        return model.model_dump(mode="json", by_alias=True, exclude_unset=True)
     return model
 
 

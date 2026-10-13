@@ -461,6 +461,12 @@ def _redact_export_rule(rule_type: str, record: Any) -> Any:
     """Keep the allow-listed keys of one exported rule and replace the rest."""
     if not isinstance(record, Mapping):
         return REDACTED
+    # A key that is not an ordinary field name (an address, a host name, a
+    # number) is data, not a field: the whole record goes, key names included.
+    if not all(
+        isinstance(key, str) and _SAFE_EXPORT_KEY.fullmatch(key) for key in record
+    ):
+        return REDACTED
     safe_keys = RULE_EXPORT_SAFE_KEYS.get(rule_type, frozenset())
     return {
         key: _safe_export_value(value) if key in safe_keys else REDACTED

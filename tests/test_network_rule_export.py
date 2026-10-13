@@ -297,7 +297,10 @@ def _six_models() -> dict[str, Any]:
 
 
 def _dump(model: Any) -> dict[str, Any]:
-    dumped: dict[str, Any] = model.model_dump(mode="json", by_alias=True)
+    """Return what the console sent: the fields set on the model, by alias."""
+    dumped: dict[str, Any] = model.model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
     return dumped
 
 
@@ -788,8 +791,14 @@ def _two_rules(rule_type: str) -> list[Any]:
     """Return two parsed rules of one family, with distinct ids."""
     if rule_type == "firewall_rule":
         return [
-            FirewallRule.model_validate({"id": "fw-a", "name": "A", "index": 1}),
-            FirewallRule.model_validate({"id": "fw-b", "name": "B", "index": 2}),
+            # "action" sorts before "id" in the canonical JSON, so the JSON order
+            # of this pair (fw-b, fw-a) is the opposite of its id order.
+            FirewallRule.model_validate(
+                {"id": "fw-a", "name": "A", "action": "z", "index": 1}
+            ),
+            FirewallRule.model_validate(
+                {"id": "fw-b", "name": "B", "action": "a", "index": 2}
+            ),
         ]
     if rule_type == "policy_based_route":
         return [
@@ -856,6 +865,8 @@ async def test_export_unchanged_rules_diff_clean(freezer: Any) -> None:
         ("pf-a", "A2"),
         ("pf-b", "B"),
     ]
+    firewall = first["sites"]["site-a"]["rule_types"]["firewall_rule"]["rules"]
+    assert [rule["id"] for rule in firewall] == ["fw-a", "fw-b"]
     # The order fields of a record are data, not a sort result.
     nat = first["sites"]["site-a"]["rule_types"]["nat_rule"]["rules"]
     assert [rule["rule_index"] for rule in nat] == [1, 2]
@@ -1310,6 +1321,231 @@ def test_safe_export_value_checks_lists_and_mappings() -> None:
         assert _safe_export_value(odd_keys) == REDACTED
     for other in (object(), b"bytes", ("a", "b"), {"a"}):
         assert _safe_export_value(other) == REDACTED
+
+
+_PINNED_ALLOW_LIST: dict[str, frozenset[str]] = {
+    "firewall_rule": frozenset(
+        {
+            "id",
+            "enabled",
+            "action",
+            "index",
+            "logging",
+            "loggingEnabled",
+            "protocol",
+            "ipProtocolScope",
+            "connectionStateFilter",
+        }
+    ),
+    "policy_based_route": frozenset(
+        {
+            "_id",
+            "enabled",
+            "killSwitch",
+            "kill_switch",
+            "killSwitchEnabled",
+            "kill_switch_enabled",
+            "matchingTarget",
+            "matching_target",
+        }
+    ),
+    "port_forward": frozenset(
+        {
+            "_id",
+            "enabled",
+            "proto",
+            "dst_port",
+            "fwd_port",
+            "log",
+            "src_limiting_enabled",
+            "pfwd_interface",
+        }
+    ),
+    "traffic_rule": frozenset({"_id", "enabled", "action", "matching_target"}),
+    "nat_rule": frozenset(
+        {
+            "_id",
+            "enabled",
+            "type",
+            "protocol",
+            "ip_version",
+            "logging",
+            "rule_index",
+            "exclude",
+            "is_predefined",
+            "setting_preference",
+            "port",
+        }
+    ),
+    "static_route": frozenset(
+        {
+            "_id",
+            "enabled",
+            "type",
+            "static-route_type",
+            "static-route_distance",
+            "gateway_type",
+        }
+    ),
+}
+
+
+def test_rule_export_allow_list_is_pinned() -> None:
+    """Widening the allow-list is a deliberate edit of this literal too."""
+    assert RULE_EXPORT_SAFE_KEYS == _PINNED_ALLOW_LIST
+
+
+def test_unknown_rule_type_keeps_no_value() -> None:
+    """A rule type without an allow-list has every value replaced."""
+    record = {"_id": "abc", "enabled": True, "proto": "tcp"}
+
+    redacted = redact_network_rule_export(_single_rule_document("vpn_client", record))
+
+    rule = redacted["sites"]["site-1"]["rule_types"]["vpn_client"]["rules"][0]
+    assert rule == {"_id": REDACTED, "enabled": REDACTED, "proto": REDACTED}
+
+
+def test_redacted_export_anonymises_mac_under_kept_key() -> None:
+    """A MAC that passes the string check is still anonymised afterwards."""
+    record = {"_id": "aabbccddeeff", "pfwd_interface": "aa-bb-cc-dd-ee-ff"}
+    document = _single_rule_document("port_forward", record)
+
+    redacted = redact_network_rule_export(document)
+
+    dumped = json.dumps(redacted)
+    assert "aabbccddeeff" not in dumped
+    assert "aa-bb-cc-dd-ee-ff" not in dumped
+    rule = redacted["sites"]["site-1"]["rule_types"]["port_forward"]["rules"][0]
+    assert rule["_id"].startswith("**REDACTED-MAC-")
+    assert rule["pfwd_interface"].startswith("**REDACTED-MAC-")
+
+
+def test_record_with_a_key_that_is_data_is_replaced_whole() -> None:
+    """An address, a host name or a number as a key replaces the whole record."""
+    record = {
+        "_id": "keep",
+        "enabled": True,
+        "192.0.2.77": "x",
+        "host.example": 1,
+        5: 2,
+    }
+
+    redacted = redact_network_rule_export(_single_rule_document("port_forward", record))
+
+    rules = redacted["sites"]["site-1"]["rule_types"]["port_forward"]["rules"]
+    assert rules == [REDACTED]
+    dumped = json.dumps(redacted)
+    for name in ("192.0.2.77", "host.example", '"5"'):
+        assert name not in dumped
+
+
+@pytest.mark.parametrize("status", ["ok", "failed", "unsupported"])
+def test_redacted_export_keeps_family_status_and_count(status: str) -> None:
+    """Status and count of every family survive redaction unchanged."""
+    document = _single_rule_document("nat_rule", {"_id": "n", "enabled": True})
+    family = document["sites"]["site1"]["rule_types"]["nat_rule"]
+    family["status"] = status
+    family["count"] = 7
+
+    redacted = redact_network_rule_export(document)
+
+    out = redacted["sites"]["site-1"]["rule_types"]["nat_rule"]
+    assert (out["status"], out["count"]) == (status, 7)
+
+
+def test_redacted_export_checks_family_status_and_count() -> None:
+    """Status and count go through the same value check as any kept value."""
+    document = _single_rule_document("nat_rule", {"_id": "n"})
+    family = document["sites"]["site1"]["rule_types"]["nat_rule"]
+    family["status"] = "198.51.100.12"
+    family["count"] = "host.example"
+
+    redacted = redact_network_rule_export(document)
+
+    out = redacted["sites"]["site-1"]["rule_types"]["nat_rule"]
+    assert (out["status"], out["count"]) == (REDACTED, REDACTED)
+
+
+def test_export_does_not_invent_fields() -> None:
+    """An exported rule has exactly the keys the console sent, nothing else."""
+    policy = {
+        "id": "fw-spec",
+        "name": "Allow DNS",
+        "description": None,
+        "enabled": True,
+        "index": 3,
+        "action": {"type": "ALLOW", "allowReturnTraffic": True},
+        "source": {"zoneId": "zone-src", "trafficFilter": None},
+        "destination": {"zoneId": "zone-dst"},
+        "ipProtocolScope": {"ipVersion": "IPV4"},
+        "connectionStateFilter": ["NEW", "ESTABLISHED"],
+        "ipsecFilter": None,
+        "loggingEnabled": True,
+        "metadata": {"origin": "USER_DEFINED"},
+    }
+
+    record = _export_record(FirewallRule.model_validate(policy))
+
+    assert set(record) == set(policy)
+    assert "logging" not in record
+    assert record["description"] is None
+    assert record["loggingEnabled"] is True
+    without_enabled = _export_record(
+        FirewallRule.model_validate({"id": "x", "name": "n"})
+    )
+    assert without_enabled == {"id": "x", "name": "n"}
+    assert "enabled" not in without_enabled
+    assert "action" not in without_enabled
+
+
+@pytest.mark.parametrize("rule_type", [t for t in RULE_TYPES if t != "firewall_rule"])
+def test_export_exact_key_set_of_every_other_family(rule_type: str) -> None:
+    """Every family exports the keys it was given, nested objects included."""
+    inputs: dict[str, dict[str, Any]] = {
+        "policy_based_route": {
+            "_id": "pbr-1",
+            "enabled": False,
+            "matchingTarget": "INTERNET",
+            "nextHop": None,
+            "x_future": {"a": 1},
+            "targetDevices": [{"type": "CLIENT", "clientMac": "aa:bb:cc:dd:ee:01"}],
+        },
+        "port_forward": port_forward_record(src=None, x_future="y"),
+        "traffic_rule": traffic_rule_record(x_future=[1]),
+        "nat_rule": nat_rule_record(),
+        "static_route": static_route_record(),
+    }
+    models = {
+        "policy_based_route": PolicyBasedRoute,
+        "port_forward": PortForward,
+        "traffic_rule": TrafficRule,
+        "nat_rule": NatRule,
+        "static_route": StaticRoute,
+    }
+    sent = inputs[rule_type]
+
+    record = _export_record(models[rule_type].model_validate(sent))
+
+    assert set(record) == set(sent)
+    assert record == sent
+
+
+@pytest.mark.parametrize(
+    "model", [NatRule, StaticRoute], ids=["nat_rule", "static_route"]
+)
+def test_export_keeps_enabled_as_sent_for_nat_and_static_routes(model: Any) -> None:
+    """The enabled validator's result is exported when the key was sent only."""
+    base = {"_id": "r1"}
+
+    assert _export_record(model.model_validate({**base, "enabled": "yes"})) == {
+        "_id": "r1",
+        "enabled": None,
+    }
+    assert _export_record(model.model_validate({**base, "enabled": False})) == {
+        "_id": "r1",
+        "enabled": False,
+    }
+    assert _export_record(model.model_validate(base)) == base
 
 
 def test_redacted_export_pseudonymises_sites_and_console() -> None:
