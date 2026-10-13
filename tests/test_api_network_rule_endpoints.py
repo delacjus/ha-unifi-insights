@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Self
@@ -20,6 +21,9 @@ from custom_components.unifi_insights.api import (
     UniFiValidationError,
 )
 from custom_components.unifi_insights.api.network.client import UniFiNetworkClient
+from custom_components.unifi_insights.api.network.endpoints.firewall import (
+    FirewallEndpoint,
+)
 from custom_components.unifi_insights.api.network.endpoints.nat_rules import (
     NatRulesEndpoint,
 )
@@ -1449,24 +1453,109 @@ async def test_skipped_policy_based_route_log_for_non_validation_error(
     ]
 
 
+def _fw_page(start: int, count: int, total: int | None) -> dict[str, Any]:
+    """Return one page of firewall policies with the ids fw<start>..."""
+    body: dict[str, Any] = {
+        "data": [{"id": f"fw{n}", "name": "N"} for n in range(start, start + count)]
+    }
+    if total is not None:
+        body["totalCount"] = total
+    return body
+
+
 async def test_strict_firewall_pages_are_each_checked() -> None:
     """Every page of the paged firewall list is parsed strictly."""
-    page = {"data": [_GOOD["firewall_rule"]], "totalCount": 201}
-    session = _Session([page, {**page, "data": [{"id": "fw2", "name": "Second"}]}])
+    session = _Session([_fw_page(0, 200, 201), _fw_page(200, 1, 201)])
     rules = await _client(session).firewall.list_rules("site-id", strict=True)
-    assert [rule.id for rule in rules] == ["fw1", "fw2"]
+    assert [rule.id for rule in rules] == [f"fw{n}" for n in range(201)]
     assert [r["params"] for r in session.requests] == [
         {"offset": 0, "limit": 200},
         {"offset": 200, "limit": 200},
     ]
 
-    broken = _Session([page, {"data": "unexpected", "totalCount": 201}])
+    broken = _Session(
+        [_fw_page(0, 200, 201), {"data": "unexpected", "totalCount": 201}]
+    )
     with pytest.raises(UniFiValidationError):
         await _client(broken).firewall.list_rules("site-id", strict=True)
 
-    bad_record = _Session([page, {"data": [_BAD["firewall_rule"]], "totalCount": 201}])
+    bad = {"data": [_BAD["firewall_rule"]], "totalCount": 201}
+    bad_record = _Session([_fw_page(0, 200, 201), bad])
     with pytest.raises(UniFiValidationError):
         await _client(bad_record).firewall.list_rules("site-id", strict=True)
+
+
+@pytest.mark.parametrize(
+    "pages",
+    [
+        pytest.param([_fw_page(0, 200, 250), _fw_page(200, 0, 250)], id="page2-empty"),
+        pytest.param(
+            [_fw_page(0, 200, 500), _fw_page(200, 0, 500), _fw_page(400, 100, 500)],
+            id="empty-middle-page",
+        ),
+        pytest.param([_fw_page(0, 200, None)], id="full-page-no-total"),
+        pytest.param([_fw_page(0, 100, 300), _fw_page(200, 100, 300)], id="short-page"),
+        pytest.param(
+            [_fw_page(0, 200, 250), _fw_page(150, 50, 250)], id="duplicate-ids"
+        ),
+        pytest.param([_fw_page(0, 1, 5)], id="count-below-total"),
+    ],
+)
+async def test_strict_firewall_incomplete_pages_raise(pages: list[Any]) -> None:
+    """Pages that do not add up to the console's own total are not a valid list."""
+    with pytest.raises(UniFiValidationError) as err:
+        await _client(_Session(pages)).firewall.list_rules("site-id", strict=True)
+
+    assert err.value.args == ("Incomplete firewall policy list",)
+    assert UnifiBaseCoordinator._is_unsupported_response(err.value) is False
+
+
+@pytest.mark.parametrize(
+    ("pages", "expected"),
+    [
+        pytest.param([_fw_page(0, 138, 138)], 138, id="one-page"),
+        pytest.param([_fw_page(0, 3, None)], 3, id="no-total-short-page"),
+        pytest.param([_fw_page(0, 0, 0)], 0, id="empty-with-total"),
+        pytest.param([[]], 0, id="bare-empty-list"),
+        pytest.param([{"data": []}], 0, id="empty-data"),
+    ],
+)
+async def test_strict_firewall_complete_answers_are_valid(
+    pages: list[Any], expected: int
+) -> None:
+    """A complete answer, empty ones included, is still a valid strict read."""
+    rules = await _client(_Session(pages)).firewall.list_rules("site-id", strict=True)
+
+    assert len(rules) == expected
+
+
+def test_firewall_strict_is_keyword_only() -> None:
+    """``strict`` cannot be passed positionally."""
+    parameter = inspect.signature(FirewallEndpoint.list_rules).parameters["strict"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.parametrize("rule_type", _LENIENT)
+@pytest.mark.parametrize(
+    "meta",
+    [{"rc": "ERROR"}, {"rc": "error"}, {"rc": None}, {}, "error", None, ["ok"]],
+)
+async def test_strict_list_requires_rc_ok(rule_type: str, meta: Any) -> None:
+    """A classic envelope must say rc ok; any other meta fails the read."""
+    body = {"meta": meta, "data": []}
+
+    with pytest.raises(UniFiValidationError) as err:
+        await _LISTERS[rule_type](_client(_Session([body])), strict=True)
+
+    assert UnifiBaseCoordinator._is_unsupported_response(err.value) is False
+
+
+@pytest.mark.parametrize("rule_type", _LENIENT)
+async def test_strict_list_accepts_envelopes_without_meta(rule_type: str) -> None:
+    """A dict without meta but with a data list, and a bare list, stay valid."""
+    for body in ({"data": [_GOOD[rule_type]]}, [_GOOD[rule_type]]):
+        rules = await _LISTERS[rule_type](_client(_Session([body])), strict=True)
+        assert len(rules) == 1
 
 
 async def test_strict_firewall_explicit_page_is_single_strict_request() -> None:

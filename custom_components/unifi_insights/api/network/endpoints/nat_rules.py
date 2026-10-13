@@ -80,12 +80,15 @@ class NatRulesEndpoint:
         put in a message.
         """
         if isinstance(response, dict):
-            meta = response.get("meta")
-            if isinstance(meta, dict) and meta.get("rc") == "error":
-                # An export must report this as a failed read. As a response
-                # error with status 200 it would be classified "unsupported".
-                msg = "UniFi Network API reported an error"
-                raise UniFiValidationError(msg)
+            # A classic answer says rc ok; anything else (an error, another
+            # spelling, an envelope that is not a dict) is a failed read. It is
+            # raised as a validation error because a response error with status
+            # 200 would be classified "unsupported".
+            if "meta" in response:
+                meta = response["meta"]
+                if not isinstance(meta, dict) or meta.get("rc") != "ok":
+                    msg = "UniFi Network API did not report success"
+                    raise UniFiValidationError(msg)
             response = response.get("data")
         if not isinstance(response, list) or not all(
             isinstance(item, dict) for item in response

@@ -237,6 +237,18 @@ class FirewallEndpoint:
                 break
             current_offset += page_size
 
+        if strict:
+            # Every page was valid, but the pages must also add up: the console
+            # reports how many policies there are, and a policy added or removed
+            # between two page requests shifts the offsets.
+            msg = "Incomplete firewall policy list"
+            if total is not None and len(all_rules) != total:
+                raise UniFiValidationError(msg)
+            if total is None and len(rules) >= page_size:
+                raise UniFiValidationError(msg)
+            if len({rule.id for rule in all_rules}) != len(all_rules):
+                raise UniFiValidationError(msg)
+
         return all_rules
 
     @staticmethod

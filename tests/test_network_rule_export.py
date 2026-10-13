@@ -502,6 +502,15 @@ _INVALID_RECORDS: dict[str, dict[str, Any]] = {
 }
 
 
+_CLASSIC_TYPES = [
+    "policy_based_route",
+    "port_forward",
+    "traffic_rule",
+    "nat_rule",
+    "static_route",
+]
+
+
 class _RoutedSession:
     """Answer each rule list request with the body registered for its family."""
 
@@ -516,7 +525,8 @@ class _RoutedSession:
         self.requests.append(path)
         for rule_type, end in _PATH_ENDS.items():
             if path.endswith(end):
-                return _Response(self._bodies[rule_type])
+                body = self._bodies[rule_type]
+                return body if isinstance(body, _Response) else _Response(body)
         msg = f"unexpected request {method} {path}"
         raise AssertionError(msg)
 
@@ -620,6 +630,97 @@ async def test_export_error_envelope_is_failed(
     types = document["sites"]["site1"]["rule_types"]
     assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
     assert _SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize("rule_type", _CLASSIC_TYPES)
+@pytest.mark.parametrize(
+    "meta", [{"rc": "ERROR"}, {"rc": "fail"}, {}, "error", None], ids=repr
+)
+async def test_export_envelope_without_rc_ok_is_failed(
+    rule_type: str, meta: Any
+) -> None:
+    """A classic envelope that does not say rc ok fails the family."""
+    document = await _export_real({rule_type: {"meta": meta, "data": []}})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
+    for other in RULE_TYPES:
+        if other != rule_type:
+            assert types[other]["status"] == "ok"
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("<html>Sign in</html>", id="html"),
+        pytest.param('{"data": [{"_id": "a"', id="truncated-json"),
+    ],
+)
+async def test_export_non_json_answer_is_failed(
+    caplog: pytest.LogCaptureFixture, rule_type: str, body: str
+) -> None:
+    """A 2xx answer that is not JSON is a failed read, not an absent list."""
+    caplog.set_level(logging.DEBUG)
+
+    document = await _export_real({rule_type: _Response(body, is_json=False)})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types[rule_type] == {"status": "failed", "count": 0, "rules": []}
+    for other in RULE_TYPES:
+        if other != rule_type:
+            assert types[other]["status"] == "ok"
+    assert "Sign in" not in caplog.text
+    assert '"_id"' not in caplog.text
+
+
+async def test_export_all_non_json_raises_export_failed() -> None:
+    """When every list answers a login page, the action fails."""
+    bodies = {
+        rule_type: _Response("<html>Sign in</html>", is_json=False)
+        for rule_type in RULE_TYPES
+    }
+
+    with pytest.raises(HomeAssistantError) as err:
+        await _export_real(bodies)
+
+    assert err.value.translation_key == "export_network_rules_failed"
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+@pytest.mark.parametrize("status", [403, 404, 400])
+async def test_export_refused_request_is_unsupported(
+    rule_type: str, status: int
+) -> None:
+    """A console that refuses a list (403, 404, other 4xx) does not offer it."""
+    document = await _export_real({rule_type: _Response(None, status=status)})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types[rule_type] == {"status": "unsupported", "count": 0, "rules": []}
+    for other in RULE_TYPES:
+        if other != rule_type:
+            assert types[other]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            {"data": [{"id": "fw1", "name": "A"}], "totalCount": 5}, id="below-total"
+        ),
+        pytest.param(
+            {"data": [{"id": f"fw{n}", "name": "A"} for n in range(200)]},
+            id="full-page-without-total",
+        ),
+    ],
+)
+async def test_export_incomplete_firewall_list_is_failed(body: dict[str, Any]) -> None:
+    """A firewall list the console's own total contradicts is a failed family."""
+    document = await _export_real({"firewall_rule": body})
+
+    types = document["sites"]["site1"]["rule_types"]
+    assert types["firewall_rule"] == {"status": "failed", "count": 0, "rules": []}
+    assert types["port_forward"]["status"] == "ok"
 
 
 @pytest.mark.parametrize("redact", [True, False])

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from custom_components.unifi_insights.api.exceptions import UniFiResponseError
 from custom_components.unifi_insights.const import DOMAIN
 
 from .config_sections import (
@@ -90,7 +92,14 @@ async def _async_export_family(
             rules.sort(key=_rule_sort_key)
             status = SECTION_OUTCOME_OK
         except Exception as err:
-            if not is_unsupported(err):
+            # A 2xx answer the transport could not parse (a login page, a cut
+            # off body) is not the console refusing the list, so it is a failed
+            # read; the shared classifier would call it unsupported.
+            answered_ok = (
+                isinstance(err, UniFiResponseError)
+                and err.status_code < HTTPStatus.MULTIPLE_CHOICES
+            )
+            if answered_ok or not is_unsupported(err):
                 status = SECTION_OUTCOME_FAILED
                 # The error text can quote the request or the response body, so
                 # only its type is logged and nothing of it is returned.
