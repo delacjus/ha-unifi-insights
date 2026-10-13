@@ -322,15 +322,21 @@ console backup: the networks, firewall zones, traffic matching lists, groups and
 refer to are not included, and there is no import action.
 
 - **Status:** the rules are read from the console when the action runs. Each rule type of each site has a
-  `status`. Only `ok` is complete. `failed` means the console's answer could not be read or parsed, and no rules
-  of that type are returned. `unsupported` means the console does not offer that list.
-- **Redacted (default, `redact: true`):** keeps each rule's ID, whether it is enabled, its type, action,
-  protocol and port settings. It replaces names, descriptions, addresses, domains, interfaces, network and
-  client references and anything it does not recognise with `**REDACTED**`. Site IDs become `site-1`,
-  `site-2`, and so on, in sorted order of the original IDs. The site names and the console's title and entry ID
-  are removed.
-- **Unredacted (`redact: false`):** returns the records as the integration read them, with the real site IDs,
-  names and addresses. Store it like a secret.
+  `status`. Only `ok` is complete. `failed` means the answer could not be read, was not JSON, was incomplete
+  or held a record that could not be parsed; no rules of that type are returned. `unsupported` means the
+  console refused the request (403, 404 or another client error), or the site has no verified classic name,
+  which the five rule types other than firewall policies need.
+- **Redacted (default, `redact: true`):** keeps each rule's ID, whether it is enabled, its type, action and
+  protocol, the port settings of port forwards and NAT rules, the WAN interface name of a port forward, the
+  order index, the logging flag, the kill switch and matching target of a policy-based route, the connection
+  state of a firewall policy, and the distance and gateway type of a static route. It replaces names,
+  descriptions, addresses, domains, the source and destination of firewall policies (their ports included),
+  network and client references and anything it does not recognise with `**REDACTED**`. Site IDs become
+  `site-1`, `site-2`, and so on: the label is the site's rank in sorted order among the exported sites, so it
+  can change when sites are added or when you export a single site. The site names and the console's title
+  and entry ID are removed.
+- **Unredacted (`redact: false`):** returns the fields the console sent for each rule, with the real site
+  IDs, names and addresses. Store it like a secret.
 - **Stable output:** `generated_at` changes on every call. For an unchanged console everything else is
   identical, because sites and rules are listed in a fixed order.
 

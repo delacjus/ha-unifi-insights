@@ -231,7 +231,7 @@
     },
     "export_network_rules": {
       "name": "Export network rules",
-      "description": "Return a snapshot of the firewall policies, policy-based routes, port forwards, traffic rules, NAT rules and static routes of one console as a versioned document, for comparison, versioning and manual recovery. It is not a complete console backup: the networks, zones, traffic matching lists, groups and VPN definitions that rules refer to are not included, and there is no import. The rules are read from the console when you run the action. Only a rule type with status ok is complete: failed means the console's answer could not be read, unsupported means the console does not offer that list. Requires an admin user. The action only returns data; it does not write a file.",
+      "description": "Return a snapshot of the firewall policies, policy-based routes, port forwards, traffic rules, NAT rules and static routes of one console as a versioned document, for comparison, versioning and manual recovery. It is not a complete console backup: the networks, zones, traffic matching lists, groups and VPN definitions that rules refer to are not included, and there is no import. The rules are read from the console when you run the action. Only a rule type with status ok is complete. Failed means the answer could not be read, was not JSON, was incomplete or held a record that could not be parsed. Unsupported means the console refused the request, or the site has no classic name for the five rule types other than firewall policies. Requires an admin user. The action only returns data; it does not write a file.",
       "fields": {
         "site_id": {
           "name": "Site ID",
@@ -247,7 +247,7 @@
         },
         "redact": {
           "name": "Redact sensitive values",
-          "description": "Keep only each rule's ID, enabled state, type, action, protocol and port settings. Names, descriptions, addresses, domains, interfaces, network and client references and anything unrecognised are replaced, site IDs become site-1, site-2 and so on, and the console title and entry ID are removed. Turn this off to get the records as the integration read them, including addresses and names. That export is sensitive."
+          "description": "Keep each rule's ID, enabled state, type, action and protocol, the port settings of port forwards and NAT rules, the WAN interface name of a port forward, the order index, the logging flag, the kill switch and matching target of a policy-based route, the connection state of a firewall policy, and the distance and gateway type of a static route. Names, descriptions, addresses, domains, the source and destination of firewall policies, network and client references and anything unrecognised are replaced. Site IDs become site-1, site-2 and so on, as the rank among the exported sites, so a label can change when sites are added or when you export a single site. The console title and entry ID are removed. Turn this off to get the fields the console sent for each rule, including addresses and names. That export is sensitive."
         }
       }
     },
