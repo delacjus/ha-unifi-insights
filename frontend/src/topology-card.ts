@@ -721,6 +721,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
             .model=${model}
             .density=${density}
             .orientation=${config.orientation}
+                      .layoutMode=${config.layout}
             .showLabels=${config.show_labels}
             .selectedId=${this.selectedId}
             .localize=${localize}
