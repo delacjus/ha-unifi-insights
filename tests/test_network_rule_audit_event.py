@@ -257,9 +257,9 @@ async def test_setup_entry_adds_rule_change_event_without_protect(
     entry = _entry(hass)
     entry.runtime_data = MagicMock(coordinator=mock_coordinator)
     listeners: list[Any] = []
-    mock_coordinator.async_add_listener.side_effect = lambda cb: listeners.append(
-        cb
-    ) or (lambda: None)
+    mock_coordinator.async_add_listener.side_effect = lambda cb: (
+        listeners.append(cb) or (lambda: None)
+    )
     added_entities: list[Any] = []
 
     def _async_add(ents: list[Any]) -> None:
@@ -306,3 +306,72 @@ async def test_two_changes_in_one_refresh_are_two_state_changes(
     assert [s.attributes["rule_id"] for s in states] == ["pf1", "pf2"]
     assert states[0].state != states[1].state
     assert "leaked" not in states[1].attributes
+
+
+async def test_event_data_coerces_unexpected_value_types(
+    hass: HomeAssistant, mock_coordinator: MagicMock
+) -> None:
+    """Non-string field names, non-bool enabled, and non-string rule_name are coerced."""
+    entity = UnifiInsightsNetworkRuleChangeEvent(
+        mock_coordinator, "site1", unique_id=_UNIQUE_ID
+    )
+    platform = MockEntityPlatform(hass, domain="event", platform_name=DOMAIN)
+    await platform.async_add_entities([entity])
+    await hass.async_block_till_done()
+
+    mock_coordinator.data["rule_changes"] = {
+        "site1": [
+            _change(
+                1,
+                "modified",
+                changed_fields=["enabled", {"fwd": "192.0.2.9"}, 5],
+                enabled="true",
+                rule_name={"x": 1},
+            )
+        ]
+    }
+    entity._handle_coordinator_update()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity.entity_id)
+    assert state is not None
+    assert state.attributes["changed_fields"] == ["enabled"]
+    assert state.attributes["enabled"] is None
+    assert state.attributes["rule_name"] is None
+    assert "192.0.2.9" not in str(state.attributes)
+
+
+async def test_unavailable_round_trip_writes_no_new_event(
+    hass: HomeAssistant, mock_coordinator: MagicMock, freezer: Any
+) -> None:
+    """An entity becoming unavailable and returning does not fire a new event."""
+    freezer.move_to("2026-01-01 00:00:00+00:00")
+    entity = UnifiInsightsNetworkRuleChangeEvent(
+        mock_coordinator, "site1", unique_id=_UNIQUE_ID
+    )
+    entity._trigger_event = MagicMock(wraps=entity._trigger_event)
+    platform = MockEntityPlatform(hass, domain="event", platform_name=DOMAIN)
+    await platform.async_add_entities([entity])
+    await hass.async_block_till_done()
+
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    # Fire one change
+    mock_coordinator.data["rule_changes"] = {"site1": [_change(1)]}
+    entity._handle_coordinator_update()
+    await hass.async_block_till_done()
+
+    # Make unavailable
+    mock_coordinator.config_available = False
+    entity._handle_coordinator_update()
+    await hass.async_block_till_done()
+
+    # Make available again
+    mock_coordinator.config_available = True
+    entity._handle_coordinator_update()
+    await hass.async_block_till_done()
+
+    states = [e.data["new_state"] for e in events]
+    ts = states[0].state
+    assert [s.state for s in states] == [ts, "unavailable", ts]
+    entity._trigger_event.assert_called_once()

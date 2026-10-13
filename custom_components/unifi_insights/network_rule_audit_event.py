@@ -15,6 +15,7 @@ from .entity import build_site_device_info
 from .helpers import async_migrate_site_entity
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
@@ -34,6 +35,26 @@ EVENT_ATTRIBUTE_KEYS: tuple[str, ...] = (
     "enabled",
     "changed_fields",
 )
+
+
+def _event_data(change: Mapping[str, Any]) -> dict[str, Any]:
+    """Coerce event data from a change record to documented types."""
+    data: dict[str, Any] = {}
+    for key in EVENT_ATTRIBUTE_KEYS:
+        val = change.get(key)
+        if key == "changed_fields":
+            data[key] = (
+                [field for field in val if isinstance(field, str)]
+                if isinstance(val, list)
+                else []
+            )
+        elif key == "enabled":
+            data[key] = val if isinstance(val, bool) else None
+        elif key == "rule_name":
+            data[key] = val if isinstance(val, str) else None
+        else:
+            data[key] = val
+    return data
 
 
 class UnifiInsightsNetworkRuleChangeEvent(
@@ -91,7 +112,7 @@ class UnifiInsightsNetworkRuleChangeEvent(
             self._last_sequence = change["sequence"]
             self._trigger_event(
                 change["change_type"],
-                {key: change.get(key) for key in EVENT_ATTRIBUTE_KEYS},
+                _event_data(change),
             )
             self.async_write_ha_state()
         self.async_write_ha_state()
