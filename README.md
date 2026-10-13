@@ -25,7 +25,7 @@ Monitor and control your UniFi system from Home Assistant: UniFi Network, UniFi 
 
 ## Overview
 
-UniFi Insights is a custom integration that you install from HACS. It connects with an API key, not a user name and password. It mainly uses the official UniFi APIs that Ubiquiti publishes at [developer.ui.com](https://developer.ui.com/). For some UniFi Network features that the official API doesn't cover yet, such as Wi-Fi QR codes, VPN, route, port forward and traffic rule switches, and internet traffic history, it uses the console's classic Network endpoints with the same API key.
+UniFi Insights is a custom integration that you install from HACS. It connects with an API key, not a user name and password. It mainly uses the official UniFi APIs that Ubiquiti publishes at [developer.ui.com](https://developer.ui.com/). For some UniFi Network features that the official API doesn't cover yet, such as Wi-Fi QR codes, VPN, route, port forward, traffic rule, NAT rule and static route switches, and internet traffic history, it uses the console's classic Network endpoints with the same API key.
 
 - **One integration for your UniFi system.** One console entry covers that console's Network, Protect and InnerSpace applications. A cloud API key adds Mobility and Site Manager data. ISPs can add a Carrier Fabric entry.
 - **API key setup, local or remote.** Connect to a console on your network, or choose any console on your UniFi account through UniFi Cloud. You don't need a local user account.
@@ -113,7 +113,7 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 - **Storage:** used percentage, used space and total space for each filesystem a console reports (for example eMMC and backup storage on a UDM Pro SE), and a Storage Nearly Full alert. Per-drive SMART, temperature, RAID and Drive/UNAS data require supported API fields. Protect NVR aggregate diagnostics are conditional on reported storage fields; the current official `/v1/nvrs` response lacks them.
 - **Internet and WAN:** gateway and per-WAN connection status, WAN IP address, site-to-site VPN tunnel status, and internet download and upload totals for the last hour, day, week and month.
 - **Clients:** client counts per site, device and Wi-Fi network; optional presence tracking; allow/block switches and reconnect buttons, and Wake-on-LAN buttons for wired clients.
-- **Controls:** switches for Wi-Fi networks, firewall policies, policy-based routes, VPN clients, port forwards and traffic rules; device restart buttons; QR code images to join each Wi-Fi network.
+- **Controls:** switches for Wi-Fi networks, firewall policies, policy-based routes, VPN clients, port forwards, traffic rules, NAT rules and static routes; device restart buttons; QR code images to join each Wi-Fi network.
 - **Firmware:** update entities show the installed firmware and whether a newer version is available. They don't install firmware. Use the UniFi app for that.
 - **Guest access:** authorize guests and create or delete hotspot vouchers with actions.
 
@@ -148,6 +148,8 @@ Carrier Fabric entries have their own options. See [Carrier Fabric setup](#carri
 | _VPN client name_                                   | Switch         | Turn a VPN client (WireGuard, OpenVPN, Privado VPN) on or off                          |
 | Port forward _rule name_                            | Switch         | Turn a port forwarding rule on or off                                                  |
 | Traffic rule _rule description_                     | Switch         | Turn a traffic rule on or off                                                          |
+| NAT rule _rule description_                         | Switch         | Turn a custom NAT rule on or off (console-managed rules get no switch)                 |
+| Static route _route name_                           | Switch         | Turn a static route on or off, disabled by default                                     |
 | _Outlet name_                                       | Switch         | Turn a PDU outlet on or off                                                            |
 | _Outlet name_ Power Cycle                           | Switch         | Automatic modem power cycling for an outlet, disabled by default                       |
 | _Client name_ Allow                                 | Switch         | Block or allow a client (needs **Enable Client Control**)                              |
