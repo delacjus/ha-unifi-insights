@@ -265,8 +265,9 @@ def test_secure_vlan_triggers_on_new_entity_registry_entries() -> None:
 
 
 def test_secure_vlan_description_states_the_prerequisites_and_limits() -> None:
-    """Tracking is opt-in, the VLAN comes from the IP, and the first run is loud."""
-    description = _load(SECURE_VLAN)["blueprint"]["description"].lower()
+    """Tracking is opt-in, the VLAN comes from the IP, and the burst has a limit."""
+    data = _load(SECURE_VLAN)
+    description = " ".join(data["blueprint"]["description"].lower().split())
 
     assert "client tracking" in description
     assert "opt-in" in description or "opt in" in description
@@ -274,6 +275,15 @@ def test_secure_vlan_description_states_the_prerequisites_and_limits() -> None:
     assert "inferred" in description
     assert "first time" in description
     assert "many" in description
+
+    # ``mode: parallel`` drops every run beyond ``max``: the text must say so
+    # and name the limit that is really configured.
+    sentences = re.split(r"(?<=[.!?])\s+", description)
+    dropped = [sentence for sentence in sentences if "dropped" in sentence]
+    assert dropped, "the description must say that runs beyond the limit are dropped"
+    assert any(str(data["max"]) in sentence for sentence in dropped), (
+        f"the sentence about dropped runs must name the limit ({data['max']})"
+    )
 
 
 def test_secure_vlan_exposes_name_entity_and_ip_but_never_the_mac() -> None:
