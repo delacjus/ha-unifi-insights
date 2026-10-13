@@ -1,0 +1,98 @@
+blueprint:
+  name: UniFi Insights - Secure VLAN new client alert
+  description: |-
+    Run your actions when a new client appears on a secure VLAN.
+
+    **Prerequisite - client tracking is opt-in.** UniFi Insights only creates a
+    device tracker for each client when you turn on **Track WiFi Clients** or
+    **Track Wired Clients** in the integration options. This blueprint reacts
+    to the creation of a new tracker, so it does nothing until client tracking
+    is on. Enabling client tracking for the first time creates many trackers
+    at once, and every one that matches your secure prefixes runs the actions.
+    Enable tracking first and add this automation afterwards if you do not
+    want that burst.
+
+    **How the VLAN is found:** trackers carry no VLAN or network name, so the
+    VLAN is inferred from the client IP address. Each secure VLAN needs its own
+    IP prefix, such as `10.0.50.`, and a client counts as being on it when its
+    IP address starts with that prefix.
+
+    The actions can use `client_entity` (the tracker entity ID), `client_name`
+    and `client_ip`. The MAC address is not exposed.
+  domain: automation
+  homeassistant:
+    min_version: "2026.6.0"
+  input:
+    secure_prefixes:
+      name: Secure subnet prefixes
+      description: >-
+        IP address prefixes of the secure VLANs. Write each one with its
+        trailing dot, for example `10.0.50.`. Add one entry per VLAN.
+      selector:
+        text:
+          multiple: true
+    allowed_trackers:
+      name: Allowed trackers (optional)
+      description: >-
+        Known clients that should not alert, even on a secure prefix.
+      default: []
+      selector:
+        entity:
+          integration: unifi_insights
+          domain: device_tracker
+          multiple: true
+    actions:
+      name: Actions
+      description: >-
+        What to do when a new client appears on a secure VLAN, for example send
+        a notification.
+      selector:
+        action: {}
+
+mode: parallel
+max: 100
+
+variables:
+  secure_prefixes: !input secure_prefixes
+  allowed_trackers: !input allowed_trackers
+
+triggers:
+  - trigger: event
+    event_type: entity_registry_updated
+    event_data:
+      action: create
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.event.data.entity_id.startswith('device_tracker.') }}
+
+actions:
+  # The registry entry exists before the entity has a state, so wait for it.
+  - wait_template: "{{ states[trigger.event.data.entity_id] is not none }}"
+    timeout: "00:00:10"
+    continue_on_timeout: false
+  - condition: template
+    value_template: >-
+      {{ trigger.event.data.entity_id in integration_entities('unifi_insights') }}
+  - condition: template
+    value_template: |-
+      {% set ip = state_attr(trigger.event.data.entity_id, 'ip') %}
+      {% set ns = namespace(secure=false) %}
+      {% for prefix in secure_prefixes %}
+        {% set wanted = prefix | string | trim %}
+        {% if wanted and ip is string and ip.startswith(wanted) %}
+          {% set ns.secure = true %}
+        {% endif %}
+      {% endfor %}
+      {{ ns.secure }}
+  - condition: template
+    value_template: >-
+      {{ trigger.event.data.entity_id not in allowed_trackers }}
+  - variables:
+      client_entity: "{{ trigger.event.data.entity_id }}"
+      client_name: >-
+        {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
+           or trigger.event.data.entity_id }}
+      client_ip: "{{ state_attr(trigger.event.data.entity_id, 'ip') }}"
+  - sequence: !input actions
