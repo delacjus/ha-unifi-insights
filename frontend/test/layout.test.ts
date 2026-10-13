@@ -23,7 +23,7 @@ const model = buildModel(fixtureSnapshot(), {
 
 describe("layoutModel", () => {
     it("places every visual, one depth step per level", () => {
-        const layout = layoutModel(model, "comfortable", "vertical");
+        const layout = layoutModel(model, "comfortable", "vertical", "tree");
         expect([...layout.positions.keys()].sort()).toEqual(
             [...model.visuals.keys()].sort(),
         );
@@ -39,7 +39,7 @@ describe("layoutModel", () => {
     });
 
     it("swaps axes when horizontal and tightens when compact", () => {
-        const horizontal = layoutModel(model, "compact", "horizontal");
+        const horizontal = layoutModel(model, "compact", "horizontal", "tree");
         expect(horizontal.positions.get("dev:uuid-core")).toMatchObject({
             x: SPACING.compact.depth,
         });
@@ -53,7 +53,8 @@ describe("layoutModel", () => {
             toggledGroups: new Set(),
         });
         expect(
-            layoutModel(empty, "comfortable", "vertical").positions.size,
+            layoutModel(empty, "comfortable", "vertical", "tree").positions
+                .size,
         ).toBe(0);
     });
 });
@@ -203,10 +204,9 @@ describe("layoutTiered", () => {
         expect(layout.bounds.maxY).toBe(3 * depth);
     });
 
-    it("orders a row by the position of the parents, not by model order", () => {
-        // Model order puts "Aaa"'s group (parent: Beta, x > 0) before "Bbb"'s
-        // (parent: the AP under Alpha, x < 0); the layout must swap them so
-        // the two edges do not cross.
+    it("keeps the forest pre-order across sibling branches", () => {
+        // Alpha's complete subtree precedes Beta's subtree, regardless of
+        // the client names or the iteration order of the visuals map.
         const layout = layoutTiered(
             modelOf(
                 [
@@ -246,7 +246,7 @@ describe("layoutTiered", () => {
         expect(at("group:unconnected").x).toBeGreaterThan(
             at("group:dev:uuid-u1").x,
         );
-        expect(at("group:dev:uuid-ap").x).toBeLessThan(
+        expect(at("group:dev:uuid-ap").x).toBeGreaterThan(
             at("group:dev:uuid-u1").x,
         );
     });
@@ -332,4 +332,110 @@ describe("viewport maths", () => {
             ["in"],
         );
     });
+});
+
+describe("plan v3 tiered layout", () => {
+    it("selects the tiered algorithm through layoutModel", () => {
+        expect(layoutModel(model, "comfortable", "vertical", "tiered")).toEqual(
+            layoutTiered(model, "comfortable", "vertical"),
+        );
+    });
+
+    it("orders rows by forest pre-order across branches of different depths", () => {
+        const forest = modelOf(
+            [
+                device("gw", "gateway", "Gateway"),
+                device("alpha", "switch", "Alpha"),
+                device("beta", "switch", "Beta"),
+                device("ap1", "access_point", "AP 1"),
+                device("ap2", "access_point", "AP 2"),
+                device("other", "other", "Other"),
+                client("a", "Client A"),
+                client("b", "Client B"),
+            ],
+            [
+                uplink("dev:alpha", "dev:gw"),
+                uplink("dev:beta", "dev:gw"),
+                uplink("dev:ap1", "dev:alpha"),
+                uplink("dev:ap2", "dev:ap1"),
+                uplink("dev:other", "dev:beta"),
+                uplink("cli:a", "dev:ap2"),
+                uplink("cli:b", "dev:other"),
+            ],
+        );
+        const layout = layoutTiered(forest, "comfortable", "vertical");
+        const left = layout.positions.get("group:dev:ap2")!;
+        const right = layout.positions.get("group:dev:other")!;
+        expect(left.y).toBe(right.y);
+        expect(left.x).toBeLessThan(right.x);
+        expect(right.x - left.x).toBe(SPACING.comfortable.breadth);
+    });
+
+    it("maps unknown roles to other infrastructure", () => {
+        const unknown = modelOf(
+            [
+                device("gw", "gateway", "Gateway"),
+                device("ap", "access_point", "AP"),
+                device("unknown", "other", "Future device"),
+                client("c", "Client"),
+            ],
+            [
+                uplink("dev:ap", "dev:gw"),
+                uplink("dev:unknown", "dev:gw"),
+                uplink("cli:c", "dev:unknown"),
+            ],
+        );
+        const visual = unknown.visuals.get("dev:unknown")!;
+        if (visual.type === "group") throw new Error("expected infrastructure");
+        visual.node.kind = "future_kind" as NodeKind;
+        const layout = layoutTiered(unknown, "comfortable", "vertical");
+        expect(layout.positions.get("dev:unknown")!.y).toBe(
+            2 * SPACING.comfortable.depth,
+        );
+        expect(layout.positions.get("group:dev:unknown")!.y).toBe(
+            3 * SPACING.comfortable.depth,
+        );
+    });
+
+    it("positions every root at sub-row zero and centres all rows on the widest", () => {
+        const forest = modelOf(
+            [
+                device("a", "switch", "Alpha"),
+                device("b", "switch", "Beta"),
+                device("ap", "access_point", "AP"),
+            ],
+            [uplink("dev:ap", "dev:a")],
+        );
+        const layout = layoutTiered(forest, "comfortable", "vertical");
+        expect(layout.positions.size).toBe(forest.visuals.size);
+        expect(layout.positions.get("dev:a")).toEqual({
+            x: -SPACING.comfortable.breadth / 2,
+            y: 0,
+        });
+        expect(layout.positions.get("dev:b")).toEqual({
+            x: SPACING.comfortable.breadth / 2,
+            y: 0,
+        });
+        expect(layout.positions.get("dev:ap")).toEqual({
+            x: 0,
+            y: SPACING.comfortable.depth,
+        });
+        expect(layout.bounds).toEqual({
+            minX: -66,
+            maxX: 66,
+            minY: 0,
+            maxY: 150,
+        });
+    });
+
+    it.each(["tree", "tiered"] as const)(
+        "returns only positions and bounds for %s",
+        (mode) => {
+            expect(
+                Object.keys(
+                    layoutModel(model, "comfortable", "vertical", mode),
+                ).sort(),
+            ).toEqual(["bounds", "positions"]);
+        },
+    );
 });

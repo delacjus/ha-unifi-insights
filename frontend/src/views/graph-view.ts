@@ -33,7 +33,6 @@ import {
     CULL_THRESHOLD,
     fitTransform,
     layoutModel,
-    layoutTiered,
     visibleIds,
     type Layout,
     type Point,
@@ -171,6 +170,7 @@ export class UitGraphView extends LitElement {
     }
 
     protected override willUpdate(changed: PropertyValues<this>): void {
+        if (changed.has("layoutMode")) this.fitted = false;
         if (!this.model) return;
         if (
             changed.has("model") ||
@@ -178,9 +178,12 @@ export class UitGraphView extends LitElement {
             changed.has("orientation") ||
             changed.has("layoutMode")
         ) {
-            const arrange =
-                this.layoutMode === "tiered" ? layoutTiered : layoutModel;
-            const next = arrange(this.model, this.density, this.orientation);
+            const next = layoutModel(
+                this.model,
+                this.density,
+                this.orientation,
+                this.layoutMode,
+            );
             const previous = this.layout;
             this.entering = new Set(
                 previous

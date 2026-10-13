@@ -131,6 +131,28 @@ describe("WCAG 2.2 AA (axe-core)", () => {
             expect(
                 menu.shadowRoot!.querySelectorAll('[role="menuitem"]'),
             ).toHaveLength(4);
+            const button = menu.shadowRoot!.querySelector("button.trigger")!;
+            const popup = menu.shadowRoot!.querySelector('[role="menu"]')!;
+            expect(button.getAttribute("aria-haspopup")).toBe("menu");
+            expect(button.getAttribute("aria-expanded")).toBe("true");
+            expect(button.getAttribute("aria-controls")).toBe(popup.id);
+            expect(button.getAttribute("aria-label")).toBe("Actions");
+            expect(popup.getAttribute("aria-label")).toBe("Actions");
+            expect(
+                [...menu.shadowRoot!.querySelectorAll('[role="menuitem"]')].map(
+                    (item) => item.textContent?.trim(),
+                ),
+            ).toEqual([
+                "Copy IP address",
+                "Copy MAC address",
+                "Open device",
+                "Open entity",
+            ]);
+            expect(await audit(el)).toEqual([]);
+            menu.hide();
+            await settle(menu);
+            expect(button.getAttribute("aria-expanded")).toBe("false");
+            expect(menu.shadowRoot!.querySelector('[role="menu"]')).toBeNull();
             expect(await audit(el)).toEqual([]);
         });
 

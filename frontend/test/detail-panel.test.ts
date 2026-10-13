@@ -382,6 +382,9 @@ describe("node actions", () => {
         itemOf(menu, "copy_mac").click();
         await settleAll(el);
         expect(writeText).toHaveBeenCalledExactlyOnceWith("aa:bb:cc:dd:ee:ff");
+        expect(status(el).textContent).toContain(
+            "MAC address copied to the clipboard.",
+        );
     });
 
     it("shows the value as selectable text when copying fails", async () => {
