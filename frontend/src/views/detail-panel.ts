@@ -78,6 +78,13 @@ export class UitDetailPanel extends LitElement {
     /** Whether the current press began on the backdrop rather than inside the dialog. */
     private pressedBackdrop = false;
     private menuPending = false;
+    /**
+     * What an address shown or copied for may belong to: entry, site, selected
+     * node and the user's rights. Each change starts a new generation, so a
+     * copy that started earlier can no longer report into the new one.
+     */
+    private copyScope: string | undefined;
+    private copyGeneration = 0;
     private readonly details = new NodeDetailsFetcher(() =>
         this.requestUpdate(),
     );
@@ -97,8 +104,16 @@ export class UitDetailPanel extends LitElement {
     }
 
     protected override willUpdate(changed: PropertyValues<this>): void {
-        if (changed.has("selectedId")) {
-            this.memberQuery = "";
+        if (changed.has("selectedId")) this.memberQuery = "";
+        const scope = JSON.stringify([
+            this.model?.snapshot.entry_id,
+            this.model?.snapshot.site_id,
+            this.selectedId,
+            isAdmin(this.hass),
+        ]);
+        if (scope !== this.copyScope) {
+            this.copyScope = scope;
+            this.copyGeneration++;
             this.copyStatus = undefined;
         }
         if (this.selectedId === undefined) this.modal = false;
@@ -278,8 +293,13 @@ export class UitDetailPanel extends LitElement {
      */
     private statusRegion(localize: LocalizeFunc): TemplateResult {
         const failed = this.details.state;
+        // A value to copy by hand is an address: only an administrator sees one.
+        const copied =
+            this.copyStatus?.value === undefined || isAdmin(this.hass)
+                ? this.copyStatus
+                : undefined;
         const status: Status | undefined =
-            this.copyStatus ??
+            copied ??
             (failed.status === "error" ? errorNotice(failed.error) : undefined);
         return html`<div
             class="status ${status ? "has-message" : ""}"
@@ -324,13 +344,13 @@ export class UitDetailPanel extends LitElement {
     private async copy(value: string | undefined): Promise<void> {
         if (!value) return;
         this.copyStatus = undefined;
-        const selected = this.selectedId;
+        const generation = this.copyGeneration;
         // Inside an open modal dialog only its own content can be selected.
         const ok = await copyText(
             value,
             this.renderRoot.querySelector("dialog") ?? this.renderRoot,
         );
-        if (this.selectedId !== selected) return;
+        if (generation !== this.copyGeneration) return;
         this.copyStatus = ok
             ? { key: "menu.copied" }
             : { key: "menu.copy_failed", value };

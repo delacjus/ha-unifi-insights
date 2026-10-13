@@ -39,6 +39,7 @@ import {
 } from "./data/state";
 import { TopologySubscription, backoffDelay } from "./data/subscription";
 import {
+    isAdmin,
     navigate,
     toWsError,
     type Connection,
@@ -256,7 +257,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
         this.clearSourcesRetry();
     }
 
-    /** HA replaces `hass` on every entity state change; only its connection and language matter here. */
+    /** HA replaces `hass` on every entity state change; only its connection, language and the user's admin right matter here. */
     protected override shouldUpdate(changed: PropertyValues<this>): boolean {
         if (changed.size !== 1 || !changed.has("hass")) return true;
         const previous = changed.get("hass") as HomeAssistant | undefined;
@@ -266,7 +267,9 @@ export class UnifiInsightsTopologyCard extends LitElement {
             !hass ||
             previous.connection !== hass.connection ||
             (previous.locale?.language ?? previous.language) !==
-                (hass.locale?.language ?? hass.language)
+                (hass.locale?.language ?? hass.language) ||
+            // The node menu offers addresses to administrators only.
+            isAdmin(previous) !== isAdmin(hass)
         );
     }
 

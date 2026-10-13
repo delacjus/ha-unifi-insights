@@ -36,6 +36,18 @@ const ACTION_ICONS: Record<NodeAction, string> = {
 
 let menuCount = 0;
 
+/** Elements a press focuses: native controls and anything with a tabindex. */
+const FOCUSABLE_ON_PRESS =
+    'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable]:not([contenteditable="false"])';
+
+function takesFocusOnPress(target: EventTarget): boolean {
+    return (
+        target instanceof Element &&
+        target.matches(FOCUSABLE_ON_PRESS) &&
+        !target.matches(":disabled")
+    );
+}
+
 /**
  * A button that opens a keyboard-operable menu of node actions.
  *
@@ -120,11 +132,11 @@ export class UitNodeMenu extends LitElement {
         items[where === "first" ? 0 : items.length - 1]?.focus();
     }
 
-    /** Close the menu; focus goes back to the button unless the pointer or Tab took it elsewhere. */
-    hide(restoreFocus = true): void {
+    /** Close the menu. Whichever way it closes, focus goes back to the button. */
+    hide(): void {
         if (!this.open) return;
         this.open = false;
-        if (restoreFocus) this.trigger?.focus();
+        this.trigger?.focus();
     }
 
     protected override willUpdate(): void {
@@ -159,8 +171,35 @@ export class UitNodeMenu extends LitElement {
     }
 
     private readonly onOutsidePress = (e: Event): void => {
-        if (!e.composedPath().includes(this)) this.hide(false);
+        const path = e.composedPath();
+        if (path.includes(this)) return;
+        this.hide();
+        // A press on a control focuses that control, as it should. Any other
+        // press leaves focus on nothing (or on a container such as the dialog),
+        // so it is put back on the button once the press has been handled.
+        if (!path.some(takesFocusOnPress)) this.keepFocusOnButtonAfterPress();
     };
+
+    /**
+     * The browser moves focus as part of the press, after the handler above.
+     * Touch sends its mouse events once the pointer is released, so the
+     * button gets focus again then as well.
+     */
+    private keepFocusOnButtonAfterPress(): void {
+        const focusButton = (): void => {
+            setTimeout(() => {
+                if (!this.open) this.trigger?.focus();
+            }, 0);
+        };
+        focusButton();
+        const released = (): void => {
+            document.removeEventListener("pointerup", released, true);
+            document.removeEventListener("pointercancel", released, true);
+            focusButton();
+        };
+        document.addEventListener("pointerup", released, true);
+        document.addEventListener("pointercancel", released, true);
+    }
 
     private onTriggerKeydown(e: KeyboardEvent): void {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -200,8 +239,8 @@ export class UitNodeMenu extends LitElement {
                 this.hide();
                 return;
             case "Tab":
-                // Leave the menu and let focus move on naturally.
-                this.hide(false);
+                // Focus passes through the button, then the key moves it on.
+                this.hide();
                 return;
             default:
                 return;
