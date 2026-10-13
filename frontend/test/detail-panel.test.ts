@@ -4,7 +4,7 @@ import type { HomeAssistant } from "../src/ha-types";
 import { makeLocalize } from "../src/localize";
 import { UitDetailPanel } from "../src/views/detail-panel";
 import type { UitNodeMenu } from "../src/views/node-menu";
-import { cleanup, fixtureModel, mount } from "./helpers";
+import { cleanup, fixtureModel, fixtureSnapshot, mount } from "./helpers";
 
 const localize = makeLocalize("en");
 afterEach(cleanup);
@@ -502,6 +502,156 @@ describe("node actions", () => {
         finish();
         await settleAll(el);
         expect(status(el).textContent?.trim()).toBe("");
+    });
+
+    describe("a copy that fails or is still running", () => {
+        const ADDRESS = "192.0.2.10";
+        const denied = () => new DOMException("denied", "NotAllowedError");
+        /** A clipboard whose write stays pending until the test settles it. */
+        function pendingClipboard() {
+            const control = { fail: (): void => undefined };
+            stubClipboard(
+                () =>
+                    new Promise<void>((_, reject) => {
+                        control.fail = () => reject(denied());
+                    }),
+            );
+            return control;
+        }
+        const startCopy = async (el: UitDetailPanel) => {
+            const menu = await openMenu(el);
+            itemOf(menu, "copy_ip").click();
+            await settleAll(el);
+        };
+        const showsAddress = (el: UitDetailPanel) =>
+            el.shadowRoot!.textContent!.includes(ADDRESS);
+
+        it("shows the address of a failed copy for selecting, to an administrator", async () => {
+            stubClipboard(async () => {
+                throw denied();
+            });
+            const el = await adminPanel("dev:uuid-core");
+            await startCopy(el);
+            expect(status(el).querySelector(".manual")!.textContent).toBe(
+                ADDRESS,
+            );
+        });
+
+        it("removes the address of a failed copy when administrator access is lost", async () => {
+            stubClipboard(async () => {
+                throw denied();
+            });
+            const callWS = answering({ "dev:uuid-core": DETAILS });
+            const el = await adminPanel("dev:uuid-core", callWS);
+            await startCopy(el);
+            expect(showsAddress(el)).toBe(true);
+
+            el.hass = hassOf(false, callWS);
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+            expect(status(el).textContent?.trim()).toBe("");
+        });
+
+        it("does not bring the address back when administrator access returns", async () => {
+            stubClipboard(async () => {
+                throw denied();
+            });
+            const callWS = answering({ "dev:uuid-core": DETAILS });
+            const el = await adminPanel("dev:uuid-core", callWS);
+            await startCopy(el);
+            el.hass = hassOf(false, callWS);
+            await settleAll(el);
+            el.hass = hassOf(true, callWS);
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+            expect(status(el).textContent?.trim()).toBe("");
+        });
+
+        it("drops a copy that finishes after administrator access was lost", async () => {
+            const clipboard = pendingClipboard();
+            const callWS = answering({ "dev:uuid-core": DETAILS });
+            const el = await adminPanel("dev:uuid-core", callWS);
+            await startCopy(el);
+            el.hass = hassOf(false, callWS);
+            await settleAll(el);
+
+            clipboard.fail();
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+            expect(status(el).textContent?.trim()).toBe("");
+        });
+
+        it("never renders an address for a user who is not an administrator", async () => {
+            const el = await adminPanel("dev:uuid-core");
+            await settleAll(el);
+            el.hass = hassOf(false, answering({}));
+            await settleAll(el);
+            // Set after the access change, so only the rendering can stop it.
+            el.copyStatus = { key: "menu.copy_failed", value: ADDRESS };
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+        });
+
+        it("drops a late result after the site changed and the same node was selected again", async () => {
+            const clipboard = pendingClipboard();
+            const el = await adminPanel("dev:uuid-core");
+            await startCopy(el);
+
+            el.model = fixtureModel({}, fixtureSnapshot({ site_id: "site-2" }));
+            await settleAll(el);
+            clipboard.fail();
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+            expect(status(el).textContent?.trim()).toBe("");
+        });
+
+        it("drops a late result after the entry changed", async () => {
+            const clipboard = pendingClipboard();
+            const el = await adminPanel("dev:uuid-core");
+            await startCopy(el);
+            el.model = fixtureModel(
+                {},
+                fixtureSnapshot({ entry_id: "entry-2" }),
+            );
+            await settleAll(el);
+            clipboard.fail();
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+        });
+
+        it("drops a late result after the selection ended and the same node was selected again", async () => {
+            const clipboard = pendingClipboard();
+            const el = await adminPanel("dev:uuid-core");
+            await startCopy(el);
+
+            el.selectedId = undefined;
+            await settleAll(el);
+            el.selectedId = "dev:uuid-core";
+            await settleAll(el);
+            clipboard.fail();
+            await settleAll(el);
+            expect(showsAddress(el)).toBe(false);
+            expect(status(el).textContent?.trim()).toBe("");
+        });
+
+        it("still reports a copy that finishes while a live update of the same site arrives", async () => {
+            let finish!: () => void;
+            stubClipboard(
+                () =>
+                    new Promise<void>((resolve) => {
+                        finish = resolve;
+                    }),
+            );
+            const el = await adminPanel("dev:uuid-core");
+            await startCopy(el);
+            el.model = fixtureModel();
+            await settleAll(el);
+            finish();
+            await settleAll(el);
+            expect(status(el).textContent).toContain(
+                "Copied to the clipboard.",
+            );
+        });
     });
 
     it("asks Home Assistant to open the resolved entity", async () => {

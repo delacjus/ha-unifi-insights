@@ -379,6 +379,25 @@ describe("node action menu", () => {
         expect(panelOf(el).hass).toBe(fake.hass);
     });
 
+    it("hands the panel a changed administrator flag even though nothing else changed", async () => {
+        const { el, fake } = await loaded();
+        dispatch(el, "uit-activate", "dev:uuid-core");
+        await settle(el);
+        await settle(panelOf(el));
+        expect(menuOf(el)!.actions).toContain("copy_ip");
+
+        // Same connection and language: only the user's rights differ.
+        const demoted = {
+            ...fake.hass,
+            user: { is_admin: false },
+        } as typeof fake.hass;
+        el.hass = demoted;
+        await settle(el);
+        await settle(panelOf(el));
+        expect(panelOf(el).hass).toBe(demoted);
+        expect(menuOf(el)!.actions).toEqual(["open_device"]);
+    });
+
     it("selects the node and opens its menu on the first item after a context click", async () => {
         const { el } = await loaded();
         contextClick(nodeIn(el, "dev:uuid-core"));
