@@ -54,7 +54,8 @@ AUTOMATION_ENTITY_ID = "automation.blueprint_under_test"
 WAIT_TIMEOUT_SECONDS = 10.0
 STEP_SETTLE_SECONDS = 0.02
 
-# A Home Assistant log wording change makes these waits time out with a readable message.
+# A Home Assistant log wording change makes these waits time out with a readable
+# message.
 BLUEPRINT_DELAY_LOG = "Executing step delay 0:00:10"
 BLUEPRINT_CONDITION_ABORT_LOG = "Conditions not met, aborting automation"
 BLUEPRINT_REGISTRY_CREATE_LOG = (
