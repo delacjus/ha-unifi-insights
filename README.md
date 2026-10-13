@@ -263,15 +263,16 @@ UniFi has no Wake-on-LAN function, so the **Wake** buttons send the packet from 
 
 ### Network actions
 
-| Action                            | Description                                   |
-| --------------------------------- | --------------------------------------------- |
-| `unifi_insights.restart_device`   | Restart a network device                      |
-| `unifi_insights.authorize_guest`  | Authorize a guest client on a hotspot network |
-| `unifi_insights.reconnect_client` | Reconnect a wireless client to Wi-Fi          |
-| `unifi_insights.remove_clients`   | Remove short-lived unnamed clients from sites |
-| `unifi_insights.generate_voucher` | Create one or more hotspot vouchers           |
-| `unifi_insights.delete_voucher`   | Delete a hotspot voucher                      |
-| `unifi_insights.power_cycle_port` | Power cycle a switch port with PoE enabled    |
+| Action                                | Description                                   |
+| ------------------------------------- | --------------------------------------------- |
+| `unifi_insights.restart_device`       | Restart a network device                      |
+| `unifi_insights.authorize_guest`      | Authorize a guest client on a hotspot network |
+| `unifi_insights.reconnect_client`     | Reconnect a wireless client to Wi-Fi          |
+| `unifi_insights.remove_clients`       | Remove short-lived unnamed clients from sites |
+| `unifi_insights.generate_voucher`     | Create one or more hotspot vouchers           |
+| `unifi_insights.delete_voucher`       | Delete a hotspot voucher                      |
+| `unifi_insights.power_cycle_port`     | Power cycle a switch port with PoE enabled    |
+| `unifi_insights.export_network_rules` | Export the network rules of a console         |
 
 ```yaml
 # Restart a network device
@@ -306,6 +307,19 @@ data:
   device_id: "device-id"
   port_idx: 5
 ```
+
+```yaml
+# Export the network rules of a console (admin only; returns data, writes no file)
+action: unifi_insights.export_network_rules
+data:
+  redact: true
+response_variable: rules
+```
+
+The export is read from the console when the action runs. Each rule type of each site has a `status` of
+`ok`, `unsupported` or `failed`, so a partial backup is visible. With `redact: true` (the default) addresses,
+domains, MAC addresses and site identifiers are removed, as in diagnostics. Set `redact: false` for a full
+backup and store it like a secret. There is no import action: restore rules in the UniFi Network app.
 
 `authorize_guest` doesn't send a duration or limits yet, so the `duration_minutes` and limit fields are ignored and a warning is logged. The guest network's default access time and limits from UniFi apply.
 
