@@ -27,7 +27,6 @@ from .coordinators.carrier_fabric import (
     SERVICE_PLAN_ALLOWLIST,
     SUBSCRIBER_ALLOWLIST,
 )
-from .coordinators.rule_audit import RULE_FAMILIES
 from .innerspace_transforms import build_innerspace_diagnostics_summary
 
 if TYPE_CHECKING:
@@ -184,8 +183,8 @@ POLICY_BASED_ROUTE_TO_REDACT = TO_REDACT | {
     "next_hop",
 }
 
-# Redaction key set of each rule section, shared by diagnostics and the
-# redacted rule export so the two can never disagree.
+# Redaction key set of each rule section of the coordinator data. The redacted
+# rule export does not use these: it keeps an allow-list (RULE_EXPORT_SAFE_KEYS).
 RULE_SECTION_TO_REDACT: dict[str, set[str]] = {
     "firewall_rules": FIREWALL_RULE_TO_REDACT,
     "policy_based_routes": POLICY_BASED_ROUTE_TO_REDACT,
@@ -347,30 +346,191 @@ def _redact_coordinator_data(data: Any) -> Any:
     return redacted
 
 
+# The redacted rule export keeps only what is listed here and replaces the
+# rest, so a key nobody has heard of cannot leak. Per rule type, the top-level
+# keys that are kept; the keys are the console's own spellings, as
+# ``model_dump(by_alias=True)`` emits them, and both spellings are listed where
+# a model can emit either. A kept key's value must still pass
+# _safe_export_value. Names, descriptions, addresses, domains, interfaces and
+# network, client, group and zone references are deliberately not here.
+RULE_EXPORT_SAFE_KEYS: dict[str, frozenset[str]] = {
+    # Firewall policies (official API): identity, state, action, order, logging,
+    # IP protocol scope and connection state. Source and destination filters
+    # hold addresses, domains and zone references and are never kept.
+    "firewall_rule": frozenset(
+        {
+            "id",
+            "enabled",
+            "action",
+            "index",
+            "logging",
+            "loggingEnabled",
+            "protocol",
+            "ipProtocolScope",
+            "connectionStateFilter",
+        }
+    ),
+    # Policy-based routes: identity, state, kill switch and matching target.
+    "policy_based_route": frozenset(
+        {
+            "_id",
+            "enabled",
+            "killSwitch",
+            "kill_switch",
+            "killSwitchEnabled",
+            "kill_switch_enabled",
+            "matchingTarget",
+            "matching_target",
+        }
+    ),
+    # Port forwards: identity, state and the port and protocol settings.
+    "port_forward": frozenset(
+        {
+            "_id",
+            "enabled",
+            "proto",
+            "dst_port",
+            "fwd_port",
+            "log",
+            "src_limiting_enabled",
+            "pfwd_interface",
+        }
+    ),
+    # Traffic rules: identity, state, action and matching target.
+    "traffic_rule": frozenset({"_id", "enabled", "action", "matching_target"}),
+    # NAT rules: identity, state, type, protocol and order.
+    "nat_rule": frozenset(
+        {
+            "_id",
+            "enabled",
+            "type",
+            "protocol",
+            "ip_version",
+            "logging",
+            "rule_index",
+            "exclude",
+            "is_predefined",
+            "setting_preference",
+            "port",
+        }
+    ),
+    # Static routes: identity, state, route type, distance and gateway type.
+    "static_route": frozenset(
+        {
+            "_id",
+            "enabled",
+            "type",
+            "static-route_type",
+            "static-route_distance",
+            "gateway_type",
+        }
+    ),
+}
+
+# A string value that is kept: letters, digits, "_", "," and "-" only. An
+# address, a CIDR, a domain, a URL and free text all contain something else.
+_SAFE_EXPORT_STRING = re.compile(r"[A-Za-z0-9_,-]{0,64}")
+# A mapping key that is kept; a mapping with any other key is replaced whole.
+_SAFE_EXPORT_KEY = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _safe_export_value(value: Any) -> Any:
+    """
+    Return a value of a kept export key, or REDACTED when it is not safe.
+
+    Numbers, booleans and None are kept; so are short strings made of letters,
+    digits, "_", "," and "-". Lists and mappings are checked item by item, and
+    a mapping with any other kind of key is replaced as a whole.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if _SAFE_EXPORT_STRING.fullmatch(value) else REDACTED
+    if isinstance(value, list):
+        return [_safe_export_value(item) for item in value]
+    if isinstance(value, Mapping):
+        if not all(
+            isinstance(key, str) and _SAFE_EXPORT_KEY.fullmatch(key) for key in value
+        ):
+            return REDACTED
+        return {key: _safe_export_value(item) for key, item in value.items()}
+    return REDACTED
+
+
+def _redact_export_rule(rule_type: str, record: Any) -> Any:
+    """Keep the allow-listed keys of one exported rule and replace the rest."""
+    if not isinstance(record, Mapping):
+        return REDACTED
+    safe_keys = RULE_EXPORT_SAFE_KEYS.get(rule_type, frozenset())
+    return {
+        key: _safe_export_value(value) if key in safe_keys else REDACTED
+        for key, value in record.items()
+    }
+
+
+def _redact_export_family(rule_type: str, exported: Any) -> Any:
+    """Redact one rule family of one site; its status and count stay."""
+    if not isinstance(exported, Mapping):
+        return REDACTED
+    family: dict[str, Any] = dict.fromkeys(exported, REDACTED)
+    for key in ("status", "count"):
+        if key in exported:
+            family[key] = _safe_export_value(exported[key])
+    rules = exported.get("rules")
+    if isinstance(rules, list):
+        family["rules"] = [_redact_export_rule(rule_type, rule) for rule in rules]
+    return family
+
+
+def _redact_export_site(site: Any) -> Any:
+    """Redact one exported site: its name goes, its rule families are checked."""
+    if not isinstance(site, Mapping):
+        return REDACTED
+    redacted: dict[str, Any] = dict.fromkeys(site, REDACTED)
+    rule_types = site.get("rule_types")
+    if isinstance(rule_types, Mapping):
+        redacted["rule_types"] = {
+            rule_type: _redact_export_family(rule_type, exported)
+            for rule_type, exported in rule_types.items()
+        }
+    return redacted
+
+
 def redact_network_rule_export(document: dict[str, Any]) -> dict[str, Any]:
     """
-    Return a copy of a rule export with the diagnostics redaction applied.
+    Return a redacted copy of a rule export that is safe by construction.
 
-    Each rule family is redacted with the key set diagnostics uses for the
-    same section, then every MAC address in the document is anonymised.
+    Only allow-listed rule keys keep their value (and only when it passes
+    ``_safe_export_value``); every other value, and every key this function
+    does not know, is replaced by REDACTED. Site ids become ``site-1``,
+    ``site-2``, ... in the sorted order of the original ids, site names and the
+    console's values are replaced, and every MAC address that still got through
+    is anonymised. The input is not changed.
     """
-    section_by_rule_type = {
-        family.rule_type: family.data_key for family in RULE_FAMILIES
-    }
-    sites: dict[str, Any] = {}
-    for site_id, site in document.get("sites", {}).items():
-        rule_types: dict[str, Any] = {}
-        for rule_type, exported in site.get("rule_types", {}).items():
-            to_redact = RULE_SECTION_TO_REDACT[section_by_rule_type[rule_type]]
-            rule_types[rule_type] = {
-                **exported,
-                "rules": async_redact_data(exported.get("rules", []), to_redact),
-            }
-        sites[site_id] = {**site, "rule_types": rule_types}
-    redacted: dict[str, Any] = _anonymize_macs(
-        {**document, "redacted": True, "sites": sites}, {}
-    )
-    return redacted
+    redacted: dict[str, Any] = dict.fromkeys(document, REDACTED)
+    for key in ("format_version", "generated_at"):
+        if key in document:
+            redacted[key] = document[key]
+    redacted["redacted"] = True
+    console = document.get("console")
+    if "console" in document:
+        redacted["console"] = (
+            dict.fromkeys(console, REDACTED)
+            if isinstance(console, Mapping)
+            else REDACTED
+        )
+    sites = document.get("sites")
+    if isinstance(sites, Mapping):
+        labels = {
+            site_id: f"site-{number}"
+            for number, site_id in enumerate(sorted(sites, key=str), start=1)
+        }
+        redacted["sites"] = {
+            labels[site_id]: _redact_export_site(site)
+            for site_id, site in sites.items()
+        }
+    result: dict[str, Any] = _anonymize_macs(redacted, {})
+    return result
 
 
 def _site_manager_summary(

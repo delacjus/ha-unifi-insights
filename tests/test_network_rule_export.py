@@ -38,9 +38,14 @@ from custom_components.unifi_insights.const import (
 from custom_components.unifi_insights.coordinators.base import UnifiBaseCoordinator
 from custom_components.unifi_insights.coordinators.rule_audit import RULE_TYPES
 from custom_components.unifi_insights.coordinators.rule_export import (
+    _export_record,
     async_build_rule_export,
 )
-from custom_components.unifi_insights.diagnostics import redact_network_rule_export
+from custom_components.unifi_insights.diagnostics import (
+    RULE_EXPORT_SAFE_KEYS,
+    _safe_export_value,
+    redact_network_rule_export,
+)
 from custom_components.unifi_insights.services import (
     async_setup_services,
     async_unload_services,
@@ -187,9 +192,9 @@ _SENSITIVE: dict[str, tuple[str, ...]] = {
         "aa:bb:cc:dd:ee:40",
     ),
 }
-# Values the redaction must leave alone: a document without names or ports is
-# of no use for an audit.
-_KEPT = ("Block cams", "VPN out", "Plex", "Bedtime", "All DNS to resolver")
+# Rule names and descriptions: free text that often holds an address or a host
+# name, so the redacted export must not carry them.
+_NAMES = ("Block cams", "VPN out", "Plex", "Bedtime", "All DNS to resolver")
 
 
 def _six_models() -> dict[str, Any]:
@@ -440,8 +445,8 @@ async def test_no_matching_site_returns_empty_sites() -> None:
         _lister(client, rule_type).assert_not_awaited()
 
 
-def test_redaction_uses_diagnostics_key_sets() -> None:
-    """Every family is redacted, nested filters included, and nothing else is."""
+def test_redaction_removes_sensitive_values_of_every_family() -> None:
+    """Every family is redacted, nested filters and rule names included."""
     document = _six_family_document()
     original = copy.deepcopy(document)
     raw_dump = json.dumps(document)
@@ -450,31 +455,546 @@ def test_redaction_uses_diagnostics_key_sets() -> None:
     for literals in _SENSITIVE.values():
         for literal in literals:
             assert literal in raw_dump, f"{literal} missing from the raw fixture"
+    for name in _NAMES:
+        assert name in raw_dump
 
     redacted = redact_network_rule_export(document)
 
     dumped = json.dumps(redacted)
     for literals in _SENSITIVE.values():
         _assert_absent(dumped, literals)
-    for kept in _KEPT:
-        assert kept in dumped
+    _assert_absent(dumped, _NAMES)
     assert '"port": "53"' in dumped
     assert '"_id": "pf-plex"' in dumped
-    assert '"value": 443' in dumped
     assert redacted["redacted"] is True
     assert document == original
-    # The filter objects of a firewall policy go as a whole, not value by value.
-    firewall = redacted["sites"]["site1"]["rule_types"]["firewall_rule"]["rules"][0]
-    assert firewall["source"]["trafficFilter"]["ipAddressFilter"] == REDACTED
-    assert firewall["source"]["trafficFilter"]["macAddressFilter"] == REDACTED
-    assert firewall["destination"]["trafficFilter"]["domainFilter"] == REDACTED
-    assert firewall["destination"]["trafficFilter"]["ipv6IidFilter"] == REDACTED
+    # The filter objects of a firewall policy go with the whole source and
+    # destination, not value by value.
+    firewall = redacted["sites"]["site-1"]["rule_types"]["firewall_rule"]["rules"][0]
+    assert firewall["source"] == REDACTED
+    assert firewall["destination"] == REDACTED
+    assert firewall["name"] == REDACTED
 
 
 def test_redaction_covers_every_rule_family() -> None:
     """The redaction fixture has a sensitive record for each exported family."""
     assert set(_SENSITIVE) == set(RULE_TYPES)
     assert set(_six_models()) == set(RULE_TYPES)
+
+
+# Unknown future keys, one holding an address and one an object.
+_FUTURE: dict[str, Any] = {
+    "x_future_target": "198.51.100.77",
+    "x_future_object": {"nested": "198.51.100.78", "deeper": {"host": "deep.example"}},
+}
+_FUTURE_LEAKS = ("198.51.100.77", "198.51.100.78", "deep.example")
+# The structural facts of each family that the redacted export must keep.
+_STRUCTURE: dict[str, dict[str, Any]] = {
+    "firewall_rule": {
+        "id": "fw-keep",
+        "enabled": True,
+        "index": 4,
+        "action": {"type": "ALLOW", "allowReturnTraffic": False},
+        "connectionStateFilter": ["NEW", "ESTABLISHED"],
+        "loggingEnabled": True,
+        "ipProtocolScope": {
+            "ipVersion": "IPV4_AND_IPV6",
+            "protocolFilter": {"type": "NAMED_PROTOCOL", "name": "TCP_UDP"},
+        },
+    },
+    "policy_based_route": {
+        "_id": "pbr-keep",
+        "enabled": True,
+        "killSwitchEnabled": True,
+        "matchingTarget": "INTERNET",
+    },
+    "port_forward": {
+        "_id": "pf-keep",
+        "enabled": True,
+        "proto": "tcp_udp",
+        "dst_port": "8000-8100",
+        "fwd_port": "80,443",
+        "log": True,
+        "src_limiting_enabled": False,
+        "pfwd_interface": "wan",
+    },
+    "traffic_rule": {
+        "_id": "tr-keep",
+        "enabled": False,
+        "action": "BLOCK",
+        "matching_target": "INTERNET",
+    },
+    "nat_rule": {
+        "_id": "nat-keep",
+        "enabled": True,
+        "type": "DNAT",
+        "protocol": "tcp_udp",
+        "ip_version": "IPV4",
+        "rule_index": 3,
+        "port": "53",
+    },
+    "static_route": {
+        "_id": "sr-keep",
+        "enabled": True,
+        "type": "static-route",
+        "static-route_type": "nexthop-route",
+        "static-route_distance": 1,
+        "gateway_type": "default",
+    },
+}
+
+
+def _leaky_models() -> dict[str, tuple[Any, tuple[str, ...]]]:
+    """
+    Return, per family, a real model and the strings that must never be exported.
+
+    Every record has free text with an address, each identifier or reference
+    field of its family and the unknown future keys of ``_FUTURE``.
+    """
+    firewall = {
+        **_STRUCTURE["firewall_rule"],
+        "name": "SSH 192.0.2.51",
+        "description": "desc 198.51.100.9",
+        "source": {
+            "zoneId": "zone-secret-src",
+            "trafficFilter": {
+                "type": "IP_ADDRESS",
+                "ipAddressFilter": {
+                    "type": "IP_ADDRESSES",
+                    "items": [{"type": "IP_ADDRESS", "value": "2001:db8::51"}],
+                },
+            },
+        },
+        "destination": {
+            "zoneId": "zone-secret-dst",
+            "trafficFilter": {
+                "type": "IP_ADDRESS",
+                "ipAddressFilter": {
+                    "type": "TRAFFIC_MATCHING_LIST",
+                    "trafficMatchingListId": "tml-secret",
+                },
+            },
+        },
+        **_FUTURE,
+    }
+    route = {
+        **_STRUCTURE["policy_based_route"],
+        "description": "Route 203.0.113.0/24",
+        "networkIds": ["pbr-net-secret"],
+        "networkId": "pbr-net2-secret",
+        "vpnClientId": "pbr-vpn-secret",
+        "domains": [{"domain": "pbr.example"}],
+        "nextHop": "203.0.113.1",
+        "targetDevices": [
+            {
+                "type": "CLIENT",
+                "clientMac": "aa:bb:cc:dd:ee:21",
+                "networkId": "pbr-tnet-secret",
+                "client_id": "pbr-client-secret",
+            }
+        ],
+        **_FUTURE,
+    }
+    forward = port_forward_record(
+        **_STRUCTURE["port_forward"],
+        name="Forward 192.0.2.9",
+        fwd="192.0.2.9",
+        src="198.51.100.0/24",
+        destination_ip="203.0.113.7",
+        site_id="pf-site-secret",
+        **_FUTURE,
+    )
+    traffic = traffic_rule_record(
+        **_STRUCTURE["traffic_rule"],
+        description="Block 192.0.2.60",
+        domains=["tr.example"],
+        network_ids=["tr-net-secret"],
+        target_devices=[
+            {
+                "type": "CLIENT",
+                "client_mac": "aa:bb:cc:dd:ee:31",
+                "client_id": "tr-client-secret",
+                "network_id": "tr-tnet-secret",
+            }
+        ],
+        **_FUTURE,
+    )
+    nat = nat_rule_record(
+        **_STRUCTURE["nat_rule"],
+        description="NAT 198.51.100.7",
+        in_interface="nat-in-secret",
+        out_interface="nat-out-secret",
+        ip_address="2001:db8::77",
+        source_filter={
+            "filter_type": "ADDRESS_AND_PORT",
+            "network_conf_id": "nat-nc-secret",
+            "firewall_group_ids": ["nat-grp-secret"],
+            "invert_address": False,
+            "invert_port": False,
+            "address": "192.0.2.88",
+        },
+        **_FUTURE,
+    )
+    static = static_route_record(
+        **{
+            **_STRUCTURE["static_route"],
+            "name": "Route 203.0.113.0/24",
+            "static-route_network": "203.0.113.0/24",
+            "static-route_nexthop": "192.0.2.1",
+            "static-route_interface": "sr-net-secret",
+            "gateway_device": "aa:bb:cc:dd:ee:41",
+            "site_id": "sr-site-secret",
+            **_FUTURE,
+        }
+    )
+    return {
+        "firewall_rule": (
+            FirewallRule.model_validate(firewall),
+            (
+                "SSH 192.0.2.51",
+                "192.0.2.51",
+                "desc 198.51.100.9",
+                "zone-secret-src",
+                "zone-secret-dst",
+                "tml-secret",
+                "2001:db8::51",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+        "policy_based_route": (
+            PolicyBasedRoute.model_validate(route),
+            (
+                "Route 203.0.113.0/24",
+                "pbr-net-secret",
+                "pbr-net2-secret",
+                "pbr-vpn-secret",
+                "pbr.example",
+                "203.0.113.1",
+                "aa:bb:cc:dd:ee:21",
+                "pbr-tnet-secret",
+                "pbr-client-secret",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+        "port_forward": (
+            PortForward.model_validate(forward),
+            (
+                "Forward 192.0.2.9",
+                "198.51.100.0/24",
+                "203.0.113.7",
+                "pf-site-secret",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+        "traffic_rule": (
+            TrafficRule.model_validate(traffic),
+            (
+                "Block 192.0.2.60",
+                "tr.example",
+                "tr-net-secret",
+                "aa:bb:cc:dd:ee:31",
+                "tr-client-secret",
+                "tr-tnet-secret",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+        "nat_rule": (
+            NatRule.model_validate(nat),
+            (
+                "NAT 198.51.100.7",
+                "nat-in-secret",
+                "nat-out-secret",
+                "2001:db8::77",
+                "nat-nc-secret",
+                "nat-grp-secret",
+                "192.0.2.88",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+        "static_route": (
+            StaticRoute.model_validate(static),
+            (
+                "Route 203.0.113.0/24",
+                "192.0.2.1",
+                "sr-net-secret",
+                "aa:bb:cc:dd:ee:41",
+                "sr-site-secret",
+                *_FUTURE_LEAKS,
+            ),
+        ),
+    }
+
+
+def _single_rule_document(rule_type: str, record: Any) -> dict[str, Any]:
+    """Return a raw export of one site holding one record of one family."""
+    return {
+        "format_version": 1,
+        "generated_at": "2026-01-02T03:04:05+00:00",
+        "redacted": False,
+        "console": _CONSOLE,
+        "sites": {
+            "site1": {
+                "name": "Home",
+                "rule_types": {
+                    rule_type: {"status": "ok", "count": 1, "rules": [record]}
+                },
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+async def test_redacted_export_scrubs_text_identifiers_and_unknown_fields(
+    hass: HomeAssistant, rule_type: str
+) -> None:
+    """Names, references and unknown keys are replaced; the structure stays."""
+    model, leaks = _leaky_models()[rule_type]
+    document = _single_rule_document(rule_type, _export_record(model))
+    original = copy.deepcopy(document)
+    raw_dump = json.dumps(document)
+    for leak in leaks:
+        assert leak in raw_dump, f"{leak} missing from the raw fixture"
+    coordinator = MagicMock()
+    coordinator.async_export_network_rules = AsyncMock(return_value=document)
+
+    response = await _call(hass, [_entry("UDM", coordinator, _SITES)], {})
+
+    _assert_absent(json.dumps(response), leaks)
+    family = response["sites"]["site-1"]["rule_types"][rule_type]
+    assert family["status"] == "ok"
+    assert family["count"] == 1
+    rule = family["rules"][0]
+    for key, value in _STRUCTURE[rule_type].items():
+        assert rule[key] == value
+    assert rule["x_future_target"] == REDACTED
+    assert rule["x_future_object"] == REDACTED
+    assert document == original
+
+
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
+def test_redacted_export_keeps_exactly_the_allow_listed_values(rule_type: str) -> None:
+    """The keys that keep their value are the allow-list, nothing more."""
+    model, _ = _leaky_models()[rule_type]
+    record = _export_record(model)
+
+    redacted = redact_network_rule_export(_single_rule_document(rule_type, record))
+
+    rule = redacted["sites"]["site-1"]["rule_types"][rule_type]["rules"][0]
+    assert set(rule) == set(record)
+    kept = {key for key, value in rule.items() if value != REDACTED}
+    assert kept
+    assert kept == RULE_EXPORT_SAFE_KEYS[rule_type] & set(record)
+
+
+def test_every_rule_type_has_an_allow_list() -> None:
+    """A family without an allow-list would have all its values replaced."""
+    assert set(RULE_EXPORT_SAFE_KEYS) == set(RULE_TYPES)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "192.0.2.1",
+        "2001:db8::1",
+        "198.51.100.0/24",
+        "host.example",
+        "https://host.example/path",
+        "My rule",
+        "a" * 65,
+        "line\n",
+    ],
+)
+def test_safe_export_value_rejects_unsafe_strings(value: str) -> None:
+    """Addresses, CIDRs, domains, URLs, free text and long strings are replaced."""
+    assert _safe_export_value(value) == REDACTED
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "TCP_UDP",
+        "nexthop-route",
+        "8000-8100",
+        "80,443",
+        "",
+        "a" * 64,
+        True,
+        5,
+        1.5,
+        None,
+    ],
+)
+def test_safe_export_value_keeps_structural_values(value: Any) -> None:
+    """Protocol names, port lists, numbers, booleans and None are kept."""
+    assert _safe_export_value(value) == value
+
+
+def test_safe_export_value_checks_lists_and_mappings() -> None:
+    """Containers are checked item by item; an odd key replaces the mapping."""
+    assert _safe_export_value(["TCP", "192.0.2.1", 3, None, ["a b", "ok"]]) == [
+        "TCP",
+        REDACTED,
+        3,
+        None,
+        [REDACTED, "ok"],
+    ]
+    assert _safe_export_value(
+        {"type": "IP", "items": [{"value": "192.0.2.1"}, {"value": "80"}], "n": 2}
+    ) == {"type": "IP", "items": [{"value": REDACTED}, {"value": "80"}], "n": 2}
+    for odd_keys in ({"aa:bb": "ok"}, {"": "ok"}, {"a" * 65: "ok"}, {1: "ok"}):
+        assert _safe_export_value(odd_keys) == REDACTED
+    for other in (object(), b"bytes", ("a", "b"), {"a"}):
+        assert _safe_export_value(other) == REDACTED
+
+
+def test_redacted_export_pseudonymises_sites_and_console() -> None:
+    """Site ids become site-1, site-2 by sorted id; names and console go."""
+    port_forwards = {
+        "status": "ok",
+        "count": 2,
+        "rules": [port_forward_record(_id="a"), port_forward_record(_id="b")],
+    }
+    document = {
+        "format_version": 1,
+        "generated_at": "2026-01-02T03:04:05+00:00",
+        "redacted": False,
+        "console": {"entry_id": "entry-secret", "title": "Title Secret"},
+        "sites": {
+            "zz-home-id": {
+                "name": "Home Secret",
+                "rule_types": {"port_forward": port_forwards},
+            },
+            "aa-lab-id": {
+                "name": "Lab Secret",
+                "rule_types": {
+                    "nat_rule": {"status": "failed", "count": 0, "rules": []}
+                },
+            },
+        },
+    }
+    original = copy.deepcopy(document)
+
+    redacted = redact_network_rule_export(document)
+
+    assert set(redacted["sites"]) == {"site-1", "site-2"}
+    assert redacted["sites"]["site-1"]["name"] == REDACTED
+    assert redacted["sites"]["site-1"]["rule_types"] == {
+        "nat_rule": {"status": "failed", "count": 0, "rules": []}
+    }
+    assert redacted["sites"]["site-2"]["name"] == REDACTED
+    site2 = redacted["sites"]["site-2"]["rule_types"]["port_forward"]
+    assert (site2["status"], site2["count"], len(site2["rules"])) == ("ok", 2, 2)
+    assert redacted["console"] == {"entry_id": REDACTED, "title": REDACTED}
+    assert redacted["format_version"] == 1
+    assert redacted["generated_at"] == "2026-01-02T03:04:05+00:00"
+    assert redacted["redacted"] is True
+    _assert_absent(
+        json.dumps(redacted),
+        (
+            "zz-home-id",
+            "aa-lab-id",
+            "entry-secret",
+            "Title Secret",
+            "Home Secret",
+            "Lab Secret",
+        ),
+    )
+    assert document == original
+
+
+def test_redacted_export_fails_closed_on_unexpected_shapes() -> None:
+    """Whatever the builder does not produce is replaced, never copied."""
+    redacted = redact_network_rule_export(
+        {
+            "format_version": 1,
+            "x_future_top": "198.51.100.1",
+            "console": "198.51.100.2",
+            "sites": {
+                "s1": {
+                    "name": "n",
+                    "x_future_site": "198.51.100.3",
+                    "rule_types": {
+                        "vpn_client": {
+                            "status": "ok",
+                            "count": 1,
+                            "x_future_family": "198.51.100.4",
+                            "rules": ["198.51.100.5", {"a": "198.51.100.6"}],
+                        },
+                        "nat_rule": "198.51.100.7",
+                    },
+                },
+                "s2": "198.51.100.8",
+                "s3": {"name": "198.51.100.10"},
+                "s4": {
+                    "rule_types": {
+                        "nat_rule": {"status": "ok"},
+                        "static_route": {"rules": "198.51.100.11"},
+                    }
+                },
+            },
+        }
+    )
+
+    assert redacted["x_future_top"] == REDACTED
+    assert redacted["console"] == REDACTED
+    site1 = redacted["sites"]["site-1"]
+    assert site1["x_future_site"] == REDACTED
+    assert site1["rule_types"]["nat_rule"] == REDACTED
+    assert site1["rule_types"]["vpn_client"] == {
+        "status": "ok",
+        "count": 1,
+        "x_future_family": REDACTED,
+        "rules": [REDACTED, {"a": REDACTED}],
+    }
+    assert redacted["sites"]["site-2"] == REDACTED
+    assert redacted["sites"]["site-3"] == {"name": REDACTED}
+    assert redacted["sites"]["site-4"] == {
+        "rule_types": {
+            "nat_rule": {"status": "ok"},
+            "static_route": {"rules": REDACTED},
+        }
+    }
+    assert "198.51.100" not in json.dumps(redacted)
+    assert redact_network_rule_export({"sites": "198.51.100.9"}) == {
+        "sites": REDACTED,
+        "redacted": True,
+    }
+
+
+async def test_unredacted_export_is_unchanged_by_the_redaction_code(
+    hass: HomeAssistant, freezer: Any
+) -> None:
+    """With redact false the service returns real site ids and the model dumps."""
+    freezer.move_to("2026-01-02 03:04:05+00:00")
+    models = {rule_type: model for rule_type, (model, _) in _leaky_models().items()}
+    client = _client(**{rule_type: [model] for rule_type, model in models.items()})
+
+    async def export(
+        site_ids: list[str] | None, rule_types: list[str] | None
+    ) -> dict[str, Any]:
+        return await _build(client, site_ids=site_ids, rule_types=rule_types)
+
+    coordinator = MagicMock()
+    coordinator.async_export_network_rules = AsyncMock(side_effect=export)
+
+    response = await _call(
+        hass,
+        [_entry("UDM", coordinator, _SITES)],
+        {"site_id": "site1", "redact": False},
+    )
+
+    assert response["redacted"] is False
+    assert response["console"] == _CONSOLE
+    assert list(response["sites"]) == ["site1"]
+    assert response["sites"]["site1"]["name"] == "Home"
+    types = response["sites"]["site1"]["rule_types"]
+    for rule_type, model in models.items():
+        assert types[rule_type] == {
+            "status": "ok",
+            "count": 1,
+            "rules": [_export_record(model)],
+        }
+        assert types[rule_type]["rules"] == [_dump(model)]
 
 
 async def test_service_redacts_by_default(hass: HomeAssistant) -> None:
@@ -543,8 +1063,7 @@ async def test_service_exports_all_six_families_end_to_end(
     _assert_absent(redacted_dump, every_literal)
     assert redacted["redacted"] is True
     assert redacted["generated_at"] == "2026-01-02T03:04:05+00:00"
-    for kept in _KEPT:
-        assert kept in redacted_dump
+    _assert_absent(redacted_dump, _NAMES)
     raw_types = raw["sites"]["site1"]["rule_types"]
     assert raw["redacted"] is False
     assert {rule_type: raw_types[rule_type]["rules"] for rule_type in RULE_TYPES} == {
@@ -553,13 +1072,16 @@ async def test_service_exports_all_six_families_end_to_end(
     raw_dump = json.dumps(raw)
     for literal in every_literal:
         assert literal in raw_dump
+    for name in _NAMES:
+        assert name in raw_dump
     # Neither mode writes a rule value or a credential to the log, and the
     # document carries no secret.
     for literal in every_literal:
         assert literal not in caplog.text
     for text in (redacted_dump, raw_dump):
         assert "api_key" not in text.lower()
-    assert redacted["console"] == _CONSOLE
+    assert raw["console"] == _CONSOLE
+    assert redacted["console"] == {"entry_id": REDACTED, "title": REDACTED}
 
 
 async def test_service_requires_response(hass: HomeAssistant) -> None:
