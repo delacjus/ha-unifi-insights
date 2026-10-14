@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from ..client import UniFiNetworkClient
 
 
+_MAX_PORT_NUMBER = 65535
+
+
 class TrafficEndpoint:
     """Endpoint for managing traffic matching lists and DPI resources."""
 
@@ -106,6 +109,7 @@ class TrafficEndpoint:
         name: str,
         list_type: TrafficMatchingType,
         entries: list[str] | None = None,
+        items: list[dict[str, Any]] | None = None,
         description: str | None = None,
     ) -> TrafficMatchingList:
         """
@@ -115,21 +119,43 @@ class TrafficEndpoint:
             site_id: The site ID.
             name: List name.
             list_type: List type.
-            entries: List entries.
-            description: Optional description.
+            entries: Single integer port strings for PORTS lists only (1-65535).
+            items: Pre-built spec items, mutually exclusive with entries.
+            description: Unsupported legacy argument; the schema has no description.
 
         Returns:
             The created traffic matching list.
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/traffic-matching-lists")
+        if description is not None:
+            msg = "description is unsupported for traffic matching lists"
+            raise ValueError(msg)
+        if entries is not None and items is not None:
+            msg = "Supply either entries or items, not both"
+            raise ValueError(msg)
+        if entries is not None:
+            if list_type != TrafficMatchingType.PORTS:
+                msg = "Use items for non-PORTS traffic matching lists"
+                raise ValueError(msg)
+            items = []
+            for entry in entries:
+                if not entry.isascii() or not entry.isdecimal():
+                    msg = "Use items for port ranges or non-integer entries"
+                    raise ValueError(msg)
+                port = int(entry)
+                if not 1 <= port <= _MAX_PORT_NUMBER:
+                    msg = "Use items with port numbers in the range 1-65535"
+                    raise ValueError(msg)
+                items.append({"type": "PORT_NUMBER", "value": port})
+        if not items:
+            msg = "items must contain at least one item"
+            raise ValueError(msg)
         data: dict[str, Any] = {
             "name": name,
             "type": list_type.value,
-            "entries": entries or [],
+            "items": items,
         }
-        if description:
-            data["description"] = description
 
         response = await self._client._post(path, json_data=data)
 

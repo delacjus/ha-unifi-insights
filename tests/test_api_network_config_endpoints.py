@@ -1040,13 +1040,6 @@ async def test_networks_get_pins_spec_request_and_branches() -> None:
         await client.networks.get("default", "none")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "networks.create sends legacy dhcpEnabled; "
-        "spec createNetwork requires a management-specific object"
-    ),
-)
 async def test_networks_create_pins_spec_request() -> None:
     """networks.create pins POST request against spec."""
     session = _Session([{"id": "net-1", "name": "LAN"}])
@@ -1090,50 +1083,41 @@ async def test_networks_create_pins_spec_request() -> None:
 
 
 async def test_networks_create_response_parsing_and_branches() -> None:
-    """networks.create covers response parsing, optional params, and failure."""
+    """Parse wrapped/raw responses and reject legacy inputs before requests."""
     net_dict = {"id": "net-1", "name": "Guest"}
-    session = _Session(
-        [
-            {"data": net_dict},  # 1. Wrapped response with vlan_id and subnet
-            net_dict,  # 2. Raw response with dhcp_enabled=False and kwargs
-            None,  # 3. Failure
-            {"data": "non-dict"},  # 4. Result not dict
-        ]
-    )
+    session = _Session([{"data": net_dict}, net_dict, None, {"data": "non-dict"}])
     client = _client(session)
-
-    # 1. Wrapped response with vlan_id and subnet
     res1 = await client.networks.create(
-        "default",
-        name="Guest",
-        vlan_id=20,
-        subnet="192.168.20.0/24",
+        "default", name="Guest", vlan_id=20, management="UNMANAGED", enabled=True
     )
     assert res1.id == "net-1"
-    req1 = session.requests[0]
-    assert req1["method"] == "POST"
-    assert req1["url"] == (
-        "https://192.168.1.1/proxy/network/integration/v1/sites/default/networks"
-    )
-
-    # 2. Raw response with dhcp_enabled=False and kwargs
+    assert session.requests[0]["json"] == {
+        "name": "Guest",
+        "vlanId": 20,
+        "management": "UNMANAGED",
+        "enabled": True,
+    }
     res2 = await client.networks.create(
-        "default",
-        name="IoT",
-        dhcp_enabled=False,
-        management="UNMANAGED",
-        enabled=True,
-        vlanId=20,
+        "default", name="IoT", management="UNMANAGED", enabled=True, vlanId=20
     )
     assert res2.id == "net-1"
-    assert session.requests[1]["method"] == "POST"
-    assert session.requests[1]["url"] == req1["url"]
-
-    # 3. Failure
-    with pytest.raises(ValueError, match="Failed to create network"):
-        await client.networks.create("default", name="Fail")
-    with pytest.raises(ValueError, match="Failed to create network"):
-        await client.networks.create("default", name="Fail")
+    assert session.requests[1]["json"] == {
+        "name": "IoT",
+        "vlanId": 20,
+        "management": "UNMANAGED",
+        "enabled": True,
+    }
+    for legacy in (
+        {"subnet": "192.168.20.0/24"},
+        {"dhcp_enabled": False},
+        {"dhcp_enabled": True},
+    ):
+        with pytest.raises(ValueError, match=r"ipv4Configuration.*management"):
+            await client.networks.create("default", name="Legacy", **legacy)
+    assert len(session.requests) == 2
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Failed to create network"):
+            await client.networks.create("default", name="Fail")
 
 
 async def test_networks_update_pins_spec_request_and_branches() -> None:
@@ -1421,13 +1405,6 @@ async def test_traffic_get_list_pins_spec_request_and_branches() -> None:
         await client.traffic.get_list("default", "none")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "traffic.create_list sends entries; spec createTrafficMatchingList "
-        "expects items"
-    ),
-)
 async def test_traffic_create_list_pins_spec_request() -> None:
     """traffic.create_list pins POST request against spec."""
     session = _Session([{"id": "list-1", "name": "port-list", "type": "PORTS"}])
@@ -1453,57 +1430,40 @@ async def test_traffic_create_list_pins_spec_request() -> None:
 
 
 async def test_traffic_create_list_response_parsing_and_branches() -> None:
-    """traffic.create_list covers response parsing, description, and failure."""
-    list_dict = {
-        "id": "list-1",
-        "name": "Custom",
-        "type": "IPV4_ADDRESSES",
-        "entries": ["10.0.0.1"],
-    }
-    session = _Session(
-        [
-            {"data": list_dict},  # 1. Wrapped response with description
-            list_dict,  # 2. Raw response without description or entries
-            None,  # 3. Failure
-            {"data": "non-dict"},  # 4. Result not dict
-        ]
-    )
+    """Parse wrapped/raw responses with spec items and reject empty lists."""
+    list_dict = {"id": "list-1", "name": "Custom", "type": "IPV4_ADDRESSES"}
+    session = _Session([{"data": list_dict}, list_dict, None, {"data": "non-dict"}])
     client = _client(session)
-
-    # 1. Wrapped response with description
+    items = [{"type": "IP_ADDRESS", "value": "10.0.0.1"}]
     res1 = await client.traffic.create_list(
         "default",
         name="Custom",
         list_type=TrafficMatchingType.IPV4_ADDRESSES,
-        entries=["10.0.0.1"],
-        description="Block IP",
+        items=items,
     )
     assert res1.id == "list-1"
-    req1 = session.requests[0]
-    assert req1["method"] == "POST"
-    assert req1["url"] == (
-        "https://192.168.1.1/proxy/network/integration/v1/sites/default/traffic-matching-lists"
-    )
-
-    # 2. Raw response without description or entries
+    assert session.requests[0]["json"] == {
+        "name": "Custom",
+        "type": "IPV4_ADDRESSES",
+        "items": items,
+    }
+    with pytest.raises(ValueError, match="at least one item"):
+        await client.traffic.create_list(
+            "default", name="Empty", list_type=TrafficMatchingType.PORTS
+        )
+    assert len(session.requests) == 1
     res2 = await client.traffic.create_list(
-        "default",
-        name="Empty",
-        list_type=TrafficMatchingType.PORTS,
+        "default", name="Ports", list_type=TrafficMatchingType.PORTS, entries=["443"]
     )
     assert res2.id == "list-1"
-    assert session.requests[1]["method"] == "POST"
-    assert session.requests[1]["url"] == req1["url"]
-
-    # 3. Failure
-    with pytest.raises(ValueError, match="Failed to create traffic matching list"):
-        await client.traffic.create_list(
-            "default", name="Fail", list_type=TrafficMatchingType.PORTS
-        )
-    with pytest.raises(ValueError, match="Failed to create traffic matching list"):
-        await client.traffic.create_list(
-            "default", name="Fail", list_type=TrafficMatchingType.PORTS
-        )
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Failed to create traffic matching list"):
+            await client.traffic.create_list(
+                "default",
+                name="Fail",
+                list_type=TrafficMatchingType.PORTS,
+                entries=["80"],
+            )
 
 
 async def test_traffic_update_list_pins_spec_request_and_branches() -> None:
@@ -1585,9 +1545,7 @@ async def test_traffic_delete_list_pins_spec_request() -> None:
 
 async def test_traffic_get_dpi_categories_pins_spec_request_and_branches() -> None:
     """traffic.get_dpi_categories pins endpoint, limit capping, and branches."""
-    # Spec example: id 3, "Network protocols". The spec types id as an integer;
-    # the model takes a string, which test_dpi_parses_spec_integer_ids covers.
-    cat_payload = {"id": "3", "name": "Network protocols"}
+    cat_payload = {"id": 3, "name": "Network protocols"}
     session = _Session(
         [
             {"data": [cat_payload]},
@@ -1604,7 +1562,7 @@ async def test_traffic_get_dpi_categories_pins_spec_request_and_branches() -> No
     )
     assert len(cats) == 1
     assert isinstance(cats[0], DPICategory)
-    assert cats[0].id == "3"
+    assert cats[0].id == 3
     req1 = session.requests[0]
     assert req1["method"] == "GET"
     assert (
@@ -1630,7 +1588,7 @@ async def test_traffic_get_dpi_categories_pins_spec_request_and_branches() -> No
 async def test_traffic_get_dpi_applications_pins_spec_request_and_branches() -> None:
     """traffic.get_dpi_applications pins endpoint, limit capping, and branches."""
     # Spec example: id 786435, "Adobe Express" (id typed as an integer in the spec).
-    app_payload = {"id": "786435", "name": "Adobe Express"}
+    app_payload = {"id": 786435, "name": "Adobe Express"}
     session = _Session(
         [
             {"data": [app_payload]},
@@ -1647,7 +1605,7 @@ async def test_traffic_get_dpi_applications_pins_spec_request_and_branches() -> 
     )
     assert len(apps) == 1
     assert isinstance(apps[0], DPIApplication)
-    assert apps[0].id == "786435"
+    assert apps[0].id == 786435
     assert apps[0].name == "Adobe Express"
     req1 = session.requests[0]
     assert req1["method"] == "GET"
@@ -1945,15 +1903,6 @@ async def test_firewall_get_rule_pins_spec_request_and_branches() -> None:
         await client.firewall.get_rule("default", "none")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "firewall.create_rule sends legacy flat fields (action, protocol, "
-        "sourceZoneId, destinationZoneId); spec createFirewallPolicy expects "
-        "action object, source/destination zone objects, ipProtocolScope, "
-        "enabled and loggingEnabled"
-    ),
-)
 async def test_firewall_create_rule_pins_spec_request() -> None:
     """firewall.create_rule pins POST request against spec."""
     session = _Session([{"id": "rule-1", "name": "block-rule"}])
@@ -1984,19 +1933,18 @@ async def test_firewall_create_rule_pins_spec_request() -> None:
 
 
 async def test_firewall_create_rule_response_parsing_and_branches() -> None:
-    """firewall.create_rule covers response parsing, parameters, and failure."""
+    """Parse wrapped/raw responses and require zones before making requests."""
     rule_dict = {"id": "rule-1", "name": "Allow Web", "action": "accept"}
-    session = _Session(
-        [
-            {"data": rule_dict},  # 1. Wrapped response with zones and kwargs
-            rule_dict,  # 2. Raw response without zones
-            None,  # 3. Failure
-            {"data": "non-dict"},  # 4. Result not dict
-        ]
-    )
+    session = _Session([{"data": rule_dict}, rule_dict, None, {"data": "non-dict"}])
     client = _client(session)
-
-    # 1. Wrapped response with zones and kwargs
+    scope = {
+        "ipVersion": "IPV4",
+        "protocolFilter": {
+            "type": "NAMED_PROTOCOL",
+            "matchOpposite": False,
+            "protocol": {"name": "tcp"},
+        },
+    }
     res1 = await client.firewall.create_rule(
         "default",
         name="Allow Web",
@@ -2004,26 +1952,26 @@ async def test_firewall_create_rule_response_parsing_and_branches() -> None:
         protocol="tcp",
         source_zone_id="z-1",
         destination_zone_id="z-2",
+        ipProtocolScope=scope,
         loggingEnabled=False,
     )
     assert res1.id == "rule-1"
-    req1 = session.requests[0]
-    assert req1["method"] == "POST"
-    assert req1["url"] == (
-        "https://192.168.1.1/proxy/network/integration/v1/sites/default/firewall/policies"
+    assert session.requests[0]["json"]["ipProtocolScope"] == scope
+    with pytest.raises(ValueError, match="zoneId"):
+        await client.firewall.create_rule("default", name="Default Rule")
+    assert len(session.requests) == 1
+    res2 = await client.firewall.create_rule(
+        "default",
+        name="Default Rule",
+        source={"zoneId": "z-1"},
+        destination={"zoneId": "z-2"},
     )
-
-    # 2. Raw response without zones
-    res2 = await client.firewall.create_rule("default", name="Default Rule")
     assert res2.id == "rule-1"
-    assert session.requests[1]["method"] == "POST"
-    assert session.requests[1]["url"] == req1["url"]
-
-    # 3. Failure
-    with pytest.raises(ValueError, match="Failed to create firewall rule"):
-        await client.firewall.create_rule("default", name="Fail")
-    with pytest.raises(ValueError, match="Failed to create firewall rule"):
-        await client.firewall.create_rule("default", name="Fail")
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Failed to create firewall rule"):
+            await client.firewall.create_rule(
+                "default", name="Fail", source_zone_id="z-1", destination_zone_id="z-2"
+            )
 
 
 async def test_firewall_delete_rule_pins_spec_request() -> None:
@@ -2382,11 +2330,11 @@ def test_models_traffic_branches() -> None:
 
     # description and categoryId are model fields the spec doesn't have; this only
     # pins that the model still accepts them, not that the API sends them.
-    cat = DPICategory(id="3", name="Network protocols", description="Desc")
+    cat = DPICategory(id=3, name="Network protocols", description="Desc")
     assert cat.name == "Network protocols"
 
     app = DPIApplication(
-        id="786435", name="Adobe Express", categoryId="3", description="App Desc"
+        id=786435, name="Adobe Express", categoryId="3", description="App Desc"
     )
     assert app.category_id == "3"
 
@@ -2425,13 +2373,6 @@ async def test_resources_wan_filter_response_parsing() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "resources.get_wan_interfaces sends filter; spec getWansOverviewPage "
-        "accepts only offset and limit"
-    ),
-)
 async def test_resources_wan_filter_pins_spec_request() -> None:
     """A spec-correct implementation omits the unsupported filter parameter."""
     session = _Session([{"data": [{"id": "wan-1", "name": "Internet 1"}]}])
@@ -2762,7 +2703,7 @@ def test_models_parse_spec_shaped_responses(
         ),
         (
             DPIApplication,
-            {"id": "786435", "name": "Legacy", "categoryId": "3"},
+            {"id": 786435, "name": "Legacy", "categoryId": "3"},
             {"category_id": "3"},
         ),
         (
@@ -2819,12 +2760,6 @@ def test_models_parse_legacy_field_aliases(
         ("get_dpi_categories", 3, "Network protocols"),
         ("get_dpi_applications", 786435, "Adobe Express"),
     ],
-)
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DPI models require string IDs; spec DPI category/application IDs are integers"
-    ),
 )
 async def test_dpi_parses_spec_integer_ids(
     method: str, identifier: int, name: str
@@ -2884,3 +2819,176 @@ async def test_dns_incomplete_body_passthrough_server_validation() -> None:
     with pytest.raises(UniFiResponseError):
         await client.dns.update("default", _MODEL_ID)
     assert [request["method"] for request in session.requests] == ["POST", "PUT"]
+
+
+@pytest.mark.parametrize(
+    ("entries", "list_type", "items", "description", "message"),
+    [
+        (["80-443"], TrafficMatchingType.PORTS, None, None, "items"),
+        (["http"], TrafficMatchingType.PORTS, None, None, "items"),
+        (["\uff18\uff10"], TrafficMatchingType.PORTS, None, None, "items"),
+        (["0"], TrafficMatchingType.PORTS, None, None, "items"),
+        (["65536"], TrafficMatchingType.PORTS, None, None, "items"),
+        (["10.0.0.1"], TrafficMatchingType.IPV4_ADDRESSES, None, None, "items"),
+        (["80"], TrafficMatchingType.PORTS, [], None, "either entries or items"),
+        ([], TrafficMatchingType.PORTS, None, None, "at least one item"),
+        (None, TrafficMatchingType.PORTS, [], None, "at least one item"),
+        (["80"], TrafficMatchingType.PORTS, None, "legacy", "description"),
+        (["80"], TrafficMatchingType.PORTS, None, "", "description"),
+    ],
+)
+async def test_traffic_create_list_rejects_unsupported_inputs(
+    entries: list[str] | None,
+    list_type: TrafficMatchingType,
+    items: list[dict[str, Any]] | None,
+    description: str | None,
+    message: str,
+) -> None:
+    """Unsupported legacy data must fail before reaching the controller."""
+    session = _Session([])
+    with pytest.raises(ValueError, match=message):
+        await _client(session).traffic.create_list(
+            "default",
+            name="List",
+            list_type=list_type,
+            entries=entries,
+            items=items,
+            description=description,
+        )
+    assert session.requests == []
+
+
+async def test_traffic_create_list_port_boundaries_and_items_passthrough() -> None:
+    """Translate single ports and pass pre-built range items through unchanged."""
+    payload = {"id": "ports", "name": "Ports", "type": "PORTS"}
+    session = _Session([payload, payload])
+    client = _client(session)
+    await client.traffic.create_list(
+        "default",
+        name="Ports",
+        list_type=TrafficMatchingType.PORTS,
+        entries=["1", "65535"],
+    )
+    assert session.requests[0]["json"]["items"] == [
+        {"type": "PORT_NUMBER", "value": 1},
+        {"type": "PORT_NUMBER", "value": 65535},
+    ]
+    items = [{"type": "PORT_NUMBER_RANGE", "start": 80, "stop": 443}]
+    await client.traffic.create_list(
+        "default", name="Ports", list_type=TrafficMatchingType.PORTS, items=items
+    )
+    assert session.requests[1]["json"]["items"] == items
+    assert "entries" not in session.requests[1]["json"]
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("accept", "ALLOW"),
+        ("ALLOW", "ALLOW"),
+        ("drop", "BLOCK"),
+        ("DENY", "BLOCK"),
+        ("BLOCK", "BLOCK"),
+        ("reject", "REJECT"),
+        ("REJECT", "REJECT"),
+    ],
+)
+async def test_firewall_create_rule_action_mappings(action: str, expected: str) -> None:
+    """Map legacy actions and supply the required ALLOW return-traffic flag."""
+    session = _Session([{"id": "rule", "name": "Rule"}])
+    await _client(session).firewall.create_rule(
+        "default",
+        name="Rule",
+        action=action,
+        source_zone_id="source",
+        destination_zone_id="destination",
+    )
+    action_data: dict[str, Any] = {"type": expected}
+    if expected == "ALLOW":
+        action_data["allowReturnTraffic"] = False
+    assert session.requests[0]["json"] == {
+        "name": "Rule",
+        "action": action_data,
+        "source": {"zoneId": "source"},
+        "destination": {"zoneId": "destination"},
+        "ipProtocolScope": {"ipVersion": "IPV4"},
+        "enabled": True,
+        "loggingEnabled": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"action": "unknown"}, "Unsupported firewall action"),
+        ({"action": {}}, "Unsupported firewall action"),
+        ({"action": {"type": "unknown"}}, "Unsupported firewall action"),
+        ({"action": {"type": 1}}, "Unsupported firewall action"),
+        ({"action": {"type": "ALLOW", "allowReturnTraffic": "yes"}}, "boolean"),
+        ({"protocol": "tcp"}, "ipProtocolScope"),
+        ({"source_zone_id": None}, "source zoneId"),
+        ({"destination_zone_id": None}, "destination zoneId"),
+        ({"source": None}, "source zoneId"),
+        ({"destination": {}}, "destination zoneId"),
+    ],
+)
+async def test_firewall_create_rule_rejects_invalid_inputs(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    """Invalid actions, protocols and zones never result in a request."""
+    session = _Session([])
+    args: dict[str, Any] = {
+        "source_zone_id": "source",
+        "destination_zone_id": "destination",
+        **kwargs,
+    }
+    with pytest.raises(ValueError, match=message):
+        await _client(session).firewall.create_rule("default", name="Rule", **args)
+    assert session.requests == []
+
+
+async def test_firewall_create_rule_spec_overrides() -> None:
+    """Explicit nested spec fields override all defaults, including legacy zones."""
+    session = _Session([{"id": "rule", "name": "Rule"}])
+    overrides = {
+        "action": {"type": "ALLOW", "allowReturnTraffic": True},
+        "source": {"zoneId": "new-source"},
+        "destination": {"zoneId": "new-destination"},
+        "ipProtocolScope": {"ipVersion": "IPV6"},
+        "enabled": False,
+        "loggingEnabled": True,
+    }
+    # The named action argument also accepts spec objects for ALLOW options.
+    action_override = overrides.pop("action")
+    await _client(session).firewall.create_rule(
+        "default",
+        name="Rule",
+        action=action_override,
+        protocol="tcp",
+        source_zone_id="old-source",
+        destination_zone_id="old-destination",
+        **overrides,
+    )
+    assert session.requests[0]["json"] == {
+        "name": "Rule",
+        "action": action_override,
+        **overrides,
+    }
+
+
+async def test_firewall_create_rule_nested_allow_default() -> None:
+    """A pre-built ALLOW action also receives its schema-required boolean."""
+    action = {"type": "ALLOW"}
+    session = _Session([{"id": "rule", "name": "Rule"}])
+    await _client(session).firewall.create_rule(
+        "default",
+        name="Rule",
+        action=action,
+        source_zone_id="source",
+        destination_zone_id="destination",
+    )
+    assert session.requests[0]["json"]["action"] == {
+        "type": "ALLOW",
+        "allowReturnTraffic": False,
+    }
+    assert action == {"type": "ALLOW"}

@@ -10,6 +10,21 @@ if TYPE_CHECKING:
     from ..client import UniFiNetworkClient
 
 
+_STANDARD_BROADCAST_DEFAULTS: dict[str, Any] = {
+    "type": "STANDARD",
+    "enabled": True,
+    "channel2gLockedTo6": False,
+    "clientIsolationEnabled": False,
+    "dtimPeriod2gLockedTo3": False,
+    "multicastToUnicastConversionEnabled": False,
+    "uapsdEnabled": False,
+    "advertiseDeviceName": False,
+    "arpProxyEnabled": False,
+    "broadcastingFrequenciesGHz": [2.4, 5],
+    "bssTransitionEnabled": False,
+}
+
+
 class WifiEndpoint:
     """Endpoint for managing WiFi configurations."""
 
@@ -152,10 +167,10 @@ class WifiEndpoint:
 
         Args:
             site_id: The site ID.
-            name: WiFi network name.
-            ssid: The SSID to broadcast.
+            name: Broadcast name and SSID.
+            ssid: Must match name; the API has a single broadcast name.
             passphrase: WiFi password (required for secured networks).
-            security: Security type.
+            security: OPEN or WPA2; other types require securityConfiguration.
             network_id: Associated network ID.
             hidden: Whether to hide the SSID.
             **kwargs: Additional parameters.
@@ -165,16 +180,36 @@ class WifiEndpoint:
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/wifi/broadcasts")
+        if ssid != name:
+            msg = "ssid must match name; the API has one broadcast name"
+            raise ValueError(msg)
+        security_configuration: dict[str, Any]
+        if "securityConfiguration" in kwargs:
+            security_configuration = kwargs["securityConfiguration"]
+        elif security in (WifiSecurity.OPEN, WifiSecurity.OPEN_UPPER):
+            security_configuration = {"type": "OPEN"}
+        elif security in (WifiSecurity.WPA2, WifiSecurity.WPA2_PERSONAL):
+            if not passphrase:
+                msg = "WPA2 requires a passphrase"
+                raise ValueError(msg)
+            security_configuration = {
+                "type": "WPA2_PERSONAL",
+                "passphrase": passphrase,
+            }
+        else:
+            msg = "Use securityConfiguration for unsupported security types"
+            raise ValueError(msg)
         data: dict[str, Any] = {
+            **_STANDARD_BROADCAST_DEFAULTS,
+            "broadcastingFrequenciesGHz": list(
+                _STANDARD_BROADCAST_DEFAULTS["broadcastingFrequenciesGHz"]
+            ),
             "name": name,
-            "ssid": ssid,
-            "security": security.value,
-            "hidden": hidden,
+            "hideName": hidden,
+            "securityConfiguration": security_configuration,
         }
-        if passphrase is not None:
-            data["passphrase"] = passphrase
         if network_id is not None:
-            data["networkId"] = network_id
+            data["network"] = {"type": "SPECIFIC", "networkId": network_id}
         data.update(kwargs)
 
         response = await self._client._post(path, json_data=data)

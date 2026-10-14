@@ -313,7 +313,7 @@ class FirewallEndpoint:
         site_id: str,
         *,
         name: str,
-        action: str = "drop",
+        action: str | dict[str, Any] = "drop",
         protocol: str = "all",
         source_zone_id: str | None = None,
         destination_zone_id: str | None = None,
@@ -325,8 +325,9 @@ class FirewallEndpoint:
         Args:
             site_id: The site ID.
             name: Rule name.
-            action: Rule action (accept, drop, reject).
-            protocol: Protocol to match.
+            action: Legacy action name or pre-built ALLOW/BLOCK/REJECT object.
+                ALLOW defaults allowReturnTraffic to False if omitted.
+            protocol: Only all is supported; use ipProtocolScope for other protocols.
             source_zone_id: Source zone ID.
             destination_zone_id: Destination zone ID.
             **kwargs: Additional parameters.
@@ -336,16 +337,48 @@ class FirewallEndpoint:
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/firewall/policies")
+        action_types = {
+            "ACCEPT": "ALLOW",
+            "ALLOW": "ALLOW",
+            "DROP": "BLOCK",
+            "DENY": "BLOCK",
+            "BLOCK": "BLOCK",
+            "REJECT": "REJECT",
+        }
+        action_value = action.get("type") if isinstance(action, dict) else action
+        action_type = (
+            action_types.get(action_value.upper())
+            if isinstance(action_value, str)
+            else None
+        )
+        if action_type is None:
+            msg = f"Unsupported firewall action: {action_value}"
+            raise ValueError(msg)
+        if protocol != "all" and "ipProtocolScope" not in kwargs:
+            msg = "Use ipProtocolScope for protocols other than all"
+            raise ValueError(msg)
+        action_data: dict[str, Any] = dict(action) if isinstance(action, dict) else {}
+        action_data["type"] = action_type
+        if action_type == "ALLOW":
+            action_data.setdefault("allowReturnTraffic", False)
+            if not isinstance(action_data["allowReturnTraffic"], bool):
+                msg = "ALLOW allowReturnTraffic must be a boolean"
+                raise ValueError(msg)
         data: dict[str, Any] = {
             "name": name,
-            "action": action,
-            "protocol": protocol,
+            "action": action_data,
+            "source": {"zoneId": source_zone_id},
+            "destination": {"zoneId": destination_zone_id},
+            "ipProtocolScope": {"ipVersion": "IPV4"},
+            "enabled": True,
+            "loggingEnabled": False,
         }
-        if source_zone_id is not None:
-            data["sourceZoneId"] = source_zone_id
-        if destination_zone_id is not None:
-            data["destinationZoneId"] = destination_zone_id
         data.update(kwargs)
+        for field in ("source", "destination"):
+            zone = data[field]
+            if not isinstance(zone, dict) or not zone.get("zoneId"):
+                msg = f"A {field} zoneId is required"
+                raise ValueError(msg)
 
         response = await self._client._post(path, json_data=data)
         if isinstance(response, dict):
