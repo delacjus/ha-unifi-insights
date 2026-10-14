@@ -9,7 +9,10 @@ import uuid
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final, NoReturn
 
-import voluptuous as vol
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -2241,7 +2244,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_POWER_CYCLE_PORT,
         async_handle_power_cycle_port,
-        schema=POWER_CYCLE_PORT_SCHEMA,  # type: ignore[arg-type]
+        schema=POWER_CYCLE_PORT_SCHEMA,
     )
 
     hass.services.async_register(
@@ -2661,7 +2664,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_RECONNECT_CLIENT,
         async_handle_reconnect_client,
-        schema=RECONNECT_CLIENT_SCHEMA,  # type: ignore[arg-type]
+        schema=RECONNECT_CLIENT_SCHEMA,
     )
 
     async_register_admin_service(
@@ -2669,7 +2672,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_REMOVE_CLIENTS,
         async_handle_remove_clients,
-        schema=REMOVE_CLIENTS_SCHEMA,  # type: ignore[arg-type]
+        schema=REMOVE_CLIENTS_SCHEMA,
     )
 
     hass.services.async_register(
@@ -2695,7 +2698,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_EXPORT_NETWORK_RULES,
         async_handle_export_network_rules,
-        schema=EXPORT_NETWORK_RULES_SCHEMA,  # type: ignore[arg-type]
+        schema=EXPORT_NETWORK_RULES_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 
