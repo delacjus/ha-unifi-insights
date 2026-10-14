@@ -27,6 +27,7 @@ rules:
     check-keys: false
 
 ignore: |
+  .local/
   .serena/
   .venv/
   venv/

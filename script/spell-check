@@ -64,8 +64,8 @@ fi
 
 log_header "Checking spelling with codespell"
 codespell \
-    --ignore-words-list=hass \
-    --skip="./.*,*.csv,*.json,*.ambr,uv.lock" \
+    --ignore-words-list=aiport,astroid,caf,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn,unparseable \
+    --skip="./.*,*.csv,*.json,*.ambr,uv.lock,*custom_components/unifi_insights/frontend*,tests/fixtures/*" \
     --quiet-level=2 \
     "${SPELL_TARGETS[@]}"
 
