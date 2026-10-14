@@ -6,10 +6,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.components.repairs import RepairsFlow
+from homeassistant.components.repairs import RepairsFlow, RepairsFlowResult
 
 if TYPE_CHECKING:
-    from homeassistant.components.repairs import RepairsFlowResult
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
