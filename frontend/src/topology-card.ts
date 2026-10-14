@@ -899,7 +899,7 @@ export class UnifiInsightsTopologyCard extends LitElement {
       }
       .icon-button {
         padding: 0;
-        border-radius: 50%;
+        justify-content: center;
       }
       .notices {
         list-style: none;
