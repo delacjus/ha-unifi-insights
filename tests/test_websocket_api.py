@@ -1962,6 +1962,37 @@ def test_device_in_entry_reads_whichever_ownership_the_device_has() -> None:
     assert not _device_in_entry(multi, "entry-c")
 
 
+@pytest.mark.parametrize("field", ["entry_id", "site_id", "node_id"])
+@pytest.mark.parametrize("invalid", [False, True])
+async def test_node_details_schema_rejects_missing_or_invalid_fields(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    hass_ws_client,
+    field: str,
+    *,
+    invalid: bool,
+) -> None:
+    """Native HA schemas require each identity field to be a string."""
+    client = await hass_ws_client(hass)
+    request = {
+        "id": 1,
+        "type": "unifi_insights/topology/node_details",
+        "entry_id": init_integration.entry_id,
+        "site_id": SITE,
+        "node_id": "dev:uuid-gw",
+    }
+    if invalid:
+        request[field] = 42
+    else:
+        del request[field]
+    await client.send_json(request)
+    response = await client.receive_json()
+
+    assert not response["success"]
+    assert response["error"]["code"] == "invalid_format"
+    assert "result" not in response
+
+
 async def test_node_details_requires_admin(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,

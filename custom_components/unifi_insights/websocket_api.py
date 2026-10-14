@@ -99,7 +99,22 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_topology_sources)
     websocket_api.async_register_command(hass, ws_topology_get)
     websocket_api.async_register_command(hass, ws_topology_subscribe)
-    websocket_api.async_register_command(hass, ws_topology_node_details)
+    # Extend HA's native schema so required fields work with both Voluptuous
+    # (HA 2026.6/9) and Probatio (HA 2026.10+).
+    websocket_api.async_register_command(
+        hass,
+        "unifi_insights/topology/node_details",
+        ws_topology_node_details,
+        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {
+                "type": "unifi_insights/topology/node_details",
+                "entry_id": str,
+                "site_id": str,
+                "node_id": str,
+            },
+            required=True,
+        ),
+    )
     websocket_api.async_register_command(hass, ws_site_health_get)
     websocket_api.async_register_command(hass, ws_site_health_subscribe)
     websocket_api.async_register_command(hass, ws_internet_activity_get)
@@ -586,14 +601,6 @@ def ws_topology_get(
 
 
 @websocket_api.require_admin
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "unifi_insights/topology/node_details",
-        vol.Required("entry_id"): str,
-        vol.Required("site_id"): str,
-        vol.Required("node_id"): str,
-    }
-)
 @callback
 def ws_topology_node_details(
     hass: HomeAssistant,
