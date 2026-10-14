@@ -2270,20 +2270,20 @@ def test_models_acl_branches() -> None:
             "name": "Rule 2",
             "action": ACLAction.ALLOW,
             "index": 1,
-            "metadata": ACLMetadata(origin=ACLMetadataOrigin.USER_DEFINED),
-            "enforcingDeviceFilter": ACLDeviceFilter(deviceIds=["dev-1"]),
-            "sourceFilter": ACLSourceFilter(
-                networkIds=["net-1"],
-                macAddresses=["aa:bb:cc:dd:ee:ff"],
-                ipAddresses=["192.168.1.10"],
-                portRanges=["80-443"],
-            ),
-            "destinationFilter": ACLDestinationFilter(
-                networkIds=["net-2"],
-                macAddresses=["11:22:33:44:55:66"],
-                ipAddresses=["10.0.0.1"],
-                portRanges=["22"],
-            ),
+            "metadata": {"origin": ACLMetadataOrigin.USER_DEFINED},
+            "enforcingDeviceFilter": {"deviceIds": ["dev-1"]},
+            "sourceFilter": {
+                "networkIds": ["net-1"],
+                "macAddresses": ["aa:bb:cc:dd:ee:ff"],
+                "ipAddresses": ["192.168.1.10"],
+                "portRanges": ["80-443"],
+            },
+            "destinationFilter": {
+                "networkIds": ["net-2"],
+                "macAddresses": ["11:22:33:44:55:66"],
+                "ipAddresses": ["10.0.0.1"],
+                "portRanges": ["22"],
+            },
         }
     )
     assert r_user.is_user_defined is True
@@ -2297,7 +2297,7 @@ def test_models_acl_branches() -> None:
             "name": "Rule 3",
             "action": ACLAction.BLOCK,
             "index": 2,
-            "metadata": ACLMetadata(origin=ACLMetadataOrigin.SYSTEM_DEFINED),
+            "metadata": {"origin": ACLMetadataOrigin.SYSTEM_DEFINED},
         }
     )
     assert r_sys.is_user_defined is False
@@ -2324,7 +2324,7 @@ def test_models_traffic_branches() -> None:
             "type": TrafficMatchingType.IPV4_ADDRESSES,
             "name": "IPs",
             "entries": ["1.2.3.4"],
-            "metadata": TrafficMetadata(origin=TrafficMetadataOrigin.USER_DEFINED),
+            "metadata": {"origin": TrafficMetadataOrigin.USER_DEFINED},
         }
     )
     assert t_user.is_user_defined is True
@@ -2335,7 +2335,7 @@ def test_models_traffic_branches() -> None:
             "id": "t-3",
             "type": TrafficMatchingType.PORTS,
             "name": "Domains",
-            "metadata": TrafficMetadata(origin=TrafficMetadataOrigin.SYSTEM_DEFINED),
+            "metadata": {"origin": TrafficMetadataOrigin.SYSTEM_DEFINED},
         }
     )
     assert t_sys.is_user_defined is False

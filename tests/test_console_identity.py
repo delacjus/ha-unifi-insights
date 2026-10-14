@@ -925,7 +925,7 @@ async def test_flow_finds_console_in_a_later_site(hass: HomeAssistant) -> None:
     async def _devices(
         site_id: str | None = None, **_kwargs: object
     ) -> list[MagicMock]:
-        return per_site.get(site_id, [])
+        return per_site.get(site_id, []) if site_id is not None else []
 
     net_client.devices.get_all = AsyncMock(side_effect=_devices)
 

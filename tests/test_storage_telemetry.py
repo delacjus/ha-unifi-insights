@@ -209,7 +209,7 @@ def test_explicit_storage_model_serialization() -> None:
     model = StorageInfo.model_validate(
         {"healthy": False, "usedSpaceBytes": 0, "totalSpaceBytes": 100}
     )
-    nvr = NVR.model_validate({"id": "nvr1", "storage_info": model})
+    nvr = NVR.model_validate({"id": "nvr1", "storageInfo": model})
     assert nvr.model_dump()["storage_info"] == {
         "healthy": False,
         "usedSpaceBytes": 0,
@@ -256,7 +256,7 @@ def test_targeted_serializer_preserves_caller_filters() -> None:
     nvr = NVR.model_validate(
         {
             "id": "nvr1",
-            "storage_info": StorageInfo.model_validate(
+            "storageInfo": StorageInfo.model_validate(
                 {"healthy": None, "usedSize": 0, "extra": {"keep": 1, "drop": 2}}
             ),
         }
@@ -289,7 +289,7 @@ async def test_poll_model_wss_delta_null_and_generation(
         mock_protect_client.nvr.get.return_value = NVR.model_validate(
             {
                 "id": "nvr1",
-                "storage_info": StorageInfo(usedSize=90, totalSize=100, healthy=False),
+                "storageInfo": {"usedSize": 90, "totalSize": 100, "healthy": False},
             }
         )
         await coordinator._fetch_nvr()
@@ -312,9 +312,7 @@ async def test_poll_model_wss_delta_null_and_generation(
             return NVR.model_validate(
                 {
                     "id": "nvr1",
-                    "storage_info": StorageInfo(
-                        usedSize=0, totalSize=100, healthy=True
-                    ),
+                    "storageInfo": {"usedSize": 0, "totalSize": 100, "healthy": True},
                 }
             )
 
