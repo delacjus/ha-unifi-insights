@@ -160,4 +160,6 @@ class SensorsEndpoint:
         """
         if not 0 <= sensitivity <= 100:
             raise ValueError("Sensitivity must be between 0 and 100")
-        return await self.update(sensor_id, site_id, motionSensitivity=sensitivity)
+        return await self.update(
+            sensor_id, site_id, motionSettings={"sensitivity": sensitivity}
+        )

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Self
 from unittest.mock import ANY
 
+import aiohttp
 import pytest
 from pydantic import BaseModel
 from yarl import URL
@@ -514,13 +515,13 @@ async def test_application_endpoints() -> None:
                 "POST",
                 "files/animations",
                 None,
-                ANY,  # Multipart body is pinned by the strict upload xfail.
+                None,  # Binary body is covered by the upload contract regression.
             ),
             (
                 "POST",
                 "files/animations",
                 None,
-                ANY,  # Multipart body is pinned by the strict upload xfail.
+                None,  # Binary body is covered by the upload contract regression.
             ),
             ("POST", "alarm-manager/webhook/trig-abc", None, None),
         ],
@@ -935,7 +936,7 @@ async def test_cameras_more_endpoints() -> None:
 
 
 # ===================================================================
-# chimes.py tests and issue #268 strict xfail
+# chimes.py tests and Protect schema contract regressions
 # ===================================================================
 
 SAMPLE_CHIME = {
@@ -1846,13 +1847,6 @@ class _UploadBuffer:
         self.content += data
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "application.upload_file sends JSON metadata; spec "
-        "POST /v1/files/{fileType} requires multipart/form-data binary"
-    ),
-)
 async def test_upload_file_spec_mismatch() -> None:
     """Binary file contents must reach the spec multipart upload transport."""
     session = _Session([SAMPLE_FILE])
@@ -1869,19 +1863,96 @@ async def test_upload_file_spec_mismatch() -> None:
     await payload.write(buffer)
     assert b"fake-gif" in buffer.content
     assert b'filename="test.gif"' in buffer.content
+    assert b'name="file"' in buffer.content
+    assert b"Content-Type: image/gif" in buffer.content
+    assert "json" not in session.requests[0]
+    assert "Content-Type" not in session.requests[0]["headers"]
+    assert payload.headers["Content-Type"].startswith("multipart/form-data; boundary=")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "sensors.set_motion_sensitivity sends top-level motionSensitivity; "
-        "spec PATCH /v1/sensors/{id} expects motionSettings.sensitivity"
-    ),
-)
+class _ConsumingUploadSession(_Session):
+    """Process each body as aiohttp does before returning an HTTP response."""
+
+    def request(self, method: str, url: object, **kwargs: Any) -> _Response:
+        response = super().request(method, url, **kwargs)
+        self.requests[-1]["payload"] = kwargs["data"]()
+        return response
+
+
+async def test_upload_file_rate_limit_retry_rebuilds_multipart() -> None:
+    """A short 429 rebuilds a fully serialized form with a fresh boundary."""
+    session = _ConsumingUploadSession(
+        [
+            _Response({"error": "Rate limited"}, status=429, headers={"Retry-After": "0"}),
+            {"data": SAMPLE_FILE},
+        ]
+    )
+    uploaded = await _client(session).application.upload_file(
+        b"retry-gif", filename="retry.gif", content_type="image/gif"
+    )
+    assert uploaded.id == "file-1"
+    _assert_requests(session, [("POST", "files/animations", None, None)] * 2)
+    first, second = session.requests
+    assert isinstance(first["data"], aiohttp.FormData)
+    assert first["data"] is not second["data"]
+    assert first["payload"] is not second["payload"]
+    boundaries = []
+    for request in session.requests:
+        assert "json" not in request
+        assert request["headers"]["X-API-Key"] == "test-key"
+        assert request["headers"]["Accept"] == "application/json"
+        assert request["headers"]["User-Agent"]
+        assert "Content-Type" not in request["headers"]
+        payload = request["payload"]
+        content_type = payload.headers["Content-Type"]
+        assert content_type.startswith("multipart/form-data; boundary=")
+        boundary = content_type.split("boundary=", 1)[1].encode()
+        boundaries.append(boundary)
+        buffer = _UploadBuffer()
+        await payload.write(buffer)
+        assert buffer.content.startswith(b"--" + boundary + b"\r\n")
+        assert buffer.content.endswith(b"--" + boundary + b"--\r\n")
+        assert b"retry-gif" in buffer.content
+        assert b'name="file"' in buffer.content
+        assert b'filename="retry.gif"' in buffer.content
+        assert b"Content-Type: image/gif" in buffer.content
+    assert boundaries[0] != boundaries[1]
+
+
+@pytest.mark.parametrize("value", [0, 75.5, 100])
+async def test_sensor_nested_motion_settings_response(value: float) -> None:
+    """Parse spec number values while preserving legacy fields and extras."""
+    session = _Session(
+        [{**SAMPLE_SENSOR, "motionSensitivity": 42, "motionSettings": {
+            "sensitivity": value, "sensitivityWhenArmed": 25.5, "isEnabled": True
+        }}]
+    )
+    sensor = await _client(session).sensors.get("sensor-1")
+    assert sensor.motion_settings is not None
+    assert sensor.motion_settings.sensitivity == value
+    assert sensor.motion_settings.sensitivity_when_armed == 25.5
+    assert sensor.motion_settings.model_dump(by_alias=True) == {
+        "sensitivity": value, "sensitivityWhenArmed": 25.5, "isEnabled": True
+    }
+    assert sensor.motion_sensitivity == 42
+    assert Sensor.model_validate(SAMPLE_SENSOR).motion_settings is None
+
+
+def test_sensor_motion_settings_python_names() -> None:
+    """Both nested models and their fields accept Python names."""
+    sensor = Sensor.model_validate({**SAMPLE_SENSOR, "motion_settings": {
+        "sensitivity": 10, "sensitivity_when_armed": 20
+    }})
+    assert sensor.motion_settings is not None
+    assert sensor.motion_settings.sensitivity_when_armed == 20
+
+
 async def test_sensor_motion_sensitivity_spec_mismatch() -> None:
     """Motion sensitivity PATCH must nest the value under motionSettings."""
-    session = _Session([SAMPLE_SENSOR])
+    session = _Session([{**SAMPLE_SENSOR, "motionSettings": {"sensitivity": 75}}])
     sensor = await _client(session).sensors.set_motion_sensitivity("sensor-1", 75)
+    assert sensor.motion_settings is not None
+    assert sensor.motion_settings.sensitivity == 75
     assert isinstance(sensor, Sensor)
     assert sensor.id == "sensor-1"
     _assert_requests(
@@ -1999,6 +2070,7 @@ async def test_missing_and_malformed_object_responses(
     _assert_requests(session, [(verb, path, None, body)])
 
 
+@pytest.mark.parametrize("upload", [False, True])
 @pytest.mark.parametrize(
     ("status", "exception"),
     [
@@ -2010,14 +2082,19 @@ async def test_missing_and_malformed_object_responses(
     ],
 )
 async def test_protect_transport_error_mapping(
-    status: int, exception: type[Exception]
+    status: int, exception: type[Exception], *, upload: bool
 ) -> None:
-    """Public device calls preserve the common HTTP exception mapping."""
+    """Device reads and multipart uploads preserve HTTP exception mapping."""
     session = _Session([_Response({"error": "Request failed"}, status=status)])
     with pytest.raises(exception) as exc_info:
-        await _client(session).sensors.get("sensor-1")
+        client = _client(session)
+        if upload:
+            await client.application.upload_file(b"gif", filename="test.gif")
+        else:
+            await client.sensors.get("sensor-1")
     assert exc_info.value.status_code == status
-    _assert_requests(session, [("GET", "sensors/sensor-1", None, None)])
+    expected = ("POST", "files/animations") if upload else ("GET", "sensors/sensor-1")
+    _assert_requests(session, [(*expected, None, None)])
 
 
 @pytest.mark.parametrize("response", [SAMPLE_FILE, {"data": SAMPLE_FILE}])
@@ -2029,7 +2106,7 @@ async def test_upload_file_response_parsing(response: dict[str, Any]) -> None:
     )
     assert isinstance(uploaded, DeviceFile)
     assert uploaded.id == "file-1"
-    _assert_requests(session, [("POST", "files/animations", None, ANY)])
+    _assert_requests(session, [("POST", "files/animations", None, None)])
 
 
 @pytest.mark.parametrize(
@@ -2043,7 +2120,7 @@ async def test_upload_file_response_parsing(response: dict[str, Any]) -> None:
 async def test_sensor_setter_response_parsing(
     *, method: str, value: bool | int
 ) -> None:
-    """Parse setter responses; strict xfails cover the incompatible bodies."""
+    """Parse successful setter responses at the inclusive sensitivity limits."""
     session = _Session([{"data": SAMPLE_SENSOR}])
     sensor = await getattr(_client(session).sensors, method)("sensor-1", value)
     assert isinstance(sensor, Sensor)

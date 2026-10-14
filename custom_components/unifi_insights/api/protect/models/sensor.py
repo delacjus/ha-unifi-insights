@@ -31,6 +31,17 @@ class BatteryStatus(BaseModel):
     model_config = {"populate_by_name": True, "extra": "allow"}
 
 
+class MotionSettings(BaseModel):
+    """Motion sensor sensitivity settings returned by Protect."""
+
+    sensitivity: float | None = None
+    sensitivity_when_armed: float | None = Field(
+        default=None, alias="sensitivityWhenArmed"
+    )
+
+    model_config = {"populate_by_name": True, "extra": "allow"}
+
+
 class Sensor(BaseModel):
     """
     UniFi Protect Sensor device.
@@ -64,6 +75,7 @@ class Sensor(BaseModel):
     humidity: float | None = None
     light_value: float | None = Field(default=None, alias="lightValue")
     motion_sensitivity: int | None = Field(default=None, alias="motionSensitivity")
+    motion_settings: MotionSettings | None = Field(default=None, alias="motionSettings")
     open_status_led_enabled: bool = Field(default=True, alias="openStatusLedEnabled")
     alarm_settings: dict[str, Any] | None = Field(default=None, alias="alarmSettings")
     mount_type: str | None = Field(default=None, alias="mountType")
