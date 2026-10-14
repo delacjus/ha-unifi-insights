@@ -347,6 +347,7 @@ class BaseUniFiClient(ABC):
         *,
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        body_factory: Callable[[], aiohttp.FormData] | None = None,
         headers: dict[str, str] | None = None,
         expected_unsupported: bool = False,
         log_body: bool = True,
@@ -367,6 +368,7 @@ class BaseUniFiClient(ABC):
                 path,
                 params=params,
                 json_data=json_data,
+                body_factory=body_factory,
                 headers=headers,
                 expected_unsupported=expected_unsupported,
                 log_body=log_body,
@@ -381,6 +383,7 @@ class BaseUniFiClient(ABC):
         *,
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        body_factory: Callable[[], aiohttp.FormData] | None = None,
         headers: dict[str, str] | None = None,
         expected_unsupported: bool = False,
         log_body: bool = True,
@@ -393,6 +396,7 @@ class BaseUniFiClient(ABC):
             path: API path.
             params: Query parameters.
             json_data: JSON body data.
+            body_factory: Build a fresh multipart body for this attempt.
             headers: Additional headers.
             expected_unsupported: Whether a non-JSON 2xx response is an
                 expected unsupported-endpoint signal.
@@ -417,6 +421,17 @@ class BaseUniFiClient(ABC):
         request_headers = self._get_headers()
         if headers:
             request_headers.update(headers)
+        if body_factory is not None:
+            # Omit JSON Content-Type in any casing, letting aiohttp supply the
+            # multipart boundary while retaining other caller header overrides.
+            request_headers = {
+                key: value
+                for key, value in request_headers.items()
+                if not (
+                    key.lower() == HEADER_CONTENT_TYPE.lower()
+                    and value.split(";", 1)[0].strip().lower() == CONTENT_TYPE_JSON
+                )
+            }
 
         _LOGGER.debug(
             "Making %s request to %s",
@@ -425,11 +440,16 @@ class BaseUniFiClient(ABC):
         )
 
         try:
+            request_body: dict[str, Any] = (
+                {"data": body_factory()}
+                if body_factory is not None
+                else {"json": json_data}
+            )
             async with session.request(
                 method,
                 url,
                 params=params,
-                json=json_data,
+                **request_body,
                 headers=request_headers,
             ) as response:
                 return await self._handle_response(
@@ -623,6 +643,7 @@ class BaseUniFiClient(ABC):
         path: str,
         *,
         json_data: dict[str, Any] | None = None,
+        body_factory: Callable[[], aiohttp.FormData] | None = None,
         params: dict[str, Any] | None = None,
         expected_unsupported: bool = False,
         log_body: bool = True,
@@ -633,6 +654,7 @@ class BaseUniFiClient(ABC):
         Args:
             path: API path.
             json_data: JSON body data.
+            body_factory: Build a fresh multipart body for each attempt.
             params: Query parameters.
             expected_unsupported: Whether a non-JSON 2xx response is an
                 expected unsupported-endpoint signal.
@@ -646,6 +668,7 @@ class BaseUniFiClient(ABC):
             "POST",
             path,
             json_data=json_data,
+            body_factory=body_factory,
             params=params,
             expected_unsupported=expected_unsupported,
             log_body=log_body,

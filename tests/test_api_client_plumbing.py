@@ -363,3 +363,57 @@ def test_network_client_build_api_path_remote() -> None:
         client.build_api_path("sites")
         == "/v1/connector/consoles/cid-99/network/integration/v1/sites"
     )
+
+
+@pytest.mark.parametrize(
+    "content_type_header", ["Content-Type", "content-type", "CONTENT-TYPE"]
+)
+async def test_multipart_body_preserves_auth_and_caller_headers(
+    content_type_header: str,
+) -> None:
+    """JSON Content-Type is omitted in any casing while other headers survive."""
+    session = _Session([{"ok": True}])
+    client = _DummyClient(
+        auth=ApiKeyAuth(api_key="key"),
+        base_url="https://192.168.1.1",
+        session=session,  # type: ignore[arg-type]
+    )
+
+    def body_factory() -> aiohttp.FormData:
+        form = aiohttp.FormData()
+        form.add_field("file", b"gif", filename="test.gif", content_type="image/gif")
+        return form
+
+    assert await client._request(
+        "POST", "/files", body_factory=body_factory,
+        headers={
+            "X-Custom-Header": "custom-val",
+            "User-Agent": "caller-agent",
+            content_type_header: "Application/JSON; charset=utf-8",
+        },
+    ) == {"ok": True}
+    request = session.requests[0]
+    assert "json" not in request
+    assert isinstance(request["data"], aiohttp.FormData)
+    assert request["headers"] == {
+        "X-API-Key": "key", "Accept": "application/json",
+        "User-Agent": "caller-agent", "X-Custom-Header": "custom-val",
+    }
+
+
+@pytest.mark.parametrize("json_data", [None, {"enabled": False}])
+async def test_json_request_keeps_body_and_content_type(
+    json_data: dict[str, Any] | None,
+) -> None:
+    """Ordinary requests retain json= including None and never add data=."""
+    session = _Session([{"ok": True}])
+    client = _DummyClient(
+        auth=ApiKeyAuth(api_key="key"),
+        base_url="https://192.168.1.1",
+        session=session,  # type: ignore[arg-type]
+    )
+    await client._post("/endpoint", json_data=json_data)
+    request = session.requests[0]
+    assert request["json"] == json_data
+    assert "data" not in request
+    assert request["headers"]["Content-Type"] == "application/json"
