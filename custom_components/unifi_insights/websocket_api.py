@@ -18,7 +18,6 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import callback
@@ -53,6 +52,14 @@ from .topology_contract import (
     site_display_name,
 )
 from .topology_keys import async_get_node_key
+
+# Schemas are typed against probatio, the library HA 2026.10 annotates its schema
+# arguments with. Runtime still imports voluptuous: HA 2026.10 aliases it to probatio,
+# and the 2026.6 minimum ships real voluptuous, so only the type checker sees probatio.
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 if TYPE_CHECKING:
     from collections.abc import Callable
