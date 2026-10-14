@@ -551,18 +551,15 @@ async def test_update_endpoints_enforce_keyword_only_arguments() -> None:
     session = _Session([])
     client = _client(session)
 
+    fn_name: Any = client.update_device_name
     with pytest.raises(TypeError):
-        await client.update_device_name(  # type: ignore[misc]
-            _WORKSPACE_ID, _DEVICE_ID, "Branch Office Router"
-        )
+        await fn_name(_WORKSPACE_ID, _DEVICE_ID, "Branch Office Router")
+    fn_net: Any = client.update_device_network
     with pytest.raises(TypeError):
-        await client.update_device_network(  # type: ignore[call-arg]
-            _WORKSPACE_ID, _DEVICE_ID, "192.168.10.1"
-        )
+        await fn_net(_WORKSPACE_ID, _DEVICE_ID, "192.168.10.1")
+    fn_wl: Any = client.update_device_wireless
     with pytest.raises(TypeError):
-        await client.update_device_wireless(  # type: ignore[misc]
-            _WORKSPACE_ID, _DEVICE_ID, "MyNetwork", "test-password"
-        )
+        await fn_wl(_WORKSPACE_ID, _DEVICE_ID, "MyNetwork", "test-password")
     assert session.requests == []
 
 
