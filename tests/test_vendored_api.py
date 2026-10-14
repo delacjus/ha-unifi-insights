@@ -3823,6 +3823,7 @@ async def test_site_report_bucket_and_endpoint_local_and_remote() -> None:
         "POST",
         "/proxy/network/api/s/default/stat/report/daily.site",
         json_data={"start": 1, "end": 2},
+        body_factory=None,
         params=None,
         expected_unsupported=True,
         log_body=True,

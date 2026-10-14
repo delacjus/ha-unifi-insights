@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import aiohttp
+
 from ..models.files import ApplicationInfo, DeviceFile, FileType
 
 if TYPE_CHECKING:
@@ -74,7 +76,7 @@ class ApplicationEndpoint:
 
     async def upload_file(
         self,
-        file_data: bytes,  # noqa: ARG002
+        file_data: bytes,
         filename: str,
         content_type: str = "image/gif",
         file_type: FileType = FileType.ANIMATIONS,
@@ -84,7 +86,7 @@ class ApplicationEndpoint:
         Upload a device asset file.
 
         Args:
-            file_data: Binary file data (reserved for future multipart support).
+            file_data: Binary file data.
             filename: Original filename.
             content_type: MIME type (image/gif, image/jpeg, image/png, audio/mpeg, etc).
             file_type: Type of file.
@@ -94,16 +96,21 @@ class ApplicationEndpoint:
             The uploaded file info.
 
         Note:
-            Full multipart file upload support is planned for a future release.
+            The multipart field name ``file`` is a convention; the official
+            schema specifies a binary upload without naming the field.
 
         """
         path = self._client.build_api_path(f"/files/{file_type.value}", site_id)
 
-        # TODO: Implement multipart form data support for actual file upload
-        response = await self._client._post(
-            path,
-            json_data={"filename": filename, "contentType": content_type},
-        )
+        def body_factory() -> aiohttp.FormData:
+            """Create a new body because multipart forms are consumed on send."""
+            form = aiohttp.FormData()
+            form.add_field(
+                "file", file_data, filename=filename, content_type=content_type
+            )
+            return form
+
+        response = await self._client._post(path, body_factory=body_factory)
 
         if isinstance(response, dict):
             data = response.get("data", response)
