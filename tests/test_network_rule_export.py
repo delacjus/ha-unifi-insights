@@ -444,6 +444,28 @@ async def test_one_failed_family_does_not_fail_the_export() -> None:
     assert types["firewall_rule"]["status"] == "ok"
 
 
+async def test_malformed_site_exports_without_a_name() -> None:
+    """A site value that is not a mapping has no name and no classic site name."""
+    client = _client()
+
+    document = await async_build_rule_export(
+        client,
+        {"site1": "not-a-mapping"},
+        console=_CONSOLE,
+        site_ids=None,
+        rule_types=None,
+        is_unsupported=UnifiBaseCoordinator._is_unsupported_response,
+    )
+
+    site = document["sites"]["site1"]
+    assert site["name"] is None
+    assert site["rule_types"]["firewall_rule"]["status"] == "ok"
+    for rule_type in RULE_TYPES:
+        if rule_type != "firewall_rule":
+            assert site["rule_types"][rule_type]["status"] == "unsupported"
+            _lister(client, rule_type).assert_not_awaited()
+
+
 async def test_no_matching_site_returns_empty_sites() -> None:
     """An unknown site id selects nothing and fetches nothing."""
     client = _client()

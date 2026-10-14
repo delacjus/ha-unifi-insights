@@ -8004,6 +8004,24 @@ class TestUnifiFacadeCoordinator:
         }
 
     @pytest.mark.asyncio
+    async def test_async_export_network_rules_without_a_config_entry(
+        self, facade_coordinator: UnifiFacadeCoordinator
+    ) -> None:
+        """Without a config entry the console identity is exported as unknown."""
+        facade_coordinator._config_coordinator.data = {"sites": {}}
+        facade_coordinator.config_entry = None
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.facade."
+            "async_build_rule_export",
+            AsyncMock(return_value={}),
+        ) as build:
+            await facade_coordinator.async_export_network_rules()
+
+        assert build.await_args is not None
+        assert build.await_args.kwargs["console"] == {"entry_id": None, "title": None}
+
+    @pytest.mark.asyncio
     async def test_async_set_nat_rule_enabled_console_managed_refreshes_and_raises(
         self, facade_coordinator: UnifiFacadeCoordinator
     ) -> None:
