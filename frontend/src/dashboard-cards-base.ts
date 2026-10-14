@@ -191,7 +191,7 @@ export abstract class BaseDashboardCard extends LitElement {
         kinds: ["gateway", "switch", "access_point", "client", "other"],
         density: undefined,
         orientation: "vertical",
-                layout: "tree",
+        layout: "tree",
         show_labels: true,
         max_clients: 500,
       },

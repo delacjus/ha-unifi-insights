@@ -32,7 +32,7 @@ export interface TopologyCardConfig {
   kinds?: NodeKind[];
   density?: Density;
   orientation?: Orientation;
-    layout?: LayoutMode;
+  layout?: LayoutMode;
   show_labels?: boolean;
   max_clients?: number;
   [key: string]: unknown;
@@ -49,7 +49,7 @@ export interface ResolvedConfig {
   /** undefined = automatic (compact below 600 px card width). */
   density: Density | undefined;
   orientation: Orientation;
-    layout: LayoutMode;
+  layout: LayoutMode;
   show_labels: boolean;
   max_clients: number;
 }
@@ -97,7 +97,7 @@ export function validateConfig(raw: unknown): TopologyCardConfig {
   checkOneOf(c.clients, CLIENT_MODES, "clients");
   checkOneOf(c.density, DENSITIES, "density");
   checkOneOf(c.orientation, ORIENTATIONS, "orientation");
-    checkOneOf(c.layout, LAYOUTS, "layout");
+  checkOneOf(c.layout, LAYOUTS, "layout");
   for (const key of ["show_site_selector", "show_labels"] as const) {
     if (c[key] !== undefined && typeof c[key] !== "boolean")
       throw new Error(`${key} must be true or false`);
@@ -138,7 +138,7 @@ export function resolveConfig(c: TopologyCardConfig): ResolvedConfig {
     kinds: c.kinds ? [...c.kinds] : [...NODE_KINDS],
     density: c.density,
     orientation: c.orientation ?? "vertical",
-        layout: c.layout ?? "tree",
+    layout: c.layout ?? "tree",
     show_labels: c.show_labels ?? true,
     max_clients: c.max_clients ?? MAX_CLIENTS_PER_SITE,
   };

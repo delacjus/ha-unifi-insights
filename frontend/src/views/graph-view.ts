@@ -83,7 +83,7 @@ export class UitGraphView extends LitElement {
     model: { attribute: false },
     density: { attribute: false },
     orientation: { attribute: false },
-        layoutMode: { attribute: false },
+    layoutMode: { attribute: false },
     showLabels: { attribute: false },
     selectedId: { attribute: false },
     localize: { attribute: false },
@@ -97,7 +97,7 @@ export class UitGraphView extends LitElement {
   declare model?: GraphModel;
   declare density: Density;
   declare orientation: Orientation;
-    declare layoutMode: LayoutMode;
+  declare layoutMode: LayoutMode;
   declare showLabels: boolean;
   declare selectedId?: string;
   declare localize?: LocalizeFunc;
@@ -119,15 +119,15 @@ export class UitGraphView extends LitElement {
   private fitted = false;
   private zoomBehavior: ZoomBehavior<SVGSVGElement, unknown> | undefined;
   private resizeObserver: ResizeObserver | undefined;
-    /** Pointers now down, and whether this gesture has panned or pinched. */
-    private pointers = new Set<number>();
-    private gesture = { x: 0, y: 0, moved: false };
+  /** Pointers now down, and whether this gesture has panned or pinched. */
+  private pointers = new Set<number>();
+  private gesture = { x: 0, y: 0, moved: false };
 
   constructor() {
     super();
     this.density = "comfortable";
     this.orientation = "vertical";
-        this.layoutMode = "tree";
+    this.layoutMode = "tree";
     this.showLabels = true;
     this.siteName = "";
     this.ctrlZoom = true;
@@ -170,20 +170,20 @@ export class UitGraphView extends LitElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-        if (changed.has("layoutMode")) this.fitted = false;
+    if (changed.has("layoutMode")) this.fitted = false;
     if (!this.model) return;
     if (
       changed.has("model") ||
       changed.has("density") ||
-            changed.has("orientation") ||
-            changed.has("layoutMode")
+      changed.has("orientation") ||
+      changed.has("layoutMode")
     ) {
-            const next = layoutModel(
-                this.model,
-                this.density,
-                this.orientation,
-                this.layoutMode,
-            );
+      const next = layoutModel(
+        this.model,
+        this.density,
+        this.orientation,
+        this.layoutMode,
+      );
       const previous = this.layout;
       this.entering = new Set(
         previous
@@ -369,51 +369,50 @@ export class UitGraphView extends LitElement {
     } else if (e.key === "0") {
       e.preventDefault();
       this.fit();
-        } else if (
-            (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) &&
-            this.focusId !== undefined
-        ) {
-            e.preventDefault();
-            fireEvent(this, "uit-context", { id: this.focusId });
+    } else if (
+      (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) &&
+      this.focusId !== undefined
+    ) {
+      e.preventDefault();
+      fireEvent(this, "uit-context", { id: this.focusId });
     }
   }
 
-    private onPointerDown(e: PointerEvent): void {
-        if (e.isPrimary) {
-            this.pointers = new Set([e.pointerId]);
-            this.gesture = { x: e.clientX, y: e.clientY, moved: false };
-        } else {
-            // A second finger: this is a pinch.
-            this.pointers.add(e.pointerId);
-            this.gesture.moved = true;
-        }
+  private onPointerDown(e: PointerEvent): void {
+    if (e.isPrimary) {
+      this.pointers = new Set([e.pointerId]);
+      this.gesture = { x: e.clientX, y: e.clientY, moved: false };
+    } else {
+      // A second finger: this is a pinch.
+      this.pointers.add(e.pointerId);
+      this.gesture.moved = true;
     }
+  }
 
-    private onPointerMove(e: PointerEvent): void {
-        const { gesture } = this;
-        if (
-            !gesture.moved &&
-            this.pointers.has(e.pointerId) &&
-            Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) >
-                PAN_SLOP_PX
-        )
-            gesture.moved = true;
-    }
+  private onPointerMove(e: PointerEvent): void {
+    const { gesture } = this;
+    if (
+      !gesture.moved &&
+      this.pointers.has(e.pointerId) &&
+      Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > PAN_SLOP_PX
+    )
+      gesture.moved = true;
+  }
 
-    private onPointerEnd(e: PointerEvent): void {
-        this.pointers.delete(e.pointerId);
-    }
+  private onPointerEnd(e: PointerEvent): void {
+    this.pointers.delete(e.pointerId);
+  }
 
-    /**
-     * A context click or a long press on a node asks the card for its action
-     * menu. The browser's own menu never shows. After a pan or a pinch the
-     * press is not a long press, so the node menu stays shut.
-     */
-    private onContextMenu(e: Event, id: string): void {
-        e.preventDefault();
-        if (!this.gesture.moved && this.pointers.size <= 1)
-            fireEvent(this, "uit-context", { id });
-    }
+  /**
+   * A context click or a long press on a node asks the card for its action
+   * menu. The browser's own menu never shows. After a pan or a pinch the
+   * press is not a long press, so the node menu stays shut.
+   */
+  private onContextMenu(e: Event, id: string): void {
+    e.preventDefault();
+    if (!this.gesture.moved && this.pointers.size <= 1)
+      fireEvent(this, "uit-context", { id });
+  }
 
   protected override render(): TemplateResult | typeof nothing {
     const { model, layout, localize } = this;
@@ -442,10 +441,10 @@ export class UitGraphView extends LitElement {
           clients: model.stats.clients,
         })}
         @keydown=${this.onKeydown}
-                @pointerdown=${this.onPointerDown}
-                @pointermove=${this.onPointerMove}
-                @pointerup=${this.onPointerEnd}
-                @pointercancel=${this.onPointerEnd}
+        @pointerdown=${this.onPointerDown}
+        @pointermove=${this.onPointerMove}
+        @pointerup=${this.onPointerEnd}
+        @pointercancel=${this.onPointerEnd}
       >
         <g class="viewport" transform=${this.transformAttr()}>
           <g class="links">

@@ -115,19 +115,19 @@ export interface SiteTopology {
  * MAC addresses.
  */
 export interface NodeDetails {
-    kind: NodeKind;
-    ip_address?: string;
-    mac_address?: string;
-    /** Home Assistant device registry id. */
-    device_id?: string;
-    entity_id?: string;
+  kind: NodeKind;
+  ip_address?: string;
+  mac_address?: string;
+  /** Home Assistant device registry id. */
+  device_id?: string;
+  entity_id?: string;
 }
 
 export type NodeDetailsRequest = {
-    type: typeof WS_NODE_DETAILS;
-    entry_id: string;
-    site_id: string;
-    node_id: string;
+  type: typeof WS_NODE_DETAILS;
+  entry_id: string;
+  site_id: string;
+  node_id: string;
 };
 
 export interface TopologySite {

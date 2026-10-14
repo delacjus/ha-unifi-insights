@@ -296,7 +296,7 @@ def _client_targets(
             for candidate in _client_tracker_entries(registry, entry.entry_id)
             if not candidate.unique_id.startswith(f"{DOMAIN}_")
             and _mac_from_unique_id(candidate.unique_id) == mac
-    ]
+        ]
         tracker = legacy[0] if len(legacy) == 1 else None
     targets: dict[str, str] = {}
     if tracker is not None and tracker.config_entry_id == entry.entry_id:
