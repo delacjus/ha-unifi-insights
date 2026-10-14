@@ -2298,6 +2298,8 @@ def test_response_redaction_preserves_non_json_fallback_and_log_bound() -> None:
     [
         ({"security": WifiSecurity.WPA2}, "passphrase"),
         ({"security": WifiSecurity.WPA2_PERSONAL, "passphrase": ""}, "passphrase"),
+        ({"security": WifiSecurity.OPEN, "passphrase": "guestpass"}, "OPEN"),
+        ({"security": WifiSecurity.OPEN_UPPER, "passphrase": ""}, "OPEN"),
         ({"security": WifiSecurity.WPA3}, "securityConfiguration"),
         ({"ssid": "Different"}, "ssid must match name"),
     ],
@@ -2324,7 +2326,7 @@ async def test_wifi_create_security_aliases(security: WifiSecurity) -> None:
         name="Wifi",
         ssid="Wifi",
         security=security,
-        passphrase="guestpass",  # noqa: S106
+        passphrase="guestpass" if security == WifiSecurity.WPA2_PERSONAL else None,
     )
     expected = _wifi_document("Wifi")
     if security == WifiSecurity.WPA2_PERSONAL:

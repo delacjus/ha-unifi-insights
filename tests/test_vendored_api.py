@@ -3887,15 +3887,13 @@ async def test_devices_adopt_posts_to_spec_endpoint() -> None:
 async def test_traffic_get_dpi_categories_unscoped_and_paged() -> None:
     """get_dpi_categories() is unscoped (/v1/dpi/categories) and accepts paging."""
     client = _network_client()
-    client._get = AsyncMock(
-        return_value={"data": [{"id": "cat-1", "name": "Streaming"}]}
-    )
+    client._get = AsyncMock(return_value={"data": [{"id": 3, "name": "Streaming"}]})
 
     result = await client.traffic.get_dpi_categories(
         offset=10, limit=50, filter_str="name.eq('Streaming')"
     )
     assert len(result) == 1
-    assert result[0].id == "cat-1"
+    assert result[0].id == 3
     assert result[0].name == "Streaming"
     client._get.assert_awaited_once_with(
         client.build_api_path("/dpi/categories"),
@@ -3906,10 +3904,11 @@ async def test_traffic_get_dpi_categories_unscoped_and_paged() -> None:
 async def test_traffic_get_dpi_applications_unscoped_and_paged() -> None:
     """get_dpi_applications() is unscoped (/v1/dpi/applications) and accepts paging."""
     client = _network_client()
-    client._get = AsyncMock(return_value={"data": [{"id": "app-1", "name": "YouTube"}]})
+    client._get = AsyncMock(return_value={"data": [{"id": 786435, "name": "YouTube"}]})
 
     result = await client.traffic.get_dpi_applications(offset=0, limit=25)
     assert len(result) == 1
+    assert result[0].id == 786435
     assert result[0].name == "YouTube"
     client._get.assert_awaited_once_with(
         client.build_api_path("/dpi/applications"),

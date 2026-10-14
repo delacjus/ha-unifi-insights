@@ -385,7 +385,9 @@ async def test_multipart_body_preserves_auth_and_caller_headers(
         return form
 
     assert await client._request(
-        "POST", "/files", body_factory=body_factory,
+        "POST",
+        "/files",
+        body_factory=body_factory,
         headers={
             "X-Custom-Header": "custom-val",
             "User-Agent": "caller-agent",
@@ -396,8 +398,10 @@ async def test_multipart_body_preserves_auth_and_caller_headers(
     assert "json" not in request
     assert isinstance(request["data"], aiohttp.FormData)
     assert request["headers"] == {
-        "X-API-Key": "key", "Accept": "application/json",
-        "User-Agent": "caller-agent", "X-Custom-Header": "custom-val",
+        "X-API-Key": "key",
+        "Accept": "application/json",
+        "User-Agent": "caller-agent",
+        "X-Custom-Header": "custom-val",
     }
 
 
