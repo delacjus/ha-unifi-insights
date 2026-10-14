@@ -66,8 +66,8 @@ log_header "Running codespell with auto-fix"
 spell_exit=0
 codespell \
     --write-changes \
-    --ignore-words-list=hass \
-    --skip="./.*,*.csv,*.json,*.ambr,uv.lock" \
+    --ignore-words-list=aiport,astroid,caf,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn,unparseable \
+    --skip="./.*,*.csv,*.json,*.ambr,uv.lock,*custom_components/unifi_insights/frontend*,tests/fixtures/*" \
     --quiet-level=2 \
     "${SPELL_TARGETS[@]}" 2>&1 || spell_exit=$?
 

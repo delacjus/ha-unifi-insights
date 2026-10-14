@@ -18,7 +18,7 @@ dev = [
     "ha-ffmpeg>=3.2.2",
     "wakeonlan==4.0.0",
     "segno==1.6.6",
-    "ruff>=0.8.0",
+    "ruff==0.14.13",
     "mypy>=1.20.1",
     "codespell>=2.4.2",
     "bandit[toml]>=1.9.4",
@@ -166,3 +166,8 @@ disallow_untyped_calls = false
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101", "B601"]  # Skip assert and shell injection checks
+
+[tool.codespell]
+skip = "./.*,*.csv,*.json,*.ambr,uv.lock,*custom_components/unifi_insights/frontend*,tests/fixtures/*"
+ignore-words-list = "aiport,astroid,caf,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn,unparseable"
+quiet-level = 2

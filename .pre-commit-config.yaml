@@ -19,11 +19,11 @@ repos:
     hooks:
       - id: codespell
         args:
-          - --ignore-words-list=aiport,astroid,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn,unparseable
+          - --ignore-words-list=aiport,astroid,caf,checkin,currenty,hass,iif,incomfort,lookin,nam,NotIn,unparseable
           - --skip="./.*,*.csv,*.json,*.ambr"
           - --quiet-level=2
         exclude_types: [csv, json, html]
-        exclude: ^tests/fixtures/
+        exclude: ^(tests/fixtures/|custom_components/unifi_insights/frontend/)
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -42,6 +42,7 @@ repos:
     rev: v3.6.2
     hooks:
       - id: prettier
+        exclude: ^custom_components/unifi_insights/frontend/
         additional_dependencies:
           - prettier@3.6.2
           - prettier-plugin-sort-json@4.2.0
@@ -59,17 +60,13 @@ repos:
           - --force
           - --keep-updates
         files: ^(custom_components|tests|script)/.+\.py$
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
+  - repo: local
     hooks:
       - id: mypy
-        exclude: ^custom_components/unifi_insights/api/
-        args:
-          - --ignore-missing-imports
-          - --no-strict-optional
-          - --check-untyped-defs
-          - --explicit-package-bases
-          - --namespace-packages
+        name: mypy
+        entry: script/type-check-mypy
+        language: script
+        types: [python]
         files: ^custom_components/.+\.py$
-        additional_dependencies:
-          - types-aiofiles
+        exclude: ^custom_components/unifi_insights/api/
+        pass_filenames: false

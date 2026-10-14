@@ -1,0 +1,7 @@
+.local/
+.venv/
+venv/
+build/
+dist/
+node_modules/
+custom_components/unifi_insights/frontend/
