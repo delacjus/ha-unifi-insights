@@ -169,7 +169,7 @@ class WifiEndpoint:
             site_id: The site ID.
             name: Broadcast name and SSID.
             ssid: Must match name; the API has a single broadcast name.
-            passphrase: WiFi password (required for secured networks).
+            passphrase: WiFi password (required for WPA2, rejected for OPEN).
             security: OPEN or WPA2; other types require securityConfiguration.
             network_id: Associated network ID.
             hidden: Whether to hide the SSID.
@@ -187,6 +187,9 @@ class WifiEndpoint:
         if "securityConfiguration" in kwargs:
             security_configuration = kwargs["securityConfiguration"]
         elif security in (WifiSecurity.OPEN, WifiSecurity.OPEN_UPPER):
+            if passphrase is not None:
+                msg = "OPEN security does not accept a passphrase"
+                raise ValueError(msg)
             security_configuration = {"type": "OPEN"}
         elif security in (WifiSecurity.WPA2, WifiSecurity.WPA2_PERSONAL):
             if not passphrase:

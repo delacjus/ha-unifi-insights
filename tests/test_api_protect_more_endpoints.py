@@ -1883,7 +1883,9 @@ async def test_upload_file_rate_limit_retry_rebuilds_multipart() -> None:
     """A short 429 rebuilds a fully serialized form with a fresh boundary."""
     session = _ConsumingUploadSession(
         [
-            _Response({"error": "Rate limited"}, status=429, headers={"Retry-After": "0"}),
+            _Response(
+                {"error": "Rate limited"}, status=429, headers={"Retry-After": "0"}
+            ),
             {"data": SAMPLE_FILE},
         ]
     )
@@ -1923,16 +1925,26 @@ async def test_upload_file_rate_limit_retry_rebuilds_multipart() -> None:
 async def test_sensor_nested_motion_settings_response(value: float) -> None:
     """Parse spec number values while preserving legacy fields and extras."""
     session = _Session(
-        [{**SAMPLE_SENSOR, "motionSensitivity": 42, "motionSettings": {
-            "sensitivity": value, "sensitivityWhenArmed": 25.5, "isEnabled": True
-        }}]
+        [
+            {
+                **SAMPLE_SENSOR,
+                "motionSensitivity": 42,
+                "motionSettings": {
+                    "sensitivity": value,
+                    "sensitivityWhenArmed": 25.5,
+                    "isEnabled": True,
+                },
+            }
+        ]
     )
     sensor = await _client(session).sensors.get("sensor-1")
     assert sensor.motion_settings is not None
     assert sensor.motion_settings.sensitivity == value
     assert sensor.motion_settings.sensitivity_when_armed == 25.5
     assert sensor.motion_settings.model_dump(by_alias=True) == {
-        "sensitivity": value, "sensitivityWhenArmed": 25.5, "isEnabled": True
+        "sensitivity": value,
+        "sensitivityWhenArmed": 25.5,
+        "isEnabled": True,
     }
     assert sensor.motion_sensitivity == 42
     assert Sensor.model_validate(SAMPLE_SENSOR).motion_settings is None
@@ -1940,9 +1952,12 @@ async def test_sensor_nested_motion_settings_response(value: float) -> None:
 
 def test_sensor_motion_settings_python_names() -> None:
     """Both nested models and their fields accept Python names."""
-    sensor = Sensor.model_validate({**SAMPLE_SENSOR, "motion_settings": {
-        "sensitivity": 10, "sensitivity_when_armed": 20
-    }})
+    sensor = Sensor.model_validate(
+        {
+            **SAMPLE_SENSOR,
+            "motion_settings": {"sensitivity": 10, "sensitivity_when_armed": 20},
+        }
+    )
     assert sensor.motion_settings is not None
     assert sensor.motion_settings.sensitivity_when_armed == 20
 
@@ -2086,12 +2101,14 @@ async def test_protect_transport_error_mapping(
 ) -> None:
     """Device reads and multipart uploads preserve HTTP exception mapping."""
     session = _Session([_Response({"error": "Request failed"}, status=status)])
+    client = _client(session)
+    request = (
+        client.application.upload_file(b"gif", filename="test.gif")
+        if upload
+        else client.sensors.get("sensor-1")
+    )
     with pytest.raises(exception) as exc_info:
-        client = _client(session)
-        if upload:
-            await client.application.upload_file(b"gif", filename="test.gif")
-        else:
-            await client.sensors.get("sensor-1")
+        await request
     assert exc_info.value.status_code == status
     expected = ("POST", "files/animations") if upload else ("GET", "sensors/sensor-1")
     _assert_requests(session, [(*expected, None, None)])
