@@ -97,7 +97,7 @@ class NetworksEndpoint:
         name: str,
         vlan_id: int | None = None,
         subnet: str | None = None,
-        dhcp_enabled: bool = True,
+        dhcp_enabled: bool | None = None,
         **kwargs: Any,
     ) -> Network:
         """
@@ -107,23 +107,27 @@ class NetworksEndpoint:
             site_id: The site ID.
             name: Network name.
             vlan_id: VLAN ID.
-            subnet: Network subnet (e.g., "192.168.1.0/24").
-            dhcp_enabled: Whether DHCP is enabled.
-            **kwargs: Additional network parameters.
+            subnet: Unsupported legacy argument; use ipv4Configuration instead.
+            dhcp_enabled: Unsupported legacy argument; use ipv4Configuration.
+            **kwargs: Spec fields. Required: name, vlanId, management and enabled.
+                GATEWAY also requires ipv4Configuration, cellularBackupEnabled,
+                internetAccessEnabled and isolationEnabled.
 
         Returns:
             The created network.
 
         """
         path = self._client.build_api_path(f"/sites/{site_id}/networks")
-        data: dict[str, Any] = {
-            "name": name,
-            "dhcpEnabled": dhcp_enabled,
-        }
+        if subnet is not None or dhcp_enabled is not None:
+            msg = (
+                "subnet and dhcp_enabled are unsupported; use ipv4Configuration "
+                "and management-specific fields: management, enabled, "
+                "cellularBackupEnabled, internetAccessEnabled and isolationEnabled"
+            )
+            raise ValueError(msg)
+        data: dict[str, Any] = {"name": name}
         if vlan_id is not None:
             data["vlanId"] = vlan_id
-        if subnet is not None:
-            data["subnet"] = subnet
         data.update(kwargs)
 
         response = await self._client._post(path, json_data=data)

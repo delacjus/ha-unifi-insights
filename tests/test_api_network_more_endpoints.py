@@ -1666,7 +1666,7 @@ async def test_wifi_create_response_branches() -> None:
     res = await client.wifi.create(
         "default",
         name="Guest Net",
-        ssid="Guest-SSID",
+        ssid="Guest Net",
         passphrase="guestpass",  # noqa: S106
         security=WifiSecurity.WPA2,
         network_id="net-1",
@@ -1682,9 +1682,15 @@ async def test_wifi_create_response_branches() -> None:
         == "https://192.168.1.1/proxy/network/integration/v1/sites/default/wifi/broadcasts"
     )
 
+    with pytest.raises(ValueError, match="ssid must match name"):
+        await client.wifi.create("default", name="Guest Net", ssid="Guest-SSID")
+    assert len(session.requests) == 1
+
     # 2. Non-dict response -> ValueError
     with pytest.raises(ValueError, match="Failed to create WiFi network"):
-        await client.wifi.create("default", name="Fail", ssid="Fail-SSID")
+        await client.wifi.create(
+            "default", name="Fail", ssid="Fail", security=WifiSecurity.OPEN
+        )
 
 
 async def test_wifi_update_pins_spec_request_and_branches() -> None:
@@ -2187,7 +2193,7 @@ async def test_wifi_payload_extraction_and_create_defaults() -> None:
     res2 = await client.wifi.create(
         "default",
         name="Open Net",
-        ssid="Open-SSID",
+        ssid="Open Net",
         security=WifiSecurity.OPEN,
     )
     assert res2.id == "w-open"
@@ -2206,14 +2212,6 @@ async def test_wifi_payload_extraction_and_create_defaults() -> None:
 
 
 @pytest.mark.parametrize("security", [WifiSecurity.OPEN, WifiSecurity.WPA2])
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "wifi.create sends flat ssid/security/hidden/passphrase/networkId; "
-        "POST /v1/sites/{siteId}/wifi/broadcasts expects type/hideName, "
-        "nested securityConfiguration/network and required broadcast flags"
-    ),
-)
 async def test_wifi_create_body_matches_spec(security: WifiSecurity) -> None:
     """Creation must send a valid STANDARD broadcast document, without flat fields."""
     expected = _wifi_document("Guest Net")
@@ -2293,3 +2291,74 @@ def test_response_redaction_preserves_non_json_fallback_and_log_bound() -> None:
     assert len(excerpt) == 500
     assert "9876543210" not in excerpt
     assert "**REDACTED**" in excerpt
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"security": WifiSecurity.WPA2}, "passphrase"),
+        ({"security": WifiSecurity.WPA2_PERSONAL, "passphrase": ""}, "passphrase"),
+        ({"security": WifiSecurity.WPA3}, "securityConfiguration"),
+        ({"ssid": "Different"}, "ssid must match name"),
+    ],
+)
+async def test_wifi_create_rejects_invalid_inputs(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    """Unsupported legacy Wi-Fi inputs fail before reaching the controller."""
+    session = _Session([])
+    args: dict[str, Any] = {"ssid": "Wifi", **kwargs}
+    with pytest.raises(ValueError, match=message):
+        await _client(session).wifi.create("default", name="Wifi", **args)
+    assert session.requests == []
+
+
+@pytest.mark.parametrize(
+    "security", [WifiSecurity.OPEN_UPPER, WifiSecurity.WPA2_PERSONAL]
+)
+async def test_wifi_create_security_aliases(security: WifiSecurity) -> None:
+    """Both schema security names map to nested security configurations."""
+    session = _Session([{"id": "wifi", "name": "Wifi"}])
+    await _client(session).wifi.create(
+        "default",
+        name="Wifi",
+        ssid="Wifi",
+        security=security,
+        passphrase="guestpass",  # noqa: S106
+    )
+    expected = _wifi_document("Wifi")
+    if security == WifiSecurity.WPA2_PERSONAL:
+        expected["securityConfiguration"] = {
+            "type": "WPA2_PERSONAL",
+            "passphrase": "guestpass",
+        }
+    assert session.requests[0]["json"] == expected
+    assert "network" not in session.requests[0]["json"]
+
+
+async def test_wifi_create_security_configuration_and_default_overrides() -> None:
+    """Pre-built security and broadcast fields override the convenience defaults."""
+    session = _Session([{"id": "wifi", "name": "Wifi"}])
+    security_configuration = {"type": "WPA3_PERSONAL", "passphrase": "guestpass"}
+    await _client(session).wifi.create(
+        "default",
+        name="Wifi",
+        ssid="Wifi",
+        security=WifiSecurity.WPA3,
+        securityConfiguration=security_configuration,
+        broadcastingFrequenciesGHz=[6],
+        enabled=False,
+        hideName=True,
+        arpProxyEnabled=True,
+    )
+    expected = _wifi_document("Wifi")
+    expected.update(
+        {
+            "securityConfiguration": security_configuration,
+            "broadcastingFrequenciesGHz": [6],
+            "enabled": False,
+            "hideName": True,
+            "arpProxyEnabled": True,
+        }
+    )
+    assert session.requests[0]["json"] == expected
