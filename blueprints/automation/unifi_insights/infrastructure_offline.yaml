@@ -93,7 +93,10 @@ conditions:
     value_template: >-
       {{ trigger.from_state is not none
          and (trigger.id == 'recovery'
-              or trigger.from_state.state == 'on') }}
+              or trigger.from_state.state == 'on'
+              or (trigger.id == 'offline'
+                  and trigger.from_state.state in ['unavailable', 'unknown']
+                  and not treat_unavailable_as_offline)) }}
   - condition: template
     value_template: >-
       {{ trigger.id != 'unavailable' or treat_unavailable_as_offline }}
