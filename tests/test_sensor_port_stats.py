@@ -328,6 +328,42 @@ class TestPortSensorStatsFallbackWithoutPortData:
         )
         assert sensor.native_value is None
 
+    def test_poe_power_stats_fallback_port_absent_from_poe_ports(
+        self, mock_facade_coordinator
+    ):
+        """Test PoE power fallback when port is absent from poe_ports (watts None)."""
+        poe_desc = PORT_SENSOR_TYPES[0]
+        mock_facade_coordinator.data["stats"]["site1"]["device1"]["poe_ports"] = {
+            99: 5.0
+        }
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, poe_desc, "site1", "device1", 1
+        )
+        assert sensor.native_value is None
+
+    def test_tx_rx_bytes_stats_fallback_missing_or_non_dict_branches(
+        self, mock_facade_coordinator
+    ):
+        """Test TX/RX bytes fallback when stats/port_bytes/pb is non-dict."""
+        tx_desc = PORT_SENSOR_TYPES[2]
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, tx_desc, "site1", "device1", 1
+        )
+
+        # 1) stats is not a dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = None
+        assert sensor.native_value is None
+
+        # 2) port_bytes is not a dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {"port_bytes": None}
+        assert sensor.native_value is None
+
+        # 3) pb is not a dict (port absent or not a dict)
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_bytes": {99: {"tx_bytes": 100}}
+        }
+        assert sensor.native_value is None
+
 
 class TestPortSensorWithPortDataCountersAndRates:
     """Test UnifiPortSensor.native_value branches when port_data IS present."""
@@ -392,6 +428,64 @@ class TestPortSensorWithPortDataCountersAndRates:
 
         mock_facade_coordinator.data["stats"]["site1"]["device1"]["poe_ports"] = {
             "1": "invalid"
+        }
+        assert sensor.native_value is None
+
+    def test_poe_power_with_port_data_stats_not_dict_or_port_absent(
+        self, mock_facade_coordinator
+    ):
+        """Test PoE power when stats is non-dict or port absent from poe_ports."""
+        poe_desc = PORT_SENSOR_TYPES[0]
+        mock_facade_coordinator.data["devices"]["site1"]["device1"]["ports"] = [
+            {"idx": 1, "state": "UP", "poe_power_w": 7.5}
+        ]
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, poe_desc, "site1", "device1", 1
+        )
+
+        # stats is not dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = None
+        assert sensor.native_value == 7.5
+
+        # port absent from poe_ports (watts is None)
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "poe_ports": {99: 5.0}
+        }
+        assert sensor.native_value == 7.5
+
+    def test_tx_rx_bytes_port_data_fallback_edges(self, mock_facade_coordinator):
+        """Test TX/RX bytes with port data when port_bytes pb is None or non-numeric."""
+        tx_desc = PORT_SENSOR_TYPES[2]
+        mock_facade_coordinator.data["devices"]["site1"]["device1"]["ports"] = [
+            {"idx": 1, "state": "UP"}
+        ]
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, tx_desc, "site1", "device1", 1
+        )
+
+        # 1) pb is not in port_bytes, falls through to port_data
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_bytes": {99: {"tx_bytes": 100}},
+            "port_data": {1: {"tx_bytes": 500}},
+        }
+        assert sensor.native_value == 500
+
+        # 2) v is not numeric in port_bytes, falls through to port_data
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_bytes": {1: {"tx_bytes": "invalid"}},
+            "port_data": {1: {"tx_bytes": 600}},
+        }
+        assert sensor.native_value == 600
+
+        # 3) port absent from fallback port_data -> returns None
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_data": {99: {"tx_bytes": 100}},
+        }
+        assert sensor.native_value is None
+
+        # 4) v is not numeric in fallback port_data -> returns None
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_data": {1: {"tx_bytes": "invalid"}},
         }
         assert sensor.native_value is None
 
@@ -556,3 +650,91 @@ class TestPortSensorAvailabilityAndAttributes:
         port_data = sensor._find_port_data()
         assert port_data is not None
         assert port_data["port_idx"] == 1
+
+    def test_available_poe_power_stats_not_dict(self, mock_facade_coordinator):
+        """PoE power availability falls through to port state when stats is non-dict."""
+        poe_desc = PORT_SENSOR_TYPES[0]
+        mock_facade_coordinator.device_available = True
+        mock_facade_coordinator.data["devices"]["site1"]["device1"]["ports"] = [
+            {"idx": 1, "state": "UP"}
+        ]
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = None
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, poe_desc, "site1", "device1", 1
+        )
+        assert sensor.available is True
+
+    def test_available_tx_rx_bytes_stats_edges(self, mock_facade_coordinator):
+        """TX/RX bytes availability falls through when stats or pb is invalid."""
+        bytes_desc = PORT_SENSOR_TYPES[2]
+        mock_facade_coordinator.device_available = True
+        mock_facade_coordinator.data["devices"]["site1"]["device1"]["ports"] = [
+            {"idx": 1, "state": "UP"}
+        ]
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, bytes_desc, "site1", "device1", 1
+        )
+
+        # stats is not dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = None
+        assert sensor.available is True
+
+        # port_bytes is not dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {"port_bytes": None}
+        assert sensor.available is True
+
+        # pb is not dict (port absent)
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_bytes": {99: {"tx_bytes": 100}}
+        }
+        assert sensor.available is True
+
+    def test_available_tx_rx_rate_stats_edges(self, mock_facade_coordinator):
+        """TX/RX rate availability falls through when stats/port_rates/pr is invalid."""
+        rate_desc = PORT_RATE_SENSOR_TYPES[0]
+        mock_facade_coordinator.device_available = True
+        mock_facade_coordinator.data["devices"]["site1"]["device1"]["ports"] = [
+            {"idx": 1, "state": "UP"}
+        ]
+        sensor = UnifiPortSensor(
+            mock_facade_coordinator, rate_desc, "site1", "device1", 1
+        )
+
+        # stats is not dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = None
+        assert sensor.available is True
+
+        # port_rates is not dict
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {"port_rates": None}
+        assert sensor.available is True
+
+        # pr is not dict (port absent)
+        mock_facade_coordinator.data["stats"]["site1"]["device1"] = {
+            "port_rates": {99: {"tx_bytes_rate": 10.0}}
+        }
+        assert sensor.available is True
+
+    def test_find_port_data_device_missing_or_port_missing(
+        self, mock_facade_coordinator
+    ):
+        """Test _find_port_data when device is missing or interfaces non-dict."""
+        desc = PORT_SENSOR_TYPES[1]
+        sensor = UnifiPortSensor(mock_facade_coordinator, desc, "site1", "device1", 1)
+
+        # 1) Device missing in coordinator data
+        mock_facade_coordinator.data["devices"]["site1"].pop("device1", None)
+        assert sensor._find_port_data() is None
+        assert sensor.extra_state_attributes is None
+
+        # 2) ports empty and interfaces not dict
+        mock_facade_coordinator.data["devices"]["site1"]["device1"] = {
+            "ports": [],
+            "interfaces": "not_a_dict",
+        }
+        assert sensor._find_port_data() is None
+
+        # 3) ports present but port 1 is absent
+        mock_facade_coordinator.data["devices"]["site1"]["device1"] = {
+            "ports": [{"idx": 99, "state": "UP"}],
+        }
+        assert sensor._find_port_data() is None

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -281,12 +282,20 @@ class TestAsyncSetupEntry:
             "entry_123_client1_block_switch",
             config_entry=mock_entry,
         )
+        reg_entry_other: RegistryEntry = registry.async_get_or_create(
+            "switch",
+            DOMAIN,
+            "entry_123_device_other_switch",
+            config_entry=mock_entry,
+        )
         assert registry.async_get(reg_entry.entity_id) is not None
+        assert registry.async_get(reg_entry_other.entity_id) is not None
 
         async_add_entities: MagicMock = MagicMock()
         await async_setup_entry(hass, mock_entry, async_add_entities)
 
         assert registry.async_get(reg_entry.entity_id) is None
+        assert registry.async_get(reg_entry_other.entity_id) is not None
 
 
 # (data_key, unique_id_suffix, availability_attr) -- availability_attr is
@@ -1274,6 +1283,19 @@ class TestUnifiFirewallRuleSwitch:
             is False
         )
 
+    def test_update_local_state_rule_not_dict(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test _update_local_state when rule data is absent or not a dict."""
+        switch = UnifiFirewallRuleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            rule_id="nonexistent_rule",
+        )
+        original_data = deepcopy(mock_coordinator.data)
+        switch._update_local_state(enabled=False)
+        assert mock_coordinator.data == original_data
+
 
 class TestAsyncSetupEntryFirewallRules:
     """Tests firewall rule discovery in switch platform setup."""
@@ -1897,6 +1919,19 @@ class TestUnifiPolicyBasedRouteSwitch:
         assert entity.translation_key == "policy_based_route_unnamed"
         assert entity.translation_placeholders == {"route_id": "route_unnamed"}
 
+    def test_update_local_state_route_not_dict(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test _update_local_state when route data is absent or not a dict."""
+        switch = UnifiPolicyBasedRouteSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            route_id="nonexistent_route",
+        )
+        original_data = deepcopy(mock_coordinator.data)
+        switch._update_local_state(enabled=False)
+        assert mock_coordinator.data == original_data
+
 
 class TestAsyncSetupEntryPolicyBasedRoutes:
     """Tests policy-based route discovery in switch platform setup."""
@@ -2274,6 +2309,19 @@ class TestUnifiVpnClientSwitch:
             client_id="vpn_unnamed",
         )
         assert entity.translation_key == "vpn_client_unnamed"
+
+    def test_update_local_state_client_not_in_site(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test _update_local_state when client_id is not in site_vpn_clients."""
+        switch = UnifiVpnClientSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            client_id="nonexistent_vpn",
+        )
+        original_data = deepcopy(mock_coordinator.data)
+        switch._update_local_state(enabled=False)
+        assert mock_coordinator.data == original_data
 
 
 class TestAsyncSetupEntryVpnClients:
@@ -3676,6 +3724,114 @@ class TestUnifiOutletSwitch:
         assert attrs["outlet_voltage"] == 120.0
         assert attrs["outlet_power_factor"] == 0.99
 
+    @pytest.mark.asyncio
+    async def test_outlet_switch_turn_on_failure_no_optimistic_update(
+        self, mock_coordinator
+    ) -> None:
+        """Test outlet switch turn on failure asserts no optimistic state write."""
+
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            1
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=2,
+            outlet_data=outlet_data,
+        )
+        mock_coordinator.async_set_outlet_state.side_effect = HomeAssistantError(
+            "API Error"
+        )
+
+        with (
+            patch.object(switch, "async_write_ha_state") as write_state,
+            pytest.raises(HomeAssistantError),
+        ):
+            await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 2, state=True
+        )
+        write_state.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_awaited()
+        assert switch.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_outlet_switch_turn_off_failure_no_optimistic_update(
+        self, mock_coordinator
+    ) -> None:
+        """Test outlet switch turn off failure asserts no optimistic state write."""
+
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+        mock_coordinator.async_set_outlet_state.side_effect = HomeAssistantError(
+            "API Error"
+        )
+
+        with (
+            patch.object(switch, "async_write_ha_state") as write_state,
+            pytest.raises(HomeAssistantError),
+        ):
+            await switch.async_turn_off()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=False
+        )
+        write_state.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_awaited()
+        assert switch.is_on is True
+
+    def test_outlet_switch_find_outlet_and_update_local_state_edges(
+        self, mock_coordinator
+    ) -> None:
+        """Test outlet switch branches for missing index, device, or table."""
+        switch = UnifiOutletSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"relay_state": True},
+        )
+
+        # 1) outlet with no index key in table -> line 1573->1567
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"] = [
+            {"name": "No Index Outlet"}
+        ]
+        assert switch._get_outlet_data() is None
+
+        # 2) device not in site_devices -> line 1591->exit
+        mock_coordinator.data["devices"]["site1"].pop("pdu1", None)
+        switch._update_local_state(relay_state=True)
+
+        # 3) outlet_table not a list -> line 1593->exit
+        mock_coordinator.data["devices"]["site1"]["pdu1"] = {"outlet_table": None}
+        switch._update_local_state(relay_state=True)
+
+        # 4) outlet in table has no index key (1600->1594)
+        # and cycle_enabled updated without relay_state (1603->1605)
+        mock_coordinator.data["devices"]["site1"]["pdu1"] = {
+            "outlet_table": [
+                {"name": "No Index"},
+                {"index": 1, "relay_state": True, "cycle_enabled": False},
+            ]
+        }
+        switch._update_local_state(cycle_enabled=True)
+        assert (
+            mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][1][
+                "cycle_enabled"
+            ]
+            is True
+        )
+
 
 class TestUnifiOutletCycleSwitch:
     """Tests for UnifiOutletCycleSwitch entity."""
@@ -3957,6 +4113,114 @@ class TestUnifiOutletCycleSwitch:
 
         mock_coordinator.data["devices"]["site1"]["pdu1"]["state"] = "OFFLINE"
         assert switch.available is False
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_turn_on_failure_no_optimistic_update(
+        self, mock_coordinator
+    ) -> None:
+        """Test power cycle turn on failure asserts no optimistic state write."""
+
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            1
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=2,
+            outlet_data=outlet_data,
+        )
+        mock_coordinator.async_set_outlet_state.side_effect = HomeAssistantError(
+            "API Error"
+        )
+
+        with (
+            patch.object(switch, "async_write_ha_state") as write_state,
+            pytest.raises(HomeAssistantError),
+        ):
+            await switch.async_turn_on()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 2, state=False, cycle_enabled=True
+        )
+        write_state.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_awaited()
+        assert switch.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_cycle_switch_turn_off_failure_no_optimistic_update(
+        self, mock_coordinator
+    ) -> None:
+        """Test power cycle turn off failure asserts no optimistic state write."""
+
+        outlet_data = mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][
+            0
+        ]
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data=outlet_data,
+        )
+        mock_coordinator.async_set_outlet_state.side_effect = HomeAssistantError(
+            "API Error"
+        )
+
+        with (
+            patch.object(switch, "async_write_ha_state") as write_state,
+            pytest.raises(HomeAssistantError),
+        ):
+            await switch.async_turn_off()
+
+        mock_coordinator.async_set_outlet_state.assert_awaited_once_with(
+            "site1", "pdu1", 1, state=True, cycle_enabled=False
+        )
+        write_state.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_awaited()
+        assert switch.is_on is True
+
+    def test_cycle_switch_find_outlet_and_update_local_state_edges(
+        self, mock_coordinator
+    ) -> None:
+        """Test cycle switch branches for missing index, device, or table."""
+        switch = UnifiOutletCycleSwitch(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+            outlet_data={"cycle_enabled": True},
+        )
+
+        # 1) outlet with no index key in table -> line 1783->1777
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"] = [
+            {"name": "No Index Outlet"}
+        ]
+        assert switch._get_outlet_data() is None
+
+        # 2) device not in site_devices -> line 1800->exit
+        mock_coordinator.data["devices"]["site1"].pop("pdu1", None)
+        switch._update_local_state(cycle_enabled=True)
+
+        # 3) outlet_table not a list -> line 1802->exit
+        mock_coordinator.data["devices"]["site1"]["pdu1"] = {"outlet_table": "invalid"}
+        switch._update_local_state(cycle_enabled=True)
+
+        # 4) outlet in table has no index key (1809->1803)
+        # and no outlet matches index 1 (1803->exit)
+        mock_coordinator.data["devices"]["site1"]["pdu1"] = {
+            "outlet_table": [
+                {"name": "No Index"},
+                {"index": 99, "cycle_enabled": False},
+            ]
+        }
+        switch._update_local_state(cycle_enabled=True)
+        assert (
+            mock_coordinator.data["devices"]["site1"]["pdu1"]["outlet_table"][1][
+                "cycle_enabled"
+            ]
+            is False
+        )
 
 
 class TestFindGatewayDeviceId:

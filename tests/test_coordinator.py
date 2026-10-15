@@ -19,6 +19,16 @@ from custom_components.unifi_insights.api import (
     UniFiResponseError,
     UniFiTimeoutError,
 )
+from custom_components.unifi_insights.api.network.models.device import Device
+from custom_components.unifi_insights.api.network.models.site import Site
+from custom_components.unifi_insights.api.network.models.wifi import WifiNetwork
+from custom_components.unifi_insights.api.protect.models.camera import Camera
+from custom_components.unifi_insights.api.protect.models.chime import Chime
+from custom_components.unifi_insights.api.protect.models.light import Light
+from custom_components.unifi_insights.api.protect.models.liveview import LiveView
+from custom_components.unifi_insights.api.protect.models.nvr import NVR
+from custom_components.unifi_insights.api.protect.models.sensor import Sensor
+from custom_components.unifi_insights.api.protect.models.viewer import Viewer
 from custom_components.unifi_insights.coordinator import (
     UnifiInsightsDataUpdateCoordinator,
 )
@@ -1997,3 +2007,265 @@ async def test_coordinator_nvr_fetch_error(
     data = await coordinator._async_update_data()
     # NVRs should be empty
     assert data["protect"]["nvrs"] == {}
+
+
+def _mock_legacy_protect_client(
+    *,
+    has_device_cb: bool = False,
+    has_event_cb: bool = False,
+    has_viewers: bool = True,
+    has_liveviews: bool = True,
+) -> MagicMock:
+    """Mock legacy client features without inventing optional SDK attributes."""
+    attributes = ["base_url", "cameras", "lights", "sensors", "nvr", "chimes", "close"]
+    if has_viewers:
+        attributes.append("viewers")
+    if has_liveviews:
+        attributes.append("liveviews")
+    if has_device_cb:
+        attributes.append("register_device_update_callback")
+    if has_event_cb:
+        attributes.append("register_event_update_callback")
+    client = MagicMock(spec=attributes)
+    client.base_url = "https://192.168.1.1"
+    for collection in ("cameras", "lights", "sensors", "chimes"):
+        getattr(client, collection).get_all = AsyncMock(return_value=[])
+    client.nvr.get = AsyncMock(return_value=None)
+    if has_viewers:
+        client.viewers.get_all = AsyncMock(return_value=[])
+    if has_liveviews:
+        client.liveviews.get_all = AsyncMock(return_value=[])
+    client.close = AsyncMock()
+    return client
+
+
+async def test_coordinator_init_protect_client_lacks_callback_attributes(
+    hass: HomeAssistant,
+    mock_network_client_for_coordinator,
+    mock_config_entry_for_coordinator,
+) -> None:
+    """Test coordinator handles protect clients lacking callback attributes."""
+    # Case 1: Lacks both callback attributes (covers 104 and 108 false arms)
+    client_neither = _mock_legacy_protect_client(
+        has_device_cb=False, has_event_cb=False
+    )
+    coord1 = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=mock_network_client_for_coordinator,
+        protect_client=client_neither,
+        entry=mock_config_entry_for_coordinator,
+    )
+    assert coord1 is not None
+
+    # Case 2: Has device cb, lacks event cb (covers 108 false arm)
+    client_device_only = _mock_legacy_protect_client(
+        has_device_cb=True, has_event_cb=False
+    )
+    coord2 = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=mock_network_client_for_coordinator,
+        protect_client=client_device_only,
+        entry=mock_config_entry_for_coordinator,
+    )
+    assert coord2 is not None
+    client_device_only.register_device_update_callback.assert_called_once()
+
+
+async def test_coordinator_handle_event_update_id_handling(
+    hass: HomeAssistant,
+    mock_network_client_for_coordinator,
+    mock_protect_client_for_coordinator,
+    mock_config_entry_for_coordinator,
+) -> None:
+    """Assert accumulation for different IDs and no store for missing ID."""
+    coordinator = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=mock_network_client_for_coordinator,
+        protect_client=mock_protect_client_for_coordinator,
+        entry=mock_config_entry_for_coordinator,
+    )
+    listener = MagicMock()
+    coordinator.async_add_listener(listener)
+
+    # 1. Missing or empty ID: no store and no listener notification
+    coordinator._handle_event_update("custom_event", {"val": "no_id"})
+    coordinator._handle_event_update("custom_event", {"id": "", "val": "empty_id"})
+    assert "custom_event" not in coordinator.data["protect"]["events"]
+    assert listener.call_count == 0
+
+    # 2. Accumulation for different IDs
+    coordinator._handle_event_update("custom_event", {"id": "ev1", "val": 10})
+    coordinator._handle_event_update("custom_event", {"id": "ev2", "val": 20})
+    events = coordinator.data["protect"]["events"]["custom_event"]
+    assert len(events) == 2
+    assert events["ev1"]["val"] == 10
+    assert events["ev2"]["val"] == 20
+    assert listener.call_count == 2
+
+    # 3. Replacement for a repeated ID
+    coordinator._handle_event_update("custom_event", {"id": "ev1", "val": 99})
+    assert len(coordinator.data["protect"]["events"]["custom_event"]) == 2
+    assert coordinator.data["protect"]["events"]["custom_event"]["ev1"]["val"] == 99
+    assert listener.call_count == 3
+
+
+async def test_coordinator_collections_id_filtering_and_missing_attributes(
+    hass: HomeAssistant, mock_config_entry_for_coordinator
+) -> None:
+    """Test mixed valid and ID-less records and client lacking viewers/liveviews."""
+    network_client = MagicMock()
+    network_client.base_url = "https://192.168.1.1"
+    network_client.sites.get_all = AsyncMock(
+        return_value=[Site.model_validate({"id": "site1", "name": "Default"})]
+    )
+    network_client.devices.get_all = AsyncMock(
+        return_value=[
+            Device.model_validate(
+                {"id": "dev1", "name": "Dev 1", "mac": "AA:BB:CC:DD:EE:01"}
+            )
+        ]
+    )
+    network_client.devices.get_statistics = AsyncMock(return_value=None)
+    network_client.clients.get_all = AsyncMock(return_value=[])
+    network_client.wifi.get_all = AsyncMock(
+        return_value=[
+            WifiNetwork.model_validate({"id": "wifi1", "name": "WiFi 1"}),
+            WifiNetwork.model_validate({"name": "WiFiWithoutID", "id": ""}),
+        ]
+    )
+    protect_client = _mock_legacy_protect_client(has_viewers=False, has_liveviews=False)
+    protect_client.cameras.get_all = AsyncMock(
+        return_value=[
+            Camera.model_validate(
+                {"id": "cam1", "name": "Cam 1", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+            Camera.model_validate(
+                {"name": "CamWithoutID", "id": "", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+        ]
+    )
+    protect_client.lights.get_all = AsyncMock(
+        return_value=[
+            Light.model_validate(
+                {"id": "light1", "name": "Light 1", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+            Light.model_validate(
+                {"name": "LightWithoutID", "id": "", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+        ]
+    )
+    protect_client.sensors.get_all = AsyncMock(
+        return_value=[
+            Sensor.model_validate(
+                {"id": "sens1", "name": "Sensor 1", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+            Sensor.model_validate(
+                {"name": "SensorWithoutID", "id": "", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+        ]
+    )
+    protect_client.nvr.get = AsyncMock(
+        return_value=NVR.model_validate({"name": "NvrWithoutID", "id": ""})
+    )
+    protect_client.chimes.get_all = AsyncMock(
+        return_value=[
+            Chime.model_validate(
+                {"id": "chime1", "name": "Chime 1", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+            Chime.model_validate(
+                {"name": "ChimeWithoutID", "id": "", "mac": "AA:BB:CC:DD:EE:FF"}
+            ),
+        ]
+    )
+    coordinator = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=network_client,
+        protect_client=protect_client,
+        entry=mock_config_entry_for_coordinator,
+    )
+    data = await coordinator._async_update_data()
+    assert "site1" in data["sites"]
+    assert None not in data["sites"]
+    assert "" not in data["sites"]
+    assert "dev1" in data["devices"]["site1"]
+    assert len(data["devices"]["site1"]) == 1
+    assert "wifi1" in data["wifi"]["site1"]
+    assert len(data["wifi"]["site1"]) == 1
+    assert list(data["protect"]["cameras"].keys()) == ["cam1"]
+    assert list(data["protect"]["lights"].keys()) == ["light1"]
+    assert list(data["protect"]["sensors"].keys()) == ["sens1"]
+    assert list(data["protect"]["nvrs"].keys()) == []
+    assert list(data["protect"]["chimes"].keys()) == ["chime1"]
+    assert data["protect"]["viewers"] == {}
+    assert data["protect"]["liveviews"] == {}
+
+
+async def test_coordinator_viewers_and_liveviews_id_filtering(
+    hass: HomeAssistant,
+    mock_network_client_for_coordinator,
+    mock_config_entry_for_coordinator,
+) -> None:
+    """Test viewers and liveviews filtering out records without ID."""
+    protect_client = _mock_legacy_protect_client(has_viewers=True, has_liveviews=True)
+    protect_client.viewers.get_all = AsyncMock(
+        return_value=[
+            Viewer.model_validate(
+                {
+                    "id": "viewer1",
+                    "name": "Viewer 1",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                    "state": "CONNECTED",
+                }
+            ),
+            Viewer.model_validate(
+                {
+                    "name": "ViewerWithoutID",
+                    "id": "",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                    "state": "CONNECTED",
+                }
+            ),
+        ]
+    )
+    protect_client.liveviews.get_all = AsyncMock(
+        return_value=[
+            LiveView.model_validate({"id": "liveview1", "name": "Liveview 1"}),
+            LiveView.model_validate({"name": "LiveviewWithoutID", "id": ""}),
+        ]
+    )
+    coordinator = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=mock_network_client_for_coordinator,
+        protect_client=protect_client,
+        entry=mock_config_entry_for_coordinator,
+    )
+    data = await coordinator._async_update_data()
+    assert list(data["protect"]["viewers"].keys()) == ["viewer1"]
+    assert list(data["protect"]["liveviews"].keys()) == ["liveview1"]
+
+
+async def test_coordinator_failed_site_preserves_cached_data(
+    hass: HomeAssistant,
+    mock_network_client_for_coordinator,
+    mock_config_entry_for_coordinator,
+) -> None:
+    """A failed site fetch keeps its previously cached data intact."""
+    coordinator = UnifiInsightsDataUpdateCoordinator(
+        hass=hass,
+        network_client=mock_network_client_for_coordinator,
+        protect_client=None,
+        entry=mock_config_entry_for_coordinator,
+    )
+    coordinator.data["devices"]["site1"] = {"cached-device": {"id": "cached-device"}}
+    coordinator.data["stats"]["site1"] = {"cached-device": {"uptime": 123}}
+    coordinator.data["clients"]["site1"] = {"cached-client": {"id": "cached-client"}}
+    mock_network_client_for_coordinator.devices.get_all.side_effect = (
+        UniFiConnectionError("Site device fetch failed")
+    )
+    data = await coordinator._async_update_data()
+    mock_network_client_for_coordinator.devices.get_all.assert_awaited_once_with(
+        "site1"
+    )
+    assert data["devices"]["site1"] == {"cached-device": {"id": "cached-device"}}
+    assert data["stats"]["site1"] == {"cached-device": {"uptime": 123}}
+    assert data["clients"]["site1"] == {"cached-client": {"id": "cached-client"}}

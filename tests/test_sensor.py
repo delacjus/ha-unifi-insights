@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Ruaan Deysel
 """Tests for UniFi Insights sensors."""
 
+import dataclasses
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,6 +34,9 @@ if TYPE_CHECKING:
         UnifiStorageSensorEntityDescription,
     )
 
+from custom_components.unifi_insights.api.protect.models.sensor import (
+    Sensor as ProtectSensorModel,
+)
 from custom_components.unifi_insights.const import (
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
@@ -1654,6 +1658,73 @@ class TestUnifiProtectSensorAttributes:
         assert attrs["sensor_id"] == "sensor1"
         assert attrs["sensor_name"] == "Kitchen Sensor"
         assert attrs["battery_percentage"] == 85
+        assert attrs["battery_low"] is False
+
+    async def test_protect_sensor_unhandled_key_no_extra_attributes(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test UnifiProtectSensor with description key not handling attributes."""
+        description = UnifiProtectSensorEntityDescription(
+            key="unhandled_type",
+            name="Unhandled Sensor",
+            device_type="sensor",
+            value_fn=lambda _: None,
+        )
+        sensor = UnifiProtectSensor(
+            coordinator=mock_coordinator,
+            description=description,
+            device_id="sensor1",
+        )
+        assert getattr(sensor, "_attr_extra_state_attributes", None) is None
+        assert sensor.extra_state_attributes is None
+
+    async def test_battery_sensor_missing_battery_status_key(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test battery sensor attributes when batteryStatus key is absent."""
+        description = next(s for s in PROTECT_SENSOR_TYPES if s.key == "battery")
+        mock_coordinator.data["protect"]["sensors"]["sensor_no_battery"] = {
+            "name": "No Battery Sensor",
+        }
+        sensor = UnifiProtectSensor(
+            coordinator=mock_coordinator,
+            description=description,
+            device_id="sensor_no_battery",
+        )
+        attrs = sensor._attr_extra_state_attributes
+        assert attrs["sensor_id"] == "sensor_no_battery"
+        assert attrs["sensor_name"] == "No Battery Sensor"
+        assert attrs["battery_percentage"] is None
+        assert attrs["battery_low"] is False
+
+    async def test_battery_sensor_real_model_dump(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test battery sensor attributes with real Protect Sensor model dump."""
+        model = ProtectSensorModel.model_validate(
+            {
+                "id": "sensor_real",
+                "name": "Real Door Sensor",
+                "type": "sensor",
+                "modelKey": "sensor",
+                "mac": "11:22:33:44:55:66",
+                "batteryStatus": {"percentage": 92, "isLow": False},
+            }
+        )
+        mock_coordinator.data["protect"]["sensors"]["sensor_real"] = model.model_dump(
+            by_alias=True
+        )
+
+        description = next(s for s in PROTECT_SENSOR_TYPES if s.key == "battery")
+        sensor = UnifiProtectSensor(
+            coordinator=mock_coordinator,
+            description=description,
+            device_id="sensor_real",
+        )
+        attrs = sensor._attr_extra_state_attributes
+        assert attrs["sensor_id"] == "sensor_real"
+        assert attrs["sensor_name"] == "Real Door Sensor"
+        assert attrs["battery_percentage"] == 92
         assert attrs["battery_low"] is False
 
 
@@ -3880,6 +3951,56 @@ class TestUnifiAcPowerSensors:
         outlet = sensor._find_outlet_data()
         assert outlet is not None
         assert sensor.extra_state_attributes == {"index": 1}
+
+    def test_outlet_sensor_device_not_dict_and_missing_index_and_no_value_fn(
+        self, mock_coordinator
+    ) -> None:
+        """Test outlet sensor when device is non-dict, missing index, or no value_fn."""
+        desc_map = {d.key: d for d in OUTLET_SENSOR_TYPES}
+        desc = desc_map["power"]
+        sensor = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+        )
+
+        # 1) device_data is not a dict (e.g. None or 'invalid') -> line 2086-2087
+        mock_coordinator.data["devices"] = {"site1": {"pdu1": None}}
+        assert sensor._find_outlet_data() is None
+
+        # 2) outlet in outlet_table has no index/outlet_idx/outletIdx -> line 2097->2091
+        mock_coordinator.data["devices"] = {
+            "site1": {
+                "pdu1": {
+                    "outlet_table": [
+                        {"name": "No Index Outlet"},
+                    ]
+                }
+            }
+        }
+        assert sensor._find_outlet_data() is None
+
+        # 3) value_fn is None -> line 2118-2120
+        mock_coordinator.data["devices"] = {
+            "site1": {
+                "pdu1": {
+                    "outlet_table": [
+                        {"index": 1, "power": 12.0},
+                    ]
+                }
+            }
+        }
+        desc_no_fn = dataclasses.replace(desc, value_fn=None)
+        sensor_no_fn = UnifiOutletSensor(
+            coordinator=mock_coordinator,
+            description=desc_no_fn,
+            site_id="site1",
+            device_id="pdu1",
+            outlet_index=1,
+        )
+        assert sensor_no_fn.native_value is None
 
 
 class TestUnifiWifiClientCountSensor:

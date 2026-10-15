@@ -20,6 +20,10 @@ from custom_components.unifi_insights.data_transforms import (
     transform_protect_light,
     transform_protect_sensor,
 )
+from custom_components.unifi_insights.innerspace_transforms import (
+    correlate_innerspace_devices,
+    transform_innerspace_device,
+)
 from tests.fixtures.library_responses import (
     SAMPLE_NETWORK_DEVICE,
     SAMPLE_PROTECT_CAMERA,
@@ -564,3 +568,51 @@ def test_is_volatile_storage_mount(
 ) -> None:
     """Test detecting volatile (RAM or boot-recreated) filesystems."""
     assert is_volatile_storage_mount(mount) is expected_volatile
+
+
+def test_normalize_legacy_wans_non_ip_string() -> None:
+    """Non-IP string in WAN address triggers ValueError in IP parsing and is kept."""
+    (wan,) = normalize_legacy_wans(
+        {"last_wan_interfaces": {"WAN": {"ip": "not-an-ip", "alive": True}}}
+    )
+    assert wan["ip"] == "not-an-ip"
+
+
+def test_transform_innerspace_device_site_id_preserved_from_raw() -> None:
+    """Device raw site_id is preserved and not overwritten by floor plan site_id."""
+    raw = {
+        "id": "dev-1",
+        "site_id": "original-site",
+        "floor_plan_id": "fp-1",
+    }
+    floor_plans = {"fp-1": {"name": "First Floor", "site_id": "plan-site"}}
+    transformed = transform_innerspace_device(raw, floor_plans=floor_plans)
+    assert transformed["site_id"] == "original-site"
+
+
+def test_correlate_innerspace_devices_non_dict_section() -> None:
+    """Non-dict sections in snapshot are skipped during MAC correlation."""
+    snapshot = {
+        "access_points": "not-a-dict",
+        "switches": None,
+        "inventory": {},
+        "devices": {},
+    }
+    correlations = correlate_innerspace_devices(snapshot)
+    assert correlations == {}
+
+
+def test_correlate_innerspace_devices_single_collection_without_inventory() -> None:
+    """Single collection mode without inventory_devices mapping."""
+    collection = {"d1": {"mac": "aa:bb:cc:dd:ee:ff"}}
+    correlations = correlate_innerspace_devices(collection, inventory_devices=None)
+    assert "d1" in correlations
+
+
+def test_normalize_innerspace_snapshot_plans_item_missing_id() -> None:
+    """Project plans list containing items without id or non-dicts are tolerated."""
+    project = {
+        "plans": ["not-a-dict", {"name": "No ID"}, {"id": "p1", "name": "Plan 1"}],
+    }
+    snapshot = normalize_innerspace_snapshot(project=project, floor_plans=[])
+    assert "p1" in snapshot["floor_plans"]

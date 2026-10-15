@@ -386,6 +386,61 @@ class TestUnifiProtectCamera:
         # URL should use the NVR host
         assert result == "rtsps://10.0.0.1:7441/camera1?enableSrtp"
 
+    @pytest.mark.asyncio
+    async def test_stream_source_protect_client_none_fallback(
+        self, mock_coordinator
+    ) -> None:
+        """Test fallback to static URL when protect_client is None."""
+        mock_coordinator.protect_client = None
+        mock_coordinator.data["protect"]["nvrs"] = {"nvr1": {"host": "10.0.0.1"}}
+
+        camera = UnifiProtectCamera(
+            coordinator=mock_coordinator,
+            camera_id="camera1",
+        )
+
+        result = await camera.stream_source()
+        assert result == "rtsps://10.0.0.1:7441/camera1?enableSrtp"
+
+    @pytest.mark.asyncio
+    async def test_stream_source_create_stream_missing_high_quality(
+        self, mock_coordinator
+    ) -> None:
+        """Test fallback to static URL when stream high URL is missing."""
+        mock_stream = MagicMock()
+        mock_stream.high = None
+        mock_coordinator.protect_client.cameras.create_rtsps_stream = AsyncMock(
+            return_value=mock_stream
+        )
+        mock_coordinator.data["protect"]["nvrs"] = {"nvr1": {"host": "10.0.0.1"}}
+
+        camera = UnifiProtectCamera(
+            coordinator=mock_coordinator,
+            camera_id="camera1",
+        )
+
+        result = await camera.stream_source()
+        assert result == "rtsps://10.0.0.1:7441/camera1?enableSrtp"
+
+    @pytest.mark.asyncio
+    async def test_stream_source_nvr_data_without_host(self, mock_coordinator) -> None:
+        """Test NVR loop continues when NVR data has no host."""
+        mock_coordinator.protect_client.cameras.create_rtsps_stream = AsyncMock(
+            side_effect=Exception("API error")
+        )
+        mock_coordinator.data["protect"]["nvrs"] = {
+            "nvr1": {"name": "No Host"},
+            "nvr2": {"host": "10.0.0.2"},
+        }
+
+        camera = UnifiProtectCamera(
+            coordinator=mock_coordinator,
+            camera_id="camera1",
+        )
+
+        result = await camera.stream_source()
+        assert result == "rtsps://10.0.0.2:7441/camera1?enableSrtp"
+
     def test_missing_camera_data(self, mock_coordinator) -> None:
         """Test handling missing camera data."""
         mock_coordinator.data["protect"]["cameras"]["camera1"] = {}

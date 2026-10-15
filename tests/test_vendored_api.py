@@ -4714,3 +4714,182 @@ async def test_lights_set_brightness_patch_body() -> None:
         client.build_api_path("/lights/light1"),
         json_data={"lightDeviceSettings": {"ledLevel": 6}},
     )
+
+
+def test_base_client_defer_after_rate_limit_without_limiter() -> None:
+    """When rate limiter is not configured, defer_after_rate_limit is a no-op."""
+    client = _network_client()
+    assert client._rate_limiter is None
+    assert client._defer_after_rate_limit(5.0) is None
+    assert client._rate_limiter is None
+
+
+async def test_network_client_get_application_info_invalid_response_raises() -> None:
+    """get_application_info raises ValueError when response is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=["not-a-dict"])
+    with pytest.raises(ValueError, match="Unable to retrieve application info"):
+        await client.get_application_info()
+
+
+async def test_clients_get_historical_legacy_empty_when_data_not_list() -> None:
+    """get_historical_legacy returns empty list when response data is not a list."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"meta": {"rc": "ok"}, "data": None})
+    result = await client.clients.get_historical_legacy("default")
+    assert result == []
+
+
+async def test_clients_cmd_stamgr_non_dict_response() -> None:
+    """Classic stamgr commands succeed when response is not a dict."""
+    client = _network_client()
+    client._post = AsyncMock(return_value=None)
+    assert await client.clients.block("default", "aa:bb:cc:dd:ee:ff") is True
+
+
+async def test_devices_get_legacy_device_stats_non_dict_returns_empty() -> None:
+    """get_legacy_device_stats returns empty dict when response is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+    assert (
+        await client.devices.get_legacy_device_stats("default", "aa:bb:cc:dd:ee:ff")
+        == {}
+    )
+
+
+async def test_devices_get_port_metrics_non_numeric_poe() -> None:
+    """Non-numeric PoE power is omitted from poe_ports mapping."""
+    client = _network_client()
+    client.devices.get_legacy_device_stats = AsyncMock(
+        return_value={
+            "port_table": [
+                {
+                    "port_idx": 1,
+                    "port_poe": True,
+                    "poe_power": "invalid",
+                    "rx_bytes": 100,
+                    "tx_bytes": 200,
+                }
+            ]
+        }
+    )
+    metrics = await client.devices.get_port_metrics("default", "aa:bb:cc:dd:ee:ff")
+    assert 1 not in metrics.poe_ports
+
+
+async def test_firewall_get_policy_ordering_invalid_data_raises() -> None:
+    """get_policy_ordering raises ValueError when returned data is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value={"data": "invalid"})
+    with pytest.raises(ValueError, match="Failed to get firewall policy ordering"):
+        await client.firewall.get_policy_ordering(
+            "site1",
+            source_firewall_zone_id="sz1",
+            destination_firewall_zone_id="dz1",
+        )
+
+
+async def test_firewall_update_policy_ordering_invalid_data_raises() -> None:
+    """update_policy_ordering raises ValueError when returned data is not a dict."""
+    client = _network_client()
+    client._put = AsyncMock(return_value={"data": "invalid"})
+    with pytest.raises(ValueError, match="Failed to update firewall policy ordering"):
+        await client.firewall.update_policy_ordering(
+            "site1",
+            source_firewall_zone_id="sz1",
+            destination_firewall_zone_id="dz1",
+            ordered_firewall_policy_ids={
+                "beforeSystemDefined": [],
+                "afterSystemDefined": [],
+            },
+        )
+
+
+async def test_lags_get_mc_lag_domain_non_dict_raises() -> None:
+    """get_mc_lag_domain raises ValueError when response is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match=r"MC-LAG domain lag1 not found"):
+        await client.lags.get_mc_lag_domain("site1", "lag1")
+
+
+async def test_reports_get_site_report_non_dict_non_list_returns_empty() -> None:
+    """get_site_report returns empty list when response is neither dict nor list."""
+    client = _network_client()
+    client._post = AsyncMock(return_value="unexpected-response")
+    assert (
+        await client.reports.get_site_report(
+            "default", "hourly", start_ms=1000, end_ms=2000
+        )
+        == []
+    )
+
+
+async def test_stacks_get_switch_stack_non_dict_raises() -> None:
+    """stacks.get raises ValueError when response is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match=r"Switch stack stack1 not found"):
+        await client.stacks.get("site1", "stack1")
+
+
+async def test_vouchers_get_non_dict_raises() -> None:
+    """vouchers.get raises ValueError when response is not a dict."""
+    client = _network_client()
+    client._get = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match=r"Voucher v1 not found"):
+        await client.vouchers.get("site1", "v1")
+
+
+async def test_vpn_clients_list_site_to_site_vpns_non_list_returns_empty() -> None:
+    """list_site_to_site_vpns returns empty list when response is not a list."""
+    client = _network_client()
+    client._get = AsyncMock(return_value="unexpected-response")
+    assert await client.vpn_clients.list_site_to_site_vpns("default") == []
+
+
+async def test_vpn_clients_get_vpn_client_item_loop_and_fallback_loop() -> None:
+    """get_vpn_client loops over non-matching items and fallback clients."""
+    client = _network_client()
+    client._get = AsyncMock(
+        return_value=[
+            {"_id": "other1", "purpose": "other"},
+            {"_id": "other2", "purpose": "vpn-client"},
+            {
+                "_id": "vpn1",
+                "id": "vpn1",
+                "name": "Target VPN",
+                "purpose": "vpn-client",
+            },
+        ]
+    )
+    result = await client.vpn_clients.get_vpn_client("default", "vpn1")
+    assert result.id == "vpn1"
+
+    client._get = AsyncMock(return_value=[])
+    dummy_client = VpnClient.model_validate(
+        {"id": "different", "name": "Diff", "purpose": "vpn-client"}
+    )
+    client.vpn_clients.list_vpn_clients = AsyncMock(return_value=[dummy_client])
+    with pytest.raises(ValueError, match=r"VPN Client missing not found"):
+        await client.vpn_clients.get_vpn_client("default", "missing")
+
+
+async def test_wifi_create_invalid_result_raises() -> None:
+    """wifi.create raises ValueError when response data is not a dict."""
+    client = _network_client()
+    client._post = AsyncMock(return_value={"data": "invalid"})
+    with pytest.raises(ValueError, match="Failed to create WiFi network"):
+        await client.wifi.create("site1", name="Guest", ssid="GuestSSID")
+
+
+async def test_protect_pos_ingest_transaction_invalid_data_raises() -> None:
+    """pos.ingest_transaction raises ValueError when response data is not a dict."""
+    client = _protect_client()
+    client._post = AsyncMock(return_value={"data": "invalid"})
+    with pytest.raises(
+        ValueError, match=r"Failed to ingest POS transaction for camera cam1"
+    ):
+        await client.pos.ingest_transaction(
+            "cam1", {"type": "sale", "externalId": "1", "amount": 1.0}
+        )

@@ -570,3 +570,67 @@ async def test_subscribe_with_callback_stops_when_not_running() -> None:
     )
 
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_stop_during_reconnect_sleep() -> None:
+    """Stopping during reconnect sleep causes while self._running to evaluate False."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    ws_socket._connect = AsyncMock(
+        side_effect=aiohttp.ClientConnectionError("connection error")
+    )
+
+    async def _fake_sleep(_delay: float) -> None:
+        ws_socket.stop()
+
+    with patch(
+        "custom_components.unifi_insights.api.protect.websocket.asyncio.sleep",
+        side_effect=_fake_sleep,
+    ):
+        await ws_socket.subscribe_with_callback(
+            "nvr1",
+            "default",
+            "devices",
+            lambda _msg: None,
+            reconnect=True,
+            reconnect_delay=1,
+        )
+
+    assert ws_socket._running is False
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_empty_stream() -> None:
+    """Empty websocket message stream terminates gracefully."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    fake_ws = _make_ws([])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    await ws_socket.subscribe_with_callback(
+        "nvr1", "default", "devices", lambda _msg: None, reconnect=False
+    )
+    fake_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_callback_ignores_ping_message() -> None:
+    """Non-text, non-error/closed messages (e.g. PING) are ignored."""
+    client = _local_client()
+    ws_socket = ProtectWebSocket(client)
+
+    ping_msg = MagicMock(type=aiohttp.WSMsgType.PING)
+    text_msg = MagicMock(type=aiohttp.WSMsgType.TEXT, data='{"event": "after-ping"}')
+    close_msg = MagicMock(type=aiohttp.WSMsgType.CLOSED)
+    fake_ws = _make_ws([ping_msg, text_msg, close_msg])
+    ws_socket._connect = AsyncMock(return_value=fake_ws)
+
+    received: list[dict] = []
+    await ws_socket.subscribe_with_callback(
+        "nvr1", "default", "devices", received.append, reconnect=False
+    )
+
+    assert received == [{"event": "after-ping"}]

@@ -430,3 +430,19 @@ class TestNetworkDeviceUpdateEdgeCases:
         entity._handle_coordinator_update()
 
         entity.async_write_ha_state.assert_called_once()
+
+    def test_latest_version_update_available_no_version_and_no_installed(
+        self, mock_coordinator
+    ) -> None:
+        """Test latest version fallback when updatable but versions are missing."""
+        mock_coordinator.data["devices"]["site1"]["device1"] = {
+            "id": "device1",
+            "name": "Test Switch",
+            "firmwareUpdatable": True,
+        }
+        entity = UnifiNetworkDeviceUpdate(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="device1",
+        )
+        assert entity.latest_version == "update-available"

@@ -478,3 +478,28 @@ def assert_mock_device_lookup(
         lookup.assert_any_call(identifier, config_entry_id)
     else:
         lookup.assert_any_call(identifiers={identifier})
+
+
+def get_device_by_identifier(
+    device_registry: dr.DeviceRegistry,
+    identifier: tuple[str, str],
+    config_entry_id: str,
+) -> dr.DeviceEntry | None:
+    """Look up a device in a real registry across Home Assistant releases."""
+    if hasattr(device_registry, "async_get_device_by_identifier"):
+        return device_registry.async_get_device_by_identifier(
+            identifier, config_entry_id
+        )
+    return device_registry.async_get_device(identifiers={identifier})
+
+
+def device_config_entry_ids(device: dr.DeviceEntry) -> set[str]:
+    """Return the set of config entry IDs owning this device.
+
+    Normalizes ownership across Home Assistant releases where devices moved
+    from config_entries: set[str] to a single config_entry_id: str | None.
+    """
+    if hasattr(device, "config_entry_id"):
+        entry_id = device.config_entry_id
+        return {entry_id} if entry_id else set()
+    return set(device.config_entries)

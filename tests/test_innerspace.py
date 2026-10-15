@@ -750,3 +750,25 @@ async def test_facade_coordinator_async_get_floor_plan_image() -> None:
     )
     assert res == (b"bytes", "image/png")
     mock_client.download_floor_plan_image.assert_awaited_once_with("fp-1", "plan.png")
+
+
+def test_innerspace_entity_matched_protect_device_missing_from_protect_section(
+    mock_coordinator: MagicMock,
+) -> None:
+    """Fall back to innerspace ID when matched Protect device is missing."""
+    mock_coordinator.data["protect"] = {"cameras": {}}
+    mock_coordinator.data["innerspace"] = {
+        "devices": {
+            "is-inv-1": {
+                "id": "is-inv-1",
+                "name": "Camera Stand",
+                "matched_domain": "protect",
+                "matched_protect_type": "camera",
+                "matched_device_id": "missing-cam",
+            }
+        }
+    }
+    sensor = UnifiInsightsInnerSpacePlacementSensor(
+        mock_coordinator, INNERSPACE_PLACEMENT_DESCRIPTION, "is-inv-1"
+    )
+    assert sensor.device_info["identifiers"] == {(DOMAIN, "innerspace_is-inv-1")}
