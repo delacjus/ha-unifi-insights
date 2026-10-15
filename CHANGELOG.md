@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated repository and documentation URLs to `tinkerologie` organization
 - Configured Codecov GitHub Actions workflow for tokenless coverage uploads
 - Diagnostics now also redact the address, domain and MAC filters of firewall policies and the domains, address ranges and next hop of policy-based routes.
+- Changed `script/test` to provision Home Assistant 2026.10.1 with `pytest-homeassistant-custom-component` 0.13.372 (previously 2026.6.2 and 0.13.338) as the default local test target. The minimum supported Home Assistant version stays 2026.6.0.
 
 ### Added
 
