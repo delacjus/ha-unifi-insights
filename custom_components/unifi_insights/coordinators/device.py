@@ -734,15 +734,13 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                 site_name = legacy_site_name or site_id
                 if not legacy_site_name:
                     try:
-                        get_site = getattr(self.config_coordinator, "get_site", None)
-                        if callable(get_site):
-                            site_obj = get_site(site_id)
-                            if isinstance(site_obj, dict):
-                                site_name = (
-                                    site_obj.get("internalReference")
-                                    or site_obj.get("internal_reference")
-                                    or site_name
-                                )
+                        site_obj = self.config_coordinator.get_site(site_id)
+                        if isinstance(site_obj, dict):
+                            site_name = (
+                                site_obj.get("internalReference")
+                                or site_obj.get("internal_reference")
+                                or site_name
+                            )
                     except Exception as err:
                         _LOGGER.debug(
                             "Device coordinator: Unable to resolve internal "
