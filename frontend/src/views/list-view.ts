@@ -1,3 +1,4 @@
+import { ContextGesture } from "./context-gesture";
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { defineOnce } from "../define";
@@ -107,8 +108,7 @@ export class UitListView extends LitElement {
   declare focusId?: string;
 
   private rows: ListRow[] = [];
-  private pointers = new Set<number>();
-  private gesture = { x: 0, y: 0, moved: false };
+  private gesture = new ContextGesture();
   private typeahead = "";
   private typeaheadTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -181,27 +181,13 @@ export class UitListView extends LitElement {
       tabindex=${row.id === this.focusId ? 0 : -1}
       style=${`--level: ${row.level}`}
       @click=${() => fireEvent(this, "uit-activate", { id: row.id })}
-      @pointerdown=${(e: PointerEvent) => {
-        if (e.isPrimary) {
-          this.pointers = new Set([e.pointerId]);
-          this.gesture = { x: e.clientX, y: e.clientY, moved: false };
-        } else {
-          this.pointers.add(e.pointerId);
-          this.gesture.moved = true;
-        }
-      }}
-      @pointermove=${(e: PointerEvent) => {
-        if (
-          this.pointers.has(e.pointerId) &&
-          Math.hypot(e.clientX - this.gesture.x, e.clientY - this.gesture.y) > 8
-        )
-          this.gesture.moved = true;
-      }}
-      @pointerup=${(e: PointerEvent) => this.pointers.delete(e.pointerId)}
-      @pointercancel=${(e: PointerEvent) => this.pointers.delete(e.pointerId)}
+      @pointerdown=${(e: PointerEvent) => this.gesture.down(e)}
+      @pointermove=${(e: PointerEvent) => this.gesture.move(e)}
+      @pointerup=${(e: PointerEvent) => this.gesture.end(e)}
+      @pointercancel=${(e: PointerEvent) => this.gesture.end(e)}
       @contextmenu=${(e: Event) => {
         e.preventDefault();
-        if (!this.gesture.moved && this.pointers.size <= 1)
+        if (this.gesture.allowsMenu)
           fireEvent(this, "uit-context", { id: row.id });
       }}
       @focus=${() => {

@@ -1,3 +1,4 @@
+import { ContextGesture } from "./context-gesture";
 import { select } from "d3-selection";
 import "d3-transition";
 import {
@@ -52,8 +53,6 @@ import {
 const RADIUS: Record<Density, number> = { comfortable: 22, compact: 16 };
 const EXIT_MS = 250;
 const LABEL_CHARS = 22;
-/** Pointer travel in CSS px beyond which a press is a pan, not a press-and-hold. */
-const PAN_SLOP_PX = 8;
 
 /**
  * d3-zoom gesture filter. In dashboard grids a plain wheel scrolls the page
@@ -120,8 +119,7 @@ export class UitGraphView extends LitElement {
   private zoomBehavior: ZoomBehavior<SVGSVGElement, unknown> | undefined;
   private resizeObserver: ResizeObserver | undefined;
   /** Pointers now down, and whether this gesture has panned or pinched. */
-  private pointers = new Set<number>();
-  private gesture = { x: 0, y: 0, moved: false };
+  private gesture = new ContextGesture();
 
   constructor() {
     super();
@@ -379,28 +377,15 @@ export class UitGraphView extends LitElement {
   }
 
   private onPointerDown(e: PointerEvent): void {
-    if (e.isPrimary) {
-      this.pointers = new Set([e.pointerId]);
-      this.gesture = { x: e.clientX, y: e.clientY, moved: false };
-    } else {
-      // A second finger: this is a pinch.
-      this.pointers.add(e.pointerId);
-      this.gesture.moved = true;
-    }
+    this.gesture.down(e);
   }
 
   private onPointerMove(e: PointerEvent): void {
-    const { gesture } = this;
-    if (
-      !gesture.moved &&
-      this.pointers.has(e.pointerId) &&
-      Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > PAN_SLOP_PX
-    )
-      gesture.moved = true;
+    this.gesture.move(e);
   }
 
   private onPointerEnd(e: PointerEvent): void {
-    this.pointers.delete(e.pointerId);
+    this.gesture.end(e);
   }
 
   /**
@@ -410,8 +395,7 @@ export class UitGraphView extends LitElement {
    */
   private onContextMenu(e: Event, id: string): void {
     e.preventDefault();
-    if (!this.gesture.moved && this.pointers.size <= 1)
-      fireEvent(this, "uit-context", { id });
+    if (this.gesture.allowsMenu) fireEvent(this, "uit-context", { id });
   }
 
   protected override render(): TemplateResult | typeof nothing {
