@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed missing sensitive keys in `_SENSITIVE_KEYS` and `_SENSITIVE_KEYS_RE` within `custom_components/unifi_insights/api/base.py`, ensuring consistent diagnostic redactions of fields like `accessToken`, `x_passphrase`, and others across log outputs.
+
 ### Changed
 - PR labeler (now the shared tinkerologie workflow) applies at most one type label: the title's Conventional Commit type decides (`feat` → `enhancement`, `fix` → `bug`, other types → neither), then the branch prefix, then a single ticked Type of Change box, then the linked issues. A contradicting type label added by automation is removed; one added by a person is kept. The label is re-evaluated when the title or description is edited, and a CHANGELOG.md-only change no longer adds `documentation`.
 - Dependabot pull requests whose largest update is a patch or minor version merge automatically once the checks and commit statuses on their head commit have finished without a failure (a Codecov check that is still pending is not waited for; a Codecov failure blocks); majors, and pull requests with open review threads, stay for review.
