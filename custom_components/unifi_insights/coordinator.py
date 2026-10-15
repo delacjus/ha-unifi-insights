@@ -361,9 +361,8 @@ class UnifiInsightsDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             devices_dict = {}
             stats_dict = {}
             for device_id, device, stats in results:
-                if device_id:
-                    devices_dict[device_id] = device
-                    stats_dict[device_id] = stats
+                devices_dict[device_id] = device
+                stats_dict[device_id] = stats
 
             clients_dict: dict[str, dict[str, Any]] = {
                 str(client.get("id")): client for client in clients if client.get("id")
