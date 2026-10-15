@@ -410,7 +410,7 @@ class BaseUniFiClient(ABC):
             path: API path.
             params: Query parameters.
             json_data: JSON body data.
-            body_factory: Build a fresh multipart body for this attempt.
+            body_factory: Build a fresh multipart body for this attempt (omits all Content-Type headers).
             headers: Additional headers.
             expected_unsupported: Whether a non-JSON 2xx response is an
                 expected unsupported-endpoint signal.
@@ -436,15 +436,13 @@ class BaseUniFiClient(ABC):
         if headers:
             request_headers.update(headers)
         if body_factory is not None:
-            # Omit JSON Content-Type in any casing, letting aiohttp supply the
-            # multipart boundary while retaining other caller header overrides.
+            # Omit all Content-Type headers in any casing, letting aiohttp supply
+            # the multipart boundary while retaining authentication and other
+            # caller header overrides.
             request_headers = {
                 key: value
                 for key, value in request_headers.items()
-                if not (
-                    key.lower() == HEADER_CONTENT_TYPE.lower()
-                    and value.split(";", 1)[0].strip().lower() == CONTENT_TYPE_JSON
-                )
+                if key.lower() != HEADER_CONTENT_TYPE.lower()
             }
 
         _LOGGER.debug(
@@ -674,7 +672,7 @@ class BaseUniFiClient(ABC):
         Args:
             path: API path.
             json_data: JSON body data.
-            body_factory: Build a fresh multipart body for each attempt.
+            body_factory: Build a fresh multipart body for each attempt (omits all Content-Type headers).
             params: Query parameters.
             expected_unsupported: Whether a non-JSON 2xx response is an
                 expected unsupported-endpoint signal.

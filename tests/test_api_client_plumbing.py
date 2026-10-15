@@ -368,10 +368,20 @@ def test_network_client_build_api_path_remote() -> None:
 @pytest.mark.parametrize(
     "content_type_header", ["Content-Type", "content-type", "CONTENT-TYPE"]
 )
+@pytest.mark.parametrize(
+    "content_type_value",
+    [
+        "Application/JSON; charset=utf-8",
+        "multipart/form-data",
+        "multipart/form-data; boundary=stale-boundary-12345",
+        "application/octet-stream",
+    ],
+)
 async def test_multipart_body_preserves_auth_and_caller_headers(
     content_type_header: str,
+    content_type_value: str,
 ) -> None:
-    """JSON Content-Type is omitted in any casing while other headers survive."""
+    """Content-Type headers in any casing are omitted while other headers survive."""
     session = _Session([{"ok": True}])
     client = _DummyClient(
         auth=ApiKeyAuth(api_key="key"),
@@ -391,7 +401,7 @@ async def test_multipart_body_preserves_auth_and_caller_headers(
         headers={
             "X-Custom-Header": "custom-val",
             "User-Agent": "caller-agent",
-            content_type_header: "Application/JSON; charset=utf-8",
+            content_type_header: content_type_value,
         },
     ) == {"ok": True}
     request = session.requests[0]
