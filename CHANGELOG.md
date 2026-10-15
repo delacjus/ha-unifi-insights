@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Mobility router entity child linking detects `via_device_id` using `DeviceInfo.__annotations__` instead of `DeviceInfo.__optional_keys__` for Home Assistant 2026.11 dataclass compatibility. [#324](https://github.com/tinkerologie/ha-unifi-insights/issues/324), [home-assistant/core#185211](https://github.com/home-assistant/core/issues/185211)
+
 - Local validation now uses the project environment for the complete mypy check, including Home Assistant's actual schema types. Generated frontend bundles are excluded from source spelling/formatting hooks; source formatting, YAML, copyright notices and keyword-only helper calls were aligned with the repository's existing checks. Runtime schema imports remain compatible with the supported older HA versions. [#283](https://github.com/tinkerologie/ha-unifi-insights/issues/283)
 
 - PR labeler (now the shared tinkerologie workflow) applies at most one type label: the title's Conventional Commit type decides (`feat` → `enhancement`, `fix` → `bug`, other types → neither), then the branch prefix, then a single ticked Type of Change box, then the linked issues. A contradicting type label added by automation is removed; one added by a person is kept. The label is re-evaluated when the title or description is edited, and a CHANGELOG.md-only change no longer adds `documentation`.
