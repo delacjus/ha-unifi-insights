@@ -21,6 +21,7 @@ from custom_components.unifi_insights.carrier_fabric_sensor import (
     UnifiCarrierFabricPlanSubscribersSensor,
     UnifiCarrierFabricSubscriberPlanSensor,
     UnifiCarrierFabricSubscriberStateSensor,
+    reconcile_subscriber_registry,
 )
 from custom_components.unifi_insights.const import (
     CONF_CARRIER_ORG_ID,
@@ -30,6 +31,7 @@ from custom_components.unifi_insights.const import (
     DOMAIN,
 )
 from custom_components.unifi_insights.sensor import async_setup_entry
+from tests.conftest import device_config_entry_ids, get_device_by_identifier
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -408,15 +410,47 @@ async def test_carrier_fabric_track_subscribers_disabled_reconciliation(
     )
 
 
+class LegacyDeviceEntryDouble:
+    """DeviceEntry double matching Home Assistant 2026.6.2 tagged shape."""
+
+    def __init__(
+        self,
+        *,
+        device_id: str,
+        identifiers: set[tuple[str, str]],
+        config_entries: set[str],
+    ) -> None:
+        self.id = device_id
+        self.identifiers = identifiers
+        self.config_entries = config_entries
+
+
+class ModernDeviceEntryDouble:
+    """DeviceEntry double matching Home Assistant 2026.10.1 tagged shape."""
+
+    def __init__(
+        self,
+        *,
+        device_id: str,
+        identifiers: set[tuple[str, str]],
+        config_entry_id: str,
+    ) -> None:
+        self.id = device_id
+        self.identifiers = identifiers
+        self.config_entry_id = config_entry_id
+
+
 async def test_reconcile_does_not_touch_another_entrys_subscriber_device(
     hass, carrier_entry, mock_carrier_coordinator
 ):
-    """Two entries (same org via the key-hash fallback) keep separate devices.
+    """Two entries keep separate devices or shared ownership portably.
 
-    Home Assistant gives every device exactly one config entry, even when the
-    identifiers match, so cleaning up one entry cannot remove the other's.
+    On modern single-owner registries, each entry gets a distinct device. On older
+    registries, the device is shared across entries. Cleaning up one entry must
+    detach that entry without removing the other entry's device or entities.
     """
     dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
     other_entry = MockConfigEntry(
         domain=DOMAIN,
         entry_id="other_carrier_entry",
@@ -432,17 +466,229 @@ async def test_reconcile_does_not_touch_another_entrys_subscriber_device(
     theirs = dev_reg.async_get_or_create(
         config_entry_id=other_entry.entry_id, identifiers={identifier}
     )
-    assert ours.id != theirs.id
+    assert carrier_entry.entry_id in device_config_entry_ids(ours)
+    assert other_entry.entry_id in device_config_entry_ids(theirs)
+    if hasattr(theirs, "config_entry_id"):
+        assert ours.id != theirs.id
+
+    foreign_entity = ent_reg.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id="carrier_subscriber_foreign_state",
+        config_entry=other_entry,
+        device_id=theirs.id,
+    )
+    foreign_device_id = theirs.id
+    foreign_identifiers = set(theirs.identifiers)
+    foreign_entity_id = foreign_entity.entity_id
+    foreign_unique_id = foreign_entity.unique_id
+
+    own_sub_entity = ent_reg.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id="carrier_subscriber_own_state",
+        config_entry=carrier_entry,
+        device_id=ours.id,
+    )
+    own_other_entity = ent_reg.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id="carrier_other_own_attached_to_device",
+        config_entry=carrier_entry,
+        device_id=ours.id,
+    )
 
     hass.config_entries.async_update_entry(
         carrier_entry, options={CONF_TRACK_SUBSCRIBERS: False}
     )
     await async_setup_entry(hass, carrier_entry, lambda entities: None)
+    await hass.async_block_till_done()
 
-    assert dev_reg.async_get(ours.id) is None
-    survivor = dev_reg.async_get(theirs.id)
+    our_device = get_device_by_identifier(dev_reg, identifier, carrier_entry.entry_id)
+    if our_device is not None:
+        assert carrier_entry.entry_id not in device_config_entry_ids(our_device)
+    if hasattr(ours, "config_entry_id"):
+        assert dev_reg.async_get(ours.id) is None
+
+    survivor = get_device_by_identifier(dev_reg, identifier, other_entry.entry_id)
     assert survivor is not None
-    assert survivor.config_entry_id == other_entry.entry_id
+    assert survivor.id == foreign_device_id
+    assert survivor.identifiers == foreign_identifiers
+    assert other_entry.entry_id in device_config_entry_ids(survivor)
+
+    surviving_entity = ent_reg.async_get(foreign_entity_id)
+    assert surviving_entity is not None
+    assert surviving_entity.unique_id == foreign_unique_id
+    assert surviving_entity.device_id == foreign_device_id
+    assert surviving_entity.config_entry_id == other_entry.entry_id
+
+    assert ent_reg.async_get(own_sub_entity.entity_id) is None
+    assert ent_reg.async_get(own_other_entity.entity_id) is None
+
+
+async def test_reconcile_removes_last_owner_subscriber_device(
+    hass, carrier_entry, mock_carrier_coordinator
+):
+    """Last-owner own subscriber device and entity removed on both HA versions."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    identifier = (DOMAIN, "carrier_subscriber_last_owner")
+    sub_device = dev_reg.async_get_or_create(
+        config_entry_id=carrier_entry.entry_id, identifiers={identifier}
+    )
+    sub_entity = ent_reg.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id="carrier_subscriber_last_owner_state",
+        config_entry=carrier_entry,
+        device_id=sub_device.id,
+    )
+
+    hass.config_entries.async_update_entry(
+        carrier_entry, options={CONF_TRACK_SUBSCRIBERS: False}
+    )
+    await async_setup_entry(hass, carrier_entry, MagicMock())
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get(sub_device.id) is None
+    assert ent_reg.async_get(sub_entity.entity_id) is None
+    assert get_device_by_identifier(dev_reg, identifier, carrier_entry.entry_id) is None
+
+
+async def test_reconcile_modern_no_deprecation_reported(
+    hass, carrier_entry, mock_carrier_coordinator, caplog
+):
+    """Modern HA reports no deprecation or usage warning during reconciliation."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    identifier = (DOMAIN, "carrier_subscriber_dep_check")
+    sub_device = dev_reg.async_get_or_create(
+        config_entry_id=carrier_entry.entry_id, identifiers={identifier}
+    )
+    ent_reg.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id="carrier_subscriber_dep_check_state",
+        config_entry=carrier_entry,
+        device_id=sub_device.id,
+    )
+
+    hass.config_entries.async_update_entry(
+        carrier_entry, options={CONF_TRACK_SUBSCRIBERS: False}
+    )
+
+    report_usage_mock = MagicMock()
+    with (
+        patch(
+            "homeassistant.helpers.device_registry.report_usage",
+            report_usage_mock,
+        ),
+        patch.object(
+            dev_reg,
+            "async_update_device",
+            wraps=dev_reg.async_update_device,
+        ) as update_spy,
+    ):
+        caplog.clear()
+        reconcile_subscriber_registry(hass, carrier_entry.entry_id)
+        await hass.async_block_till_done()
+
+    if (
+        hasattr(sub_device, "config_entry_id")
+        and getattr(sub_device, "config_entry_id", None) is not None
+    ):
+        report_usage_mock.assert_not_called()
+        for call in update_spy.call_args_list:
+            assert "remove_config_entry_id" not in call.kwargs
+
+        deprecation_warnings = [
+            rec.message
+            for rec in caplog.records
+            if rec.levelname in ("WARNING", "ERROR")
+            and any(
+                term in rec.message.lower()
+                for term in (
+                    "deprecated",
+                    "remove_config_entry_id",
+                    "config_entries",
+                    "report_usage",
+                )
+            )
+        ]
+        assert deprecation_warnings == []
+
+
+async def test_reconcile_subscriber_registry_legacy_sole_owner_double(
+    hass, carrier_entry
+):
+    """A legacy 2026.6.2 sole-owner double triggers whole-device removal."""
+    dev_reg = dr.async_get(hass)
+    legacy_device = LegacyDeviceEntryDouble(
+        device_id="dev_legacy_sole",
+        identifiers={(DOMAIN, "carrier_subscriber_leg_sole")},
+        config_entries={carrier_entry.entry_id},
+    )
+    with (
+        patch(
+            "homeassistant.helpers.device_registry.async_entries_for_config_entry",
+            return_value=[legacy_device],
+        ),
+        patch.object(dev_reg, "async_remove_device") as mock_remove,
+        patch.object(dev_reg, "async_update_device") as mock_update,
+    ):
+        reconcile_subscriber_registry(hass, carrier_entry.entry_id)
+
+    mock_remove.assert_called_once_with("dev_legacy_sole")
+    mock_update.assert_not_called()
+
+
+async def test_reconcile_subscriber_registry_legacy_shared_double(hass, carrier_entry):
+    """Legacy 2026.6.2 shared double detaches without whole-device removal."""
+    dev_reg = dr.async_get(hass)
+    legacy_device = LegacyDeviceEntryDouble(
+        device_id="dev_legacy_shared",
+        identifiers={(DOMAIN, "carrier_subscriber_leg_shared")},
+        config_entries={carrier_entry.entry_id, "other_entry"},
+    )
+    with (
+        patch(
+            "homeassistant.helpers.device_registry.async_entries_for_config_entry",
+            return_value=[legacy_device],
+        ),
+        patch.object(dev_reg, "async_remove_device") as mock_remove,
+        patch.object(dev_reg, "async_update_device") as mock_update,
+    ):
+        reconcile_subscriber_registry(hass, carrier_entry.entry_id)
+
+    mock_remove.assert_not_called()
+    mock_update.assert_called_once_with(
+        device_id="dev_legacy_shared",
+        remove_config_entry_id=carrier_entry.entry_id,
+    )
+
+
+async def test_reconcile_subscriber_registry_modern_double(hass, carrier_entry):
+    """Modern 2026.10.1 double removes whole device without reading config_entries."""
+    dev_reg = dr.async_get(hass)
+    modern_device = ModernDeviceEntryDouble(
+        device_id="dev_modern_sole",
+        identifiers={(DOMAIN, "carrier_subscriber_mod_sole")},
+        config_entry_id=carrier_entry.entry_id,
+    )
+    with (
+        patch(
+            "homeassistant.helpers.device_registry.async_entries_for_config_entry",
+            return_value=[modern_device],
+        ),
+        patch.object(dev_reg, "async_remove_device") as mock_remove,
+        patch.object(dev_reg, "async_update_device") as mock_update,
+    ):
+        reconcile_subscriber_registry(hass, carrier_entry.entry_id)
+
+    mock_remove.assert_called_once_with("dev_modern_sole")
+    mock_update.assert_not_called()
 
 
 async def test_carrier_fabric_dynamic_discovery(

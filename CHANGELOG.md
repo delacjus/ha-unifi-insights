@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Disabling Carrier Fabric subscriber tracking now preserves devices and entities owned by another config entry on older Home Assistant registries. [#323](https://github.com/tinkerologie/ha-unifi-insights/issues/323)
+
 - A temporary Access outage during startup now recovers through polling and entity discovery without reloading the entry. Failed webhook cleanup during a host or port change preserves the old receiver and connection settings instead of orphaning the registration. An identity conflict or save error after cleanup schedules an entry reload to rebuild its webhook. Access shutdown cancels notification-triggered and periodic snapshot reads before closing the client. [#283](https://github.com/tinkerologie/ha-unifi-insights/issues/283)
 - Access notification close handshakes now have a firm deadline when a console keeps sending frames without a CLOSE reply, preventing cleanup before reconnect from waiting indefinitely. [#283](https://github.com/tinkerologie/ha-unifi-insights/issues/283)
 - The topology card's zoom in, zoom out and fit buttons now use the same rounded shape as the other toolbar buttons, with their icons centred, instead of circles with off-centre icons.
