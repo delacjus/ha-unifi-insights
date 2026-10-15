@@ -4880,7 +4880,13 @@ async def test_wifi_create_invalid_result_raises() -> None:
     client = _network_client()
     client._post = AsyncMock(return_value={"data": "invalid"})
     with pytest.raises(ValueError, match="Failed to create WiFi network"):
-        await client.wifi.create("site1", name="Guest", ssid="GuestSSID")
+        await client.wifi.create(
+            "site1",
+            name="Guest",
+            ssid="Guest",
+            passphrase="test-passphrase",  # noqa: S106
+        )
+    client._post.assert_awaited_once()
 
 
 async def test_protect_pos_ingest_transaction_invalid_data_raises() -> None:
