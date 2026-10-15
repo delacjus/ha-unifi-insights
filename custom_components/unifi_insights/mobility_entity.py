@@ -53,7 +53,10 @@ _WORKSPACE_MODEL = "UniFi Mobility workspace"
 _CONNECTED = "CONNECTED"
 # Home Assistant 2026.8 links a child to its parent by registry id
 # (`via_device_id`); older releases, still supported, only know `via_device`.
-_HAS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__optional_keys__
+# `__annotations__` works on the TypedDict (before 2026.11) and on the
+# dataclass (2026.11 and later) without relying on deprecated TypedDict
+# optional-key metadata.
+_HAS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
 # Enum sensor options: the API's values, lower-cased. "NULL" and empty
 # strings are not options; they mean the value is unknown.
 _ROUTER_STATES = [state.lower() for state in MOBILITY_ROUTER_STATES if state != "NULL"]
