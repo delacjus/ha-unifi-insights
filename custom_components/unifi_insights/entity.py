@@ -268,9 +268,7 @@ class UnifiInsightsEntity(CoordinatorEntity[UnifiFacadeCoordinator]):
 
         # Get port count
         if (ports := device_data.get("port_table", [])) and isinstance(ports, list):
-            port_count = len(ports)
-            if port_count > 0:
-                hw_info.append(f"{port_count} Ports")
+            hw_info.append(f"{len(ports)} Ports")
 
         # Get radio info
         if (radio_table := device_data.get("radio_table", [])) and isinstance(
@@ -458,8 +456,9 @@ class UnifiProtectEntity(CoordinatorEntity[UnifiFacadeCoordinator]):
             }
 
             # Add network connections
-            if mac := network_device.get("macAddress"):
-                device_info["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
+            device_info["connections"] = {
+                (CONNECTION_NETWORK_MAC, network_device.get("macAddress"))
+            }
 
             _LOGGER.debug(
                 "Using network info for %s %s (net %s site %s)",
