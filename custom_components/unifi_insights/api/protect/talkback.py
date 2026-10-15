@@ -17,6 +17,7 @@ Stop is cooperative:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 import time
@@ -121,6 +122,14 @@ def _sanitize_url(url: str) -> str:
         return parts._replace(netloc=netloc, query="", fragment="").geturl()
     except Exception:
         return "<invalid-url>"
+
+
+def _close_quietly(container: Any) -> None:
+    """Close a PyAV container if it was opened, ignoring close errors."""
+    if container is None:
+        return
+    with contextlib.suppress(Exception):
+        container.close()
 
 
 def _transcode_and_stream(
@@ -231,16 +240,8 @@ def _transcode_and_stream(
         msg = f"Error during talkback stream: {type(err).__name__}"
         raise TalkbackStreamError(msg) from err
     finally:
-        if output_container is not None:
-            try:
-                output_container.close()
-            except Exception:
-                pass
-        if input_container is not None:
-            try:
-                input_container.close()
-            except Exception:
-                pass
+        _close_quietly(output_container)
+        _close_quietly(input_container)
 
 
 class TalkbackStream:
