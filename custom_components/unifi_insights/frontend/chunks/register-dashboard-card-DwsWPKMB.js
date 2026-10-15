@@ -498,13 +498,13 @@ var e=[`gateway`,`switch`,`access_point`,`client`,`other`],t=`unifi_insights/top
           <div class="header-actions">${this.renderHeaderBadge()}</div>
         </div>
         ${this.loading?B`<div class="state loading-box">
-                <span class="pulse-dot"></span>
-                <span>${this.loadingLabel}</span>
-              </div>`:H}
+              <span class="pulse-dot"></span>
+              <span>${this.loadingLabel}</span>
+            </div>`:H}
         ${this.error?B`<div class="state error">
-                ${$(me)}
-                <span>${this.error.code}</span>
-              </div>`:H}
+              ${$(me)}
+              <span>${this.error.code}</span>
+            </div>`:H}
         ${!this.loading&&!this.error?this.renderContent():H}
       </ha-card>
     `}static styles=Ht};function Wt(e){h(e.tag,e.card),h(e.editorTag,e.editor),window.customCards??=[],window.customCards.some(t=>t.type===e.tag)||window.customCards.push({type:e.tag,name:e.name,description:e.description,preview:!0})}export{Me as $,V as A,ye as B,St as C,s as Ct,Z as D,t as Dt,bt as E,e as Et,me as F,g as G,xe as H,he as I,Oe as J,Te as K,ge as L,ht as M,st as N,X as O,n as Ot,S as P,_ as Q,_e as R,xt as S,o as St,Q as T,ee as Tt,Se as U,be as V,Ce as W,Ae as X,ke as Y,je as Z,Nt as _,u as _t,zt as a,ae as at,Lt as b,a as bt,Dt as c,ie as ct,At as d,m as dt,Ne as et,Ct as f,de as ft,Pt as g,l as gt,Mt as h,le as ht,Bt as i,re as it,B as j,H as k,ne as kt,Ot as l,ce as lt,jt as m,fe as mt,Ut as n,Ie as nt,Tt as o,oe as ot,wt as p,ue as pt,Ee as q,Vt as r,h as rt,Et as s,se as st,Wt as t,Fe as tt,kt as u,f as ut,It as v,d as vt,$ as w,i as wt,Rt as x,r as xt,Ft as y,c as yt,ve as z};
