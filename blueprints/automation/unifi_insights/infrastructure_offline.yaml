@@ -91,12 +91,7 @@ triggers:
 conditions:
   - condition: template
     value_template: >-
-      {{ trigger.from_state is not none
-         and (trigger.id == 'recovery'
-              or trigger.from_state.state == 'on'
-              or (trigger.id == 'offline'
-                  and trigger.from_state.state in ['unavailable', 'unknown']
-                  and not treat_unavailable_as_offline)) }}
+      {{ trigger.from_state is not none }}
   - condition: template
     value_template: >-
       {{ trigger.id != 'unavailable' or treat_unavailable_as_offline }}
@@ -121,13 +116,25 @@ conditions:
       {% else %}
         {% set delay_seconds = offline_delay | float %}
       {% endif %}
-      {{ trigger.id != 'recovery'
-         or ((trigger.from_state.state == 'off'
-              or (trigger.from_state.state == 'unavailable'
-                  and treat_unavailable_as_offline))
-             and (trigger.to_state.last_changed
-                  - trigger.from_state.last_changed).total_seconds()
-                 >= delay_seconds) }}
+      {% if trigger.id == 'recovery' %}
+        {{ (trigger.from_state.state == 'off'
+            or (trigger.from_state.state == 'unavailable'
+                and treat_unavailable_as_offline))
+           and (trigger.to_state.last_changed
+                - trigger.from_state.last_changed).total_seconds()
+               >= delay_seconds }}
+      {% else %}
+        {% set prev = trigger.from_state %}
+        {% set prev_seconds = (trigger.to_state.last_changed
+                               - trigger.from_state.last_changed).total_seconds() %}
+        {% set already_alerted = (prev.state == 'off'
+                                  or (prev.state == 'unavailable'
+                                      and treat_unavailable_as_offline))
+                                 and prev_seconds >= delay_seconds %}
+        {{ prev.state == 'on'
+           or (not prev.attributes.get('restored', false)
+               and not already_alerted) }}
+      {% endif %}
 
 actions:
   - choose:

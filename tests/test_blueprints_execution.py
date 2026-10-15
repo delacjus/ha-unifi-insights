@@ -1282,25 +1282,6 @@ async def test_secure_subnet_waits_exactly_ten_seconds_and_alerts_only_on_creati
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("previous", [STATE_UNKNOWN, STATE_UNAVAILABLE, "off"])
-@pytest.mark.parametrize("offline_state", ["off", STATE_UNAVAILABLE])
-async def test_offline_ignores_startup_and_duplicate_transitions(
-    hass: HomeAssistant,
-    *,
-    freezer: FrozenDateTimeFactory,
-    blueprint_dir: _BlueprintProgress,
-    calls: list[ServiceCall],
-    previous: str,
-    offline_state: str,
-) -> None:
-    """Only an online previous state qualifies an offline alert."""
-    hass.states.async_set(SWITCH_ONLINE, previous)
-    await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
-    await _set_state(hass, SWITCH_ONLINE, offline_state)
-    await _advance(hass, freezer, minutes=6)
-    assert calls == []
-
-
 @pytest.mark.parametrize("treat_unavailable", [False, True])
 async def test_recovery_from_unavailable_obeys_the_flag(
     hass: HomeAssistant,
@@ -1505,3 +1486,135 @@ async def test_secure_subnet_reads_ip_once_after_the_fixed_wait(
         if address_at == 9
         else []
     )
+
+
+@pytest.mark.parametrize("treat_unavailable", [True, False])
+async def test_offline_alerts_when_device_transitions_through_brief_unavailable(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    treat_unavailable: bool,
+) -> None:
+    """Brief unavailable before off still runs offline actions once delay elapses."""
+    hass.states.async_set(SWITCH_ONLINE, "on")
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=treat_unavailable),
+    )
+
+    await _set_state(hass, SWITCH_ONLINE, STATE_UNAVAILABLE)
+    await _advance(hass, freezer, minutes=2)
+    assert calls == []
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=4)
+    assert calls == []
+
+    await _advance(hass, freezer, minutes=2)
+    assert _data(calls) == [
+        {"event": "offline", "entity": SWITCH_ONLINE, "state": "off"}
+    ]
+
+
+async def test_offline_alerts_when_device_transitions_through_brief_off(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """Brief off before unavailable still alerts when unavailable counts as offline."""
+    hass.states.async_set(SWITCH_ONLINE, "on")
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=True),
+    )
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=2)
+    assert calls == []
+
+    await _set_state(hass, SWITCH_ONLINE, STATE_UNAVAILABLE)
+    await _advance(hass, freezer, minutes=4)
+    assert calls == []
+
+    await _advance(hass, freezer, minutes=2)
+    assert _data(calls) == [
+        {"event": "offline", "entity": SWITCH_ONLINE, "state": "unavailable"}
+    ]
+
+
+async def test_offline_does_not_re_alert_when_already_alerted_state_changes(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """An offline state that already alerted does not trigger a duplicate alert."""
+    hass.states.async_set(SWITCH_ONLINE, "on")
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=True),
+    )
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=6)
+    assert _data(calls) == [
+        {"event": "offline", "entity": SWITCH_ONLINE, "state": "off"}
+    ]
+
+    await _set_state(hass, SWITCH_ONLINE, STATE_UNAVAILABLE)
+    await _advance(hass, freezer, minutes=6)
+    assert len(calls) == 1
+
+
+async def test_offline_alerts_on_off_after_unalerted_unavailable(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """With unavailable not treated offline, subsequent off held past delay alerts."""
+    hass.states.async_set(SWITCH_ONLINE, "on")
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=False),
+    )
+
+    await _set_state(hass, SWITCH_ONLINE, STATE_UNAVAILABLE)
+    await _advance(hass, freezer, minutes=6)
+    assert calls == []
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=6)
+    assert _data(calls) == [
+        {"event": "offline", "entity": SWITCH_ONLINE, "state": "off"}
+    ]
+
+
+async def test_offline_ignores_restored_state_on_startup(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+) -> None:
+    """A restored state on startup does not alert on next offline state."""
+    hass.states.async_set(SWITCH_ONLINE, STATE_UNAVAILABLE, {"restored": True})
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=True),
+    )
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=6)
+    assert calls == []
