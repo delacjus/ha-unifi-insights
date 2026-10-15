@@ -334,7 +334,15 @@ def reconcile_subscriber_registry(hass: HomeAssistant, entry_id: str) -> None:
     for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
         for domain, identifier in device.identifiers:
             if domain == DOMAIN and identifier.startswith("carrier_subscriber_"):
-                dev_reg.async_remove_device(device.id)
+                if getattr(
+                    device, "config_entry_id", None
+                ) is not None or device.config_entries == {entry_id}:
+                    dev_reg.async_remove_device(device.id)
+                else:
+                    dev_reg.async_update_device(
+                        device_id=device.id,
+                        remove_config_entry_id=entry_id,
+                    )
                 break
 
 
