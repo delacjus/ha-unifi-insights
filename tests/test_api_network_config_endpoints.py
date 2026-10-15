@@ -2881,6 +2881,12 @@ async def test_traffic_create_list_port_boundaries_and_items_passthrough() -> No
         list_type=TrafficMatchingType.PORTS,
         entries=["1", "65535"],
     )
+    assert session.requests[0]["method"] == "POST"
+    assert session.requests[0]["url"] == (
+        "https://192.168.1.1/proxy/network/integration/v1/sites/default/"
+        "traffic-matching-lists"
+    )
+    assert session.requests[0]["params"] is None
     assert session.requests[0]["json"]["items"] == [
         {"type": "PORT_NUMBER", "value": 1},
         {"type": "PORT_NUMBER", "value": 65535},
@@ -2889,6 +2895,12 @@ async def test_traffic_create_list_port_boundaries_and_items_passthrough() -> No
     await client.traffic.create_list(
         "default", name="Ports", list_type=TrafficMatchingType.PORTS, items=items
     )
+    assert session.requests[1]["method"] == "POST"
+    assert session.requests[1]["url"] == (
+        "https://192.168.1.1/proxy/network/integration/v1/sites/default/"
+        "traffic-matching-lists"
+    )
+    assert session.requests[1]["params"] is None
     assert session.requests[1]["json"]["items"] == items
     assert "entries" not in session.requests[1]["json"]
 
@@ -2918,6 +2930,12 @@ async def test_firewall_create_rule_action_mappings(action: str, expected: str) 
     action_data: dict[str, Any] = {"type": expected}
     if expected == "ALLOW":
         action_data["allowReturnTraffic"] = False
+    assert session.requests[0]["method"] == "POST"
+    assert session.requests[0]["url"] == (
+        "https://192.168.1.1/proxy/network/integration/v1/sites/default/"
+        "firewall/policies"
+    )
+    assert session.requests[0]["params"] is None
     assert session.requests[0]["json"] == {
         "name": "Rule",
         "action": action_data,
@@ -2981,6 +2999,12 @@ async def test_firewall_create_rule_spec_overrides() -> None:
         destination_zone_id="old-destination",
         **overrides,
     )
+    assert session.requests[0]["method"] == "POST"
+    assert session.requests[0]["url"] == (
+        "https://192.168.1.1/proxy/network/integration/v1/sites/default/"
+        "firewall/policies"
+    )
+    assert session.requests[0]["params"] is None
     assert session.requests[0]["json"] == {
         "name": "Rule",
         "action": action_override,
@@ -2999,6 +3023,12 @@ async def test_firewall_create_rule_nested_allow_default() -> None:
         source_zone_id="source",
         destination_zone_id="destination",
     )
+    assert session.requests[0]["method"] == "POST"
+    assert session.requests[0]["url"] == (
+        "https://192.168.1.1/proxy/network/integration/v1/sites/default/"
+        "firewall/policies"
+    )
+    assert session.requests[0]["params"] is None
     assert session.requests[0]["json"]["action"] == {
         "type": "ALLOW",
         "allowReturnTraffic": False,
