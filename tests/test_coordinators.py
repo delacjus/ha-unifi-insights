@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
 from datetime import UTC, datetime, timedelta
@@ -50,9 +51,15 @@ from custom_components.unifi_insights.api.network.models import (
 from custom_components.unifi_insights.api.protect import UniFiProtectClient
 from custom_components.unifi_insights.api.protect.endpoints.chimes import ChimesEndpoint
 from custom_components.unifi_insights.api.protect.models import (
+    Camera,
+    Chime,
     Fob,
+    Light,
     LinkStation,
+    LiveView,
+    Sensor,
     Siren,
+    Viewer,
 )
 from custom_components.unifi_insights.const import (
     CONF_CONNECTION_TYPE,
@@ -5953,6 +5960,381 @@ class TestUnifiProtectCoordinator:
         """Test camera fetch returns early without protect client."""
         await coordinator_no_protect._fetch_cameras()
         assert coordinator_no_protect.data["cameras"] == {}
+
+    @pytest.mark.asyncio
+    async def test_async_stop_websocket_no_protect_websocket(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test async_stop_websocket when _protect_websocket is None."""
+        coordinator._protect_websocket = None
+        await coordinator.async_stop_websocket()
+        assert coordinator.websocket_task is None
+        assert coordinator.events_websocket_task is None
+        assert coordinator._sensor_refresh_task is None
+        assert coordinator._sensor_reconcile_task is None
+        assert coordinator._sensor_reconnect_task is None
+
+    def test_handle_device_update_doorlock(self, coordinator: UnifiProtectCoordinator):
+        """Test handling doorlock device raw dictionary merge."""
+        coordinator.data["doorlocks"] = {
+            "lock1": {"id": "lock1", "name": "Front Door", "state": "LOCKED"}
+        }
+        listener = MagicMock()
+        coordinator.async_add_listener(listener)
+
+        coordinator._handle_device_update(
+            "doorlock", {"id": "lock1", "state": "UNLOCKED", "battery": 90}
+        )
+
+        assert coordinator.data["doorlocks"]["lock1"] == {
+            "id": "lock1",
+            "name": "Front Door",
+            "state": "UNLOCKED",
+            "battery": 90,
+        }
+        listener.assert_called_once()
+
+    def test_handle_device_update_viewport(self, coordinator: UnifiProtectCoordinator):
+        """Test handling viewport device raw dictionary merge."""
+        coordinator.data["viewports"] = {
+            "vp1": {"id": "vp1", "name": "Viewport 1", "state": "ONLINE"}
+        }
+        listener = MagicMock()
+        coordinator.async_add_listener(listener)
+
+        coordinator._handle_device_update(
+            "viewport", {"id": "vp1", "name": "Renamed Viewport"}
+        )
+
+        assert coordinator.data["viewports"]["vp1"] == {
+            "id": "vp1",
+            "name": "Renamed Viewport",
+            "state": "ONLINE",
+        }
+        listener.assert_called_once()
+
+    def test_normalize_camera_data_sparse_defensive_fallbacks(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Cover smart-detect and PTZ fallback arms with sparse dictionaries."""
+        # 1. Sparse camera dictionary with legacy snake_case fields (defensive fallback)
+        sparse_cam = {
+            "id": "cam_sparse",
+            "name": "Sparse Camera",
+            "smart_detect_types": ["person", "vehicle"],
+            "is_ptz": True,
+        }
+        normalized = coordinator._normalize_camera_data(sparse_cam)
+        assert normalized["smartDetectTypes"] == ["person", "vehicle"]
+        assert normalized["isPtz"] is True
+
+        # Sparse camera with legacy is_ptz=False fallback
+        sparse_cam_no_ptz = {
+            "id": "cam_sparse_no_ptz",
+            "name": "Sparse Camera No PTZ",
+            "is_ptz": False,
+        }
+        normalized_no_ptz = coordinator._normalize_camera_data(sparse_cam_no_ptz)
+        assert normalized_no_ptz["isPtz"] is False
+
+        # 2. Real Camera model dump showing default fields suppress the fallbacks
+        real_cam = Camera(id="cam_real", name="Real Camera", mac="AA:BB:CC:DD:EE:FF")
+        real_dump = real_cam.model_dump(by_alias=True)
+        real_dump["smart_detect_types"] = ["ignored_legacy"]
+        real_dump["is_ptz"] = True
+        normalized_real = coordinator._normalize_camera_data(real_dump)
+        assert normalized_real["smartDetectTypes"] == []
+        assert normalized_real["isPtz"] is False
+
+    def test_prune_rebuilt_trackers_motion_and_ring(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Cover REST rebuild tracker pruning branches for motion and ring."""
+        now = datetime.now(tz=UTC)
+        coordinator._camera_motion_started = {
+            "cam_survives": now,
+            "cam_pruned": now,
+            "cam_missing": now,
+        }
+        coordinator._camera_ring_started = {
+            "cam_survives": now,
+            "cam_pruned": now,
+            "cam_missing": now,
+        }
+
+        cameras = {
+            "cam_survives": {
+                "id": "cam_survives",
+                "lastMotionStart": 1000,
+                "lastRingStart": 2000,
+            },
+            "cam_pruned": {
+                "id": "cam_pruned",
+            },
+        }
+
+        coordinator._drop_rebuilt_latch_trackers(cameras)
+
+        assert "cam_survives" in coordinator._camera_motion_started
+        assert "cam_missing" in coordinator._camera_motion_started
+        assert "cam_pruned" not in coordinator._camera_motion_started
+
+        assert "cam_survives" in coordinator._camera_ring_started
+        assert "cam_missing" in coordinator._camera_ring_started
+        assert "cam_pruned" not in coordinator._camera_ring_started
+
+    @pytest.mark.asyncio
+    async def test_fetch_lights_unabsorbed_error_raises(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test _fetch_lights raises when errors exceed threshold."""
+        protect_client = coordinator.protect_client
+        assert protect_client is not None
+        get_lights = AsyncMock(side_effect=UniFiConnectionError("Connection failure"))
+        protect_client.lights.get_all = get_lights
+        for expected_count in range(1, MAX_CONSECUTIVE_EMPTY_FETCHES + 1):
+            await coordinator._fetch_lights()
+            assert coordinator._consecutive_fetch_errors["lights"] == expected_count
+        with pytest.raises(UniFiConnectionError, match="Connection failure"):
+            await coordinator._fetch_lights()
+        assert (
+            coordinator._consecutive_fetch_errors["lights"]
+            == MAX_CONSECUTIVE_EMPTY_FETCHES + 1
+        )
+        assert get_lights.await_count == MAX_CONSECUTIVE_EMPTY_FETCHES + 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_collections_skip_records_without_id(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test Protect collection fetches skip ID-less records."""
+        protect_client = coordinator.protect_client
+        assert protect_client is not None
+        protect_client.lights.get_all = AsyncMock(
+            return_value=[
+                Light.model_validate(
+                    {"id": "light1", "mac": "00:11:22:33:44:01", "name": "Light 1"}
+                ),
+                Light.model_validate(
+                    {"id": "", "mac": "00:11:22:33:44:02", "name": "NoIDLight"}
+                ),
+            ]
+        )
+        protect_client.lights.last_result_complete = True
+        await coordinator._fetch_lights()
+        assert list(coordinator.data["lights"].keys()) == ["light1"]
+        protect_client.sensors.get_all = AsyncMock(
+            return_value=[
+                Sensor.model_validate(
+                    {"id": "sensor1", "mac": "00:11:22:33:44:03", "name": "Sensor 1"}
+                ),
+                Sensor.model_validate(
+                    {"id": "", "mac": "00:11:22:33:44:04", "name": "NoIDSensor"}
+                ),
+            ]
+        )
+        await coordinator._fetch_sensors()
+        assert list(coordinator.data["sensors"].keys()) == ["sensor1"]
+        protect_client.chimes.get_all = AsyncMock(
+            return_value=[
+                Chime.model_validate(
+                    {"id": "chime1", "mac": "00:11:22:33:44:05", "name": "Chime 1"}
+                ),
+                Chime.model_validate(
+                    {"id": "", "mac": "00:11:22:33:44:06", "name": "NoIDChime"}
+                ),
+            ]
+        )
+        protect_client.chimes.last_result_complete = True
+        await coordinator._fetch_chimes()
+        assert list(coordinator.data["chimes"].keys()) == ["chime1"]
+        protect_client.viewers.get_all = AsyncMock(
+            return_value=[
+                Viewer.model_validate(
+                    {
+                        "id": "viewer1",
+                        "mac": "00:11:22:33:44:07",
+                        "state": "ONLINE",
+                        "name": "Viewer 1",
+                    }
+                ),
+                Viewer.model_validate(
+                    {
+                        "id": "",
+                        "mac": "00:11:22:33:44:08",
+                        "state": "ONLINE",
+                        "name": "NoIDViewer",
+                    }
+                ),
+            ]
+        )
+        protect_client.viewers.last_result_complete = True
+        await coordinator._fetch_viewers()
+        assert list(coordinator.data["viewers"].keys()) == ["viewer1"]
+        protect_client.liveviews.get_all = AsyncMock(
+            return_value=[
+                LiveView.model_validate({"id": "liveview1", "name": "Liveview 1"}),
+                LiveView.model_validate({"id": "", "name": "NoIDLiveview"}),
+            ]
+        )
+        await coordinator._fetch_liveviews()
+        assert list(coordinator.data["liveviews"].keys()) == ["liveview1"]
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_sensors_task_cleared_mid_execution(
+        self, coordinator: UnifiProtectCoordinator
+    ):
+        """Test _sensor_refresh_task cleared by production helper mid-execution."""
+        entered_fetch = asyncio.Event()
+        continue_fetch = asyncio.Event()
+
+        async def mock_fetch():
+            entered_fetch.set()
+            await continue_fetch.wait()
+
+        coordinator._fetch_sensors = mock_fetch
+
+        refresh_task = asyncio.create_task(
+            coordinator.async_refresh_sensors(notify=False)
+        )
+        await entered_fetch.wait()
+
+        # Task was launched and assigned through production helper
+        tracked_task = coordinator._sensor_refresh_task
+        assert tracked_task is not None
+        assert not tracked_task.done()
+
+        # Cancellation clears slot before await resumes
+        coordinator._cancel_sensor_background_task("_sensor_refresh_task")
+        assert coordinator._sensor_refresh_task is None
+
+        # Resume fetch and await completion (suppressing task cancellation)
+        continue_fetch.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await refresh_task
+        assert tracked_task.cancelled()
+        assert coordinator._sensor_refresh_task is None
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_sensors_completed_fetch_shutdown_race(
+        self, coordinator: UnifiProtectCoordinator
+    ) -> None:
+        """Test completed-fetch shutdown race preserves newer fetch owner.
+
+        Covers Protect coordinator 1162->1165: when _fetch_sensors finishes,
+        the fetch Task transitions to done. Before the awaiting driver task
+        (async_refresh_sensors) resumes on the event loop ready queue, a
+        concurrent public async_stop_websocket task executes, sees that
+        _sensor_refresh_task is already done, avoids cancelling it, and nulls
+        the attribute reference via the production helper. Immediately following
+        the stop task, a second async_refresh_sensors task executes, finds the
+        cleared slot, and launches a new inner fetch Task through the production
+        helper, becoming the legitimate new owner. When the original awaiting
+        driver task then resumes, its finally block observes
+        `self._sensor_refresh_task is task` as False (the newer fetch Task is
+        not the original task) and bypasses nulling without error, preserving
+        the newer owner's task in the slot.
+        """
+        entered_first_fetch = asyncio.Event()
+        release_first_fetch = asyncio.Event()
+        entered_second_fetch = asyncio.Event()
+        release_second_fetch = asyncio.Event()
+        fetch_tasks: list[asyncio.Task[Any]] = []
+        stop_tasks: list[asyncio.Task[None]] = []
+        second_refresh_tasks: list[asyncio.Task[None]] = []
+        listener_calls: list[int] = []
+        coordinator.async_add_listener(lambda: listener_calls.append(1))
+
+        fetch_count = 0
+
+        async def mock_fetch() -> None:
+            nonlocal fetch_count
+            fetch_count += 1
+            current = asyncio.current_task()
+            assert current is not None
+            fetch_tasks.append(current)
+
+            if fetch_count == 1:
+                entered_first_fetch.set()
+                await release_first_fetch.wait()
+                # Queue public async_stop_websocket Task and second refresh Task
+                # with eager_start=False before fetch returns without another await,
+                # so stop_task and second_refresh_task are queued before inner fetch
+                # completion queues driver resumption.
+                stop_task = asyncio.create_task(
+                    coordinator.async_stop_websocket(),
+                    eager_start=False,
+                )
+                stop_tasks.append(stop_task)
+                second_refresh_task = asyncio.create_task(
+                    coordinator.async_refresh_sensors(notify=False),
+                    eager_start=False,
+                )
+                second_refresh_tasks.append(second_refresh_task)
+            else:
+                entered_second_fetch.set()
+                await release_second_fetch.wait()
+
+        coordinator._fetch_sensors = mock_fetch
+
+        driver_task: asyncio.Task[None] = asyncio.create_task(
+            coordinator.async_refresh_sensors(notify=True)
+        )
+        await entered_first_fetch.wait()
+
+        # Task was launched and assigned through production helper
+        assert len(fetch_tasks) == 1
+        inner_fetch_task = fetch_tasks[0]
+        assert coordinator._sensor_refresh_task is inner_fetch_task
+        assert not inner_fetch_task.done()
+
+        # Unblock first fetch; fetch queues stop_task then second_refresh_task,
+        # and returns without another await.
+        release_first_fetch.set()
+
+        await driver_task
+        assert len(stop_tasks) == 1
+        stop_task = stop_tasks[0]
+        await stop_task
+        assert len(second_refresh_tasks) == 1
+        second_refresh_task = second_refresh_tasks[0]
+
+        second_fetch_task: asyncio.Task[Any] | None = None
+        try:
+            # Assert second fetch has started and coordinator owns it
+            assert entered_second_fetch.is_set()
+            assert len(fetch_tasks) == 2
+            second_fetch_task = fetch_tasks[1]
+            assert coordinator._sensor_refresh_task is second_fetch_task
+            assert not second_fetch_task.done()
+            assert not second_fetch_task.cancelled()
+            assert inner_fetch_task.done()
+            assert not inner_fetch_task.cancelled()
+            assert stop_task.done()
+            assert not stop_task.cancelled()
+            assert driver_task.done()
+            assert not driver_task.cancelled()
+            assert listener_calls == [1]
+            assert coordinator.protect_client is not None
+            assert coordinator.protect_client.websocket is not None
+            stop_websocket = coordinator.protect_client.websocket.stop
+            assert isinstance(stop_websocket, MagicMock)
+            stop_websocket.assert_called_once()
+        finally:
+            # Robustness: release and await second refresh even if identity assertion
+            # fails under guard mutation, preventing hung teardown or leaked tasks.
+            release_second_fetch.set()
+            await second_refresh_task
+
+        # Assert second fetch + driver DONE/not cancelled, slot None,
+        # listener still once
+        assert second_fetch_task is not None
+        assert second_fetch_task.done()
+        assert not second_fetch_task.cancelled()
+        assert second_refresh_task.done()
+        assert not second_refresh_task.cancelled()
+        assert coordinator._sensor_refresh_task is None
+        assert listener_calls == [1]
 
 
 # ============================================================================

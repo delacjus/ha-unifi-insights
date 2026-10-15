@@ -37,6 +37,7 @@ from custom_components.unifi_insights.services import (
     async_setup_services,
     async_unload_services,
 )
+from tests.conftest import device_config_entry_ids
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -715,7 +716,7 @@ async def test_rejection_subscriber_device_owned_by_another_integrations_entry(
             (DOMAIN, "carrier_subscriber_99999999-2222-3333-4444-555555555555")
         },
     )
-    assert foreign_owned.config_entry_id == other_entry.entry_id
+    assert device_config_entry_ids(foreign_owned) == {other_entry.entry_id}
 
     with pytest.raises(
         ServiceValidationError, match="Target config entry is not loaded"

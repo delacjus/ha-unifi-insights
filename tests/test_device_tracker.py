@@ -15,7 +15,9 @@ from custom_components.unifi_insights.const import CONF_TRACK_WIFI_CLIENTS, DOMA
 from custom_components.unifi_insights.device_tracker import (
     PARALLEL_UPDATES,
     UnifiClientTracker,
+    _client_should_be_tracked,
     _get_client_type,
+    _partition_connected_clients,
     async_setup_entry,
 )
 
@@ -654,6 +656,44 @@ class TestGetClientType:
         result = _get_client_type({})
         assert result == ""
 
+    def test_client_should_be_tracked_unknown_client_type(self) -> None:
+        """Test _client_should_be_tracked for unknown client type."""
+        client = {"type": "UNKNOWN"}
+        assert (
+            _client_should_be_tracked(client, track_wifi=True, track_wired=False)
+            is True
+        )
+        assert (
+            _client_should_be_tracked(client, track_wifi=False, track_wired=True)
+            is True
+        )
+        assert (
+            _client_should_be_tracked(client, track_wifi=False, track_wired=False)
+            is False
+        )
+
+    def test_partition_connected_clients_skips_non_dict_site_clients(self) -> None:
+        """Test _partition_connected_clients skips non-dict site entries."""
+        coordinator = MagicMock()
+        coordinator.data = {
+            "clients": {
+                "site1": None,
+                "site2": "invalid",
+                "site3": [1, 2, 3],
+                "site4": {
+                    "client1": {
+                        "mac": "AA:BB:CC:DD:EE:FF",
+                        "type": "WIRELESS",
+                    }
+                },
+            }
+        }
+        wanted, untracked = _partition_connected_clients(
+            coordinator, track_wifi=True, track_wired=True
+        )
+        assert wanted == {"aa:bb:cc:dd:ee:ff": "site4"}
+        assert untracked == set()
+
 
 class TestUnifiClientTrackerEdgeCases:
     """Test edge cases for UnifiClientTracker."""
@@ -848,8 +888,33 @@ class TestUnifiClientTrackerEdgeCases:
 
         client_data = tracker._get_client_data()
         assert client_data is not None
+
         assert client_data["id"] == "valid_client"
         assert tracker.is_connected is True
+
+    def test_find_in_site_non_dict_clients(self, mock_coordinator) -> None:
+        """Test _find_in_site returns None when clients argument is not a dict."""
+        tracker = UnifiClientTracker(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            mac="aa:bb:cc:dd:ee:ff",
+        )
+        assert tracker._find_in_site(None) is None
+        assert tracker._find_in_site("invalid") is None
+        assert tracker._find_in_site([1, 2, 3]) is None
+
+    def test_get_client_data_all_clients_not_dict(self, mock_coordinator) -> None:
+        """Test _get_client_data returns None when clients in data is not a dict."""
+        tracker = UnifiClientTracker(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            mac="aa:bb:cc:dd:ee:ff",
+        )
+        mock_coordinator.data["clients"] = None
+        assert tracker._get_client_data() is None
+
+        mock_coordinator.data["clients"] = "not_a_dict"
+        assert tracker._get_client_data() is None
 
 
 class TestRegistryReconciliation:

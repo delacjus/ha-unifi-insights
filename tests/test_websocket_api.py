@@ -21,6 +21,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.unifi_insights import CarrierFabricData
+from custom_components.unifi_insights.api import UniFiResponseError
 from custom_components.unifi_insights.console_identity import (
     build_legacy_site_unique_id,
     build_site_unique_id,
@@ -1190,8 +1191,14 @@ async def test_protect_payload_device_mapping(
     )
 
     data["protect"] = {
-        "cameras": {"cam-1": {"name": "Front Camera", "state": "CONNECTED"}},
-        "chimes": {"chime-1": {"name": "Hall Chime", "state": "CONNECTED"}},
+        "cameras": {
+            "cam-1": {"name": "Front Camera", "state": "CONNECTED"},
+            "cam-unreg": {"name": "Unregistered Cam", "state": "CONNECTED"},
+        },
+        "chimes": {
+            "chime-1": {"name": "Hall Chime", "state": "CONNECTED"},
+            "chime-unreg": {"name": "Unregistered Chime", "state": "CONNECTED"},
+        },
         "nvrs": {},
     }
     client = await hass_ws_client(hass)
@@ -1207,8 +1214,47 @@ async def test_protect_payload_device_mapping(
     devices = msg["result"]["devices"]
     cam_item = next(d for d in devices if d["id"] == "cam-1")
     assert cam_item["ha_device_id"] == cam_device.id
+    cam_unreg = next(d for d in devices if d["id"] == "cam-unreg")
+    assert cam_unreg["ha_device_id"] is None
+
     chime_item = next(d for d in devices if d["id"] == "chime-1")
     assert chime_item["ha_device_id"] == chime_device.id
+    chime_unreg = next(d for d in devices if d["id"] == "chime-unreg")
+    assert chime_unreg["ha_device_id"] is None
+
+
+async def test_protect_payload_protect_coordinator_none(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client: Any,
+    mock_protect_client: Any,
+    hass_ws_client: Any,
+    *,
+    mock_local_auth: Any,
+    enable_custom_integrations: Any,
+) -> None:
+    """Test Protect payload returns no_protect snapshot when Protect is disabled."""
+    mock_protect_client.cameras.get_all.side_effect = UniFiResponseError(
+        "Protect not supported", status_code=404
+    )
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.runtime_data.protect_coordinator is None
+    assert mock_config_entry.runtime_data.protect_client is None
+
+    client = await hass_ws_client(hass)
+    await client.send_json(
+        {
+            "id": 311,
+            "type": "unifi_insights/protect/get",
+            "entry_id": mock_config_entry.entry_id,
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    assert msg["result"]["status"] == "no_protect"
 
 
 def test_protect_change_signal_non_dict() -> None:

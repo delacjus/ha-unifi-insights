@@ -11,6 +11,7 @@ from homeassistant.const import EntityCategory
 from custom_components.unifi_insights.binary_sensor import (
     BINARY_SENSOR_TYPES,
     UnifiInsightsBinarySensor,
+    UnifiInsightsBinarySensorEntityDescription,
     UnifiInsightsSiteToSiteVpnBinarySensor,
     UnifiInsightsWanLinkBinarySensor,
     UnifiPortBinarySensor,
@@ -268,6 +269,23 @@ class TestUnifiInsightsBinarySensor:
         # Remove device data
         mock_coordinator.data["devices"]["site1"]["device1"] = None
 
+        assert sensor.is_on is None
+
+    async def test_insights_binary_sensor_none_value_fn(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test is_on returns None when entity_description value_fn is None."""
+        description = UnifiInsightsBinarySensorEntityDescription(
+            key="test_no_fn",
+            name="Test Sensor",
+            value_fn=None,
+        )
+        sensor = UnifiInsightsBinarySensor(
+            coordinator=mock_coordinator,
+            description=description,
+            site_id="site1",
+            device_id="device1",
+        )
         assert sensor.is_on is None
 
 
@@ -628,6 +646,23 @@ class TestUnifiProtectBinarySensor:
         # Remove camera data
         mock_coordinator.data["protect"]["cameras"]["camera1"] = None
 
+        assert sensor.is_on is None
+
+    async def test_protect_binary_sensor_none_value_fn(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test is_on returns None when entity_description value_fn is None."""
+        description = UnifiInsightsBinarySensorEntityDescription(
+            key="test_protect_no_fn",
+            name="Test Protect Sensor",
+            device_type=DEVICE_TYPE_CAMERA,
+            value_fn=None,
+        )
+        sensor = UnifiProtectBinarySensor(
+            coordinator=mock_coordinator,
+            description=description,
+            device_id="camera1",
+        )
         assert sensor.is_on is None
 
 
@@ -1684,6 +1719,44 @@ class TestUnifiPortBinarySensor:
             port_label="SFP+ 99",
         )
         assert sensor.is_on is None
+
+    async def test_sfp_no_device_data(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test SFP binary sensor when device data is absent."""
+        sensor = UnifiPortBinarySensor(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="device1",
+            port_idx=25,
+            port_label="SFP+ 1",
+        )
+        mock_coordinator.data["devices"]["site1"].pop("device1", None)
+        assert sensor._find_port_data() is None
+        assert sensor.is_on is None
+
+    async def test_sfp_extra_attributes_partial_and_empty_fields(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test extra_state_attributes when SFP fields are partially absent or falsy."""
+        mock_coordinator.data["devices"]["site1"]["device1"]["ports"].append(
+            {
+                "idx": 27,
+                "sfp_found": True,
+                "sfp_part": "UF-RJ45-1G",
+                "sfp_vendor": None,
+                "sfp_serial": "",
+            }
+        )
+        sensor = UnifiPortBinarySensor(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="device1",
+            port_idx=27,
+            port_label="SFP+ 3",
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs == {"module": "UF-RJ45-1G"}
 
     async def test_setup_creates_sfp_binary_sensors(
         self, hass: HomeAssistant, mock_coordinator

@@ -81,6 +81,7 @@ from custom_components.unifi_insights.services import (
     _mac_key,
     _protect_entry_has_resource,
     _protect_owns_resource,
+    _resolve_carrier_subscriber_target,
     _select_console,
     async_setup_services,
     async_unload_services,
@@ -6554,3 +6555,26 @@ def test_is_wireless_client_helper():
     assert _is_wireless_client({"connection_type": "WIRED"}) is False
     assert _is_wireless_client({"type": 123}) is False
     assert _is_wireless_client({}) is False
+
+
+async def test_resolve_carrier_subscriber_target_foreign_registry_owner(
+    hass: HomeAssistant,
+) -> None:
+    """Reject a target owned only by another integration registry entry."""
+    other_entry = MockConfigEntry(domain="other_domain", entry_id="other_entry")
+    other_entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+    dev_entry = dev_reg.async_get_or_create(
+        config_entry_id="other_entry",
+        identifiers={(DOMAIN, "carrier_subscriber_sub_1")},
+    )
+    call = MagicMock()
+    call.data = {"device_id": dev_entry.id}
+    call.service = "carrier_suspend_subscriber"
+
+    with pytest.raises(
+        ServiceValidationError, match="Target config entry is not loaded"
+    ) as exc_info:
+        _resolve_carrier_subscriber_target(hass, call)
+
+    assert exc_info.value.translation_key == "carrier_entry_not_loaded"

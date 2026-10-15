@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_API_KEY, CONF_HOST
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -22,6 +23,7 @@ from custom_components.unifi_insights import (
     UnifiInsightsData,
     _raise_for_setup_probes,
     async_remove_config_entry_device,
+    async_unload_entry,
 )
 from custom_components.unifi_insights.api import (
     UniFiAuthenticationError,
@@ -719,13 +721,22 @@ async def _remove_device_via_ui(
     device = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={(DOMAIN, identifier)}
     )
+    device_id = device.id
     client = await hass_ws_client(hass)
-    await client.send_json_auto_id(
-        {
+    ws_commands = hass.data.get(websocket_api.DOMAIN, {})
+    if "config/device_registry/remove" in ws_commands:
+        payload: dict[str, Any] = {
             "type": "config/device_registry/remove",
-            "device_id": device.id,
+            "device_id": device_id,
         }
-    )
+    else:
+        assert "config/device_registry/remove_config_entry" in ws_commands
+        payload = {
+            "type": "config/device_registry/remove_config_entry",
+            "config_entry_id": entry.entry_id,
+            "device_id": device_id,
+        }
+    await client.send_json_auto_id(payload)
     response: dict[str, Any] = await client.receive_json()
     return response
 
@@ -1252,3 +1263,77 @@ async def test_setup_entry_innerspace_only_console(
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     mock_innerspace_client.close.assert_awaited()
+
+
+async def test_setup_entry_unused_innerspace_close_error(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client: MagicMock,
+    mock_protect_client: MagicMock,
+    mock_innerspace_client: MagicMock,
+    *,
+    mock_local_auth: MagicMock,
+    enable_custom_integrations,
+) -> None:
+    """Test that error closing unused InnerSpace client does not block setup."""
+    mock_innerspace_client.close = AsyncMock(
+        side_effect=Exception("InnerSpace close failed")
+    )
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_config_entry.state == ConfigEntryState.LOADED
+    mock_innerspace_client.close.assert_awaited_once()
+
+
+async def test_unload_entry_innerspace_close_error(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client: MagicMock,
+    mock_protect_client: MagicMock,
+    mock_innerspace_client: MagicMock,
+    *,
+    mock_local_auth: MagicMock,
+    enable_custom_integrations,
+) -> None:
+    """Test unload entry handles innerspace client close error gracefully."""
+    mock_innerspace_client.get_project.return_value = InnerSpaceProject(
+        project=InnerSpaceProjectIdentity(id="proj-1"),
+    )
+    mock_innerspace_client.list_floor_plans.return_value = [
+        InnerSpaceFloorPlan(id="fp-1", name="Main")
+    ]
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_config_entry.state == ConfigEntryState.LOADED
+
+    mock_network_client.close.reset_mock()
+    mock_innerspace_client.close = AsyncMock(
+        side_effect=Exception("InnerSpace close error")
+    )
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_config_entry.state == ConfigEntryState.NOT_LOADED
+    mock_innerspace_client.close.assert_awaited_once()
+    mock_network_client.close.assert_awaited_once()
+
+
+async def test_unload_entry_platform_unload_fails_keeps_clients_open(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations,
+) -> None:
+    """When platform unload returns false, assert that clients stay open."""
+    runtime_data = init_integration.runtime_data
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", return_value=False
+    ):
+        result = await async_unload_entry(hass, init_integration)
+        assert result is False
+        assert not runtime_data.network_client.close.called
+        assert not runtime_data.protect_client.close.called
+
+    # Clean up entry cleanly
+    assert await hass.config_entries.async_unload(init_integration.entry_id)
+    await hass.async_block_till_done()

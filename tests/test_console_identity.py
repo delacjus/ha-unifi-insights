@@ -31,6 +31,7 @@ from custom_components.unifi_insights import (
 )
 from custom_components.unifi_insights.api import UniFiResponseError
 from custom_components.unifi_insights.config_flow import UnifiInsightsConfigFlow
+from custom_components.unifi_insights.console_identity import first_non_default_site_id
 from custom_components.unifi_insights.const import (
     CONF_CLIENT_CONTROL,
     CONF_CONNECTION_TYPE,
@@ -47,6 +48,7 @@ from custom_components.unifi_insights.coordinators.protect import (
     UnifiProtectCoordinator,
 )
 from custom_components.unifi_insights.probe import ProbeResult, ProbeStatus
+from tests.conftest import device_config_entry_ids, get_device_by_identifier
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -491,12 +493,12 @@ async def test_transport_change_preserves_device_and_entity_registry(
         assert result["type"] == FlowResultType.ABORT
         assert result["reason"] == "reconfigure_successful"
 
-    registered_device = device_registry.async_get_device_by_identifier(
-        (DOMAIN, "gateway_mac_123"), entry.entry_id
+    registered_device = get_device_by_identifier(
+        device_registry, (DOMAIN, "gateway_mac_123"), entry.entry_id
     )
     assert registered_device is not None
     assert registered_device.id == device.id
-    assert registered_device.config_entry_id == entry.entry_id
+    assert device_config_entry_ids(registered_device) == {entry.entry_id}
 
     registered_entity = entity_registry.async_get(original_entity_id)
     assert registered_entity is not None
@@ -2334,3 +2336,10 @@ async def test_local_reconfigure_with_blank_host_preserves_console_id(
         # console id: a host that yields no usable id must not erase it.
         assert entry.unique_id == "existing_console_id_777"
         assert entry.data[CONF_CONSOLE_ID] == "existing_console_id_777"
+
+
+def test_first_non_default_site_id_default_only_and_empty() -> None:
+    """first_non_default_site_id returns None when only default site or empty."""
+    assert first_non_default_site_id(["default"]) is None
+    assert first_non_default_site_id([]) is None
+    assert first_non_default_site_id(["default", "site2"]) == "site2"

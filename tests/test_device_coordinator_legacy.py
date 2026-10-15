@@ -113,6 +113,22 @@ class TestMergeLegacyTemperatureData:
         assert "temperatures" not in device_dict
         assert device_dict["hasTemperature"] is True
 
+    def test_temperatures_present_without_general_temperature(self):
+        """Merge temperatures list when general_temperature is None."""
+        device_dict = {"mac": "00:11:22:33:44:55"}
+        legacy_devices = {
+            "00:11:22:33:44:55": {
+                "mac": "00:11:22:33:44:55",
+                "temperatures": [{"name": "CPU", "value": 52.0}],
+            }
+        }
+        UnifiDeviceCoordinator._merge_legacy_temperature_data(
+            device_dict, legacy_devices
+        )
+        assert "generalTemperature" not in device_dict
+        assert device_dict["temperatures"] == [{"name": "CPU", "value": 52.0}]
+        assert device_dict["hasTemperature"] is True
+
 
 class TestMergeLegacyPortData:
     """Test _merge_legacy_port_data branches."""
@@ -221,6 +237,33 @@ class TestMergeLegacyOutletData:
         assert device_dict["ac_power_consumption"] == 42.5
         assert device_dict["outlet_ac_power_budget"] == 150.0
         assert device_dict["ac_power_budget"] == 150.0
+
+    def test_outlets_present_without_outlet_overrides(self):
+        """Merge outlet_table when outlet_overrides is absent."""
+        device_dict = {"mac": "00:11:22:33:44:55"}
+        legacy_devices = {
+            "00:11:22:33:44:55": {
+                "mac": "00:11:22:33:44:55",
+                "outlet_table": [{"index": 1, "name": "Outlet 1", "relay_state": True}],
+            }
+        }
+        UnifiDeviceCoordinator._merge_legacy_outlet_data(device_dict, legacy_devices)
+        assert "outlet_table" in device_dict
+        assert "outlet_overrides" not in device_dict
+
+    def test_outlets_present_with_outlet_overrides(self):
+        """Merge outlet_table and outlet_overrides when both are present."""
+        device_dict = {"mac": "00:11:22:33:44:55"}
+        legacy_devices = {
+            "00:11:22:33:44:55": {
+                "mac": "00:11:22:33:44:55",
+                "outlet_table": [{"index": 1, "name": "Outlet 1", "relay_state": True}],
+                "outlet_overrides": [{"index": 1, "name": "Override 1"}],
+            }
+        }
+        UnifiDeviceCoordinator._merge_legacy_outlet_data(device_dict, legacy_devices)
+        assert "outlet_table" in device_dict
+        assert device_dict["outlet_overrides"] == [{"index": 1, "name": "Override 1"}]
 
 
 class TestMapLegacySiteNames:
@@ -340,6 +383,30 @@ class TestProcessDeviceSiteResolutionAndStats:
         )
         assert mock_device_coordinator.config_coordinator.get_site.called
 
+    async def test_fallback_when_site_obj_not_dict(self, mock_device_coordinator):
+        """Resolve site_name via site_id when get_site returns non-dict."""
+        device_dict = {
+            "id": "dev1",
+            "mac": "00:11:22:33:44:55",
+            "state": "ONLINE",
+        }
+        mock_device_coordinator.config_coordinator.get_site = MagicMock(
+            return_value=None
+        )
+        mock_device_coordinator.network_client.devices.get_port_metrics = AsyncMock(
+            return_value=LegacyPortMetrics()
+        )
+
+        await mock_device_coordinator._process_device(
+            site_id="site1",
+            device_dict=device_dict,
+            clients=[],
+            legacy_site_name=None,
+        )
+        mock_device_coordinator.network_client.devices.get_port_metrics.assert_called_with(
+            "site1", "00:11:22:33:44:55"
+        )
+
 
 class TestComputePortRatesBranches:
     """Test _compute_port_rates edge cases and rate calculations."""
@@ -414,3 +481,30 @@ class TestComputePortRatesBranches:
             mock_device_coordinator._compute_port_rates()
         stats = mock_device_coordinator.data["stats"]["site1"]["dev1"]
         assert "port_rates" not in stats
+
+    def test_compute_port_rates_port_churn_new_port_skipped(
+        self, mock_device_coordinator
+    ):
+        """Port churn: newly appearing port with no prior sample is skipped."""
+        now = time.monotonic()
+        mock_device_coordinator._prev_port_bytes = {
+            "dev1": (now - 10, {1: {"tx_bytes": 1000, "rx_bytes": 2000}})
+        }
+        mock_device_coordinator.data = {
+            "stats": {
+                "site1": {
+                    "dev1": {
+                        "port_bytes": {
+                            1: {"tx_bytes": 2000, "rx_bytes": 3000},
+                            2: {"tx_bytes": 500, "rx_bytes": 500},
+                        }
+                    }
+                }
+            }
+        }
+        with patch("time.monotonic", return_value=now):
+            mock_device_coordinator._compute_port_rates()
+        stats = mock_device_coordinator.data["stats"]["site1"]["dev1"]
+        assert "port_rates" in stats
+        assert 1 in stats["port_rates"]
+        assert 2 not in stats["port_rates"]

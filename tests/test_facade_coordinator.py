@@ -608,3 +608,16 @@ class TestFacadeGenerateVoucher:
         config_coord.vouchers_available.return_value = True
         assert facade.vouchers_available("site1") is True
         config_coord.vouchers_available.assert_called_with("site1")
+
+
+def test_build_innerspace_corr_key_skips_non_dict_devices() -> None:
+    """Test that _build_innerspace_corr_key handles non-dict entries defensively."""
+    protect_data = {
+        "cameras": {
+            "cam_bad": None,
+            "cam_good": {"mac": "11:22:33:44:55:66"},
+        }
+    }
+    key = UnifiFacadeCoordinator._build_innerspace_corr_key({}, {}, protect_data)
+    assert len(key[2]) == 1
+    assert key[2][0] == ("cameras", "cam_good", "11:22:33:44:55:66")
