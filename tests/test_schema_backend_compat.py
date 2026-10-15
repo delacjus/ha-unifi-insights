@@ -1,3 +1,4 @@
+# Copyright 2026 UniFi Insights contributors
 """Tests verifying schema and flow backend compatibility across HA engines."""
 
 from __future__ import annotations
