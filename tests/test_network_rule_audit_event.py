@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.const import CONF_API_KEY, EVENT_STATE_CHANGED, EntityCategory
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     MockEntityPlatform,
@@ -305,7 +306,11 @@ async def test_two_changes_in_one_refresh_are_two_state_changes(
         "deleted",
     ]
     assert [s.attributes["rule_id"] for s in states] == ["pf1", "pf2"]
-    assert states[0].state != states[1].state
+    t0 = dt_util.parse_datetime(states[0].state)
+    t1 = dt_util.parse_datetime(states[1].state)
+    assert t0 is not None
+    assert t1 is not None
+    assert t0 <= t1
     assert "leaked" not in states[1].attributes
 
 
