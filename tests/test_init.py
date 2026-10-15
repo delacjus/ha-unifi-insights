@@ -558,6 +558,39 @@ async def test_unload_entry_network_close_error(
     assert init_integration.state == ConfigEntryState.NOT_LOADED
 
 
+async def test_unload_entry_network_only_skips_protect_stop_and_close(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_network_client: MagicMock,
+    mock_protect_client: MagicMock,
+    mock_local_auth: MagicMock,
+    *,
+    enable_custom_integrations,
+) -> None:
+    """Test unload of a real Network-only setup skips Protect stop and close."""
+    mock_protect_client.cameras.get_all.side_effect = Exception("Protect unavailable")
+
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state == ConfigEntryState.LOADED
+    runtime_data = mock_config_entry.runtime_data
+    assert runtime_data.protect_coordinator is None
+    assert runtime_data.protect_client is None
+    assert runtime_data.network_client is mock_network_client
+
+    mock_network_client.close.reset_mock()
+    mock_protect_client.close.reset_mock()
+
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state == ConfigEntryState.NOT_LOADED
+    mock_protect_client.close.assert_not_called()
+    mock_network_client.close.assert_awaited_once()
+
+
 async def test_unifi_insights_data_coordinator_not_initialized(
     hass: HomeAssistant,
 ) -> None:
