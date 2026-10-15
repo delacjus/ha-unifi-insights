@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 from typing import Any
@@ -653,3 +654,83 @@ async def test_talkback_stream_wait_until_complete_unstarted(hass: Any) -> None:
     session = _make_session()
     stream = TalkbackStream(session, "media.mp3", hass)
     await stream.wait_until_complete()
+
+
+@pytest.mark.parametrize("outcome", ["success", "error"])
+@pytest.mark.asyncio
+async def test_talkback_stream_worker_skips_cancelled_future(
+    outcome: str, hass: Any
+) -> None:
+    """Test worker does not resolve a future cancelled by its waiter."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    mux_entered = threading.Event()
+    release_mux = threading.Event()
+    mux_error = RuntimeError("mux failed")
+
+    def _mux(packet: Any) -> None:
+        mux_entered.set()
+        assert release_mux.wait(timeout=5)
+        if outcome == "error":
+            raise mux_error
+
+    mock_input = MagicMock()
+    mock_input.streams.audio = [MagicMock()]
+    mock_input.decode.return_value = [MagicMock()]
+    mock_resampler = MagicMock()
+    mock_resampler.resample.side_effect = lambda frame: (
+        [] if frame is None else [MagicMock(samples=0)]
+    )
+    mock_output_stream = MagicMock()
+    mock_output_stream.encode.side_effect = lambda frame: (
+        [] if frame is None else [MagicMock()]
+    )
+    mock_output = MagicMock()
+    mock_output.add_stream.return_value = mock_output_stream
+    mock_output.mux.side_effect = _mux
+
+    mock_av = MagicMock()
+    mock_av.open.side_effect = [mock_input, mock_output]
+    mock_av.audio.resampler.AudioResampler.return_value = mock_resampler
+
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, Any]] = []
+    original_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: loop_errors.append(ctx))
+
+    try:
+        with patch.dict(
+            sys.modules, {"av": mock_av, "av.audio.resampler": mock_av.audio.resampler}
+        ):
+            await stream.start()
+            assert await asyncio.to_thread(mux_entered.wait, 5)
+
+            waiter = asyncio.create_task(stream.wait_until_complete())
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+
+            # Cancelling the waiter cancels the worker future, not the thread
+            assert not stream.running
+            assert stream._thread is not None
+            assert stream._thread.is_alive()
+
+            release_mux.set()
+            await asyncio.to_thread(stream._thread.join, 5)
+            assert not stream._thread.is_alive()
+            # Let any call_soon_threadsafe callbacks from the worker run
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+    finally:
+        release_mux.set()
+        loop.set_exception_handler(original_handler)
+
+    assert loop_errors == []
+    mock_output.close.assert_called_once()
+    mock_input.close.assert_called_once()
+    if outcome == "error":
+        assert isinstance(stream._error, TalkbackStreamError)
+        assert stream._error.__cause__ is mux_error
+    else:
+        assert stream._error is None
