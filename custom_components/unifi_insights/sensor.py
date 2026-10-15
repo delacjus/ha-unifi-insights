@@ -885,9 +885,6 @@ def _migrate_sensor_units(
         if desc.suggested_unit_of_measurement is not None:
             expected_units[desc.key] = str(desc.suggested_unit_of_measurement)
 
-    if not expected_units:
-        return
-
     for entity_entry in er.async_entries_for_config_entry(
         registry, config_entry.entry_id
     ):
