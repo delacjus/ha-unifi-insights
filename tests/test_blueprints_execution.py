@@ -1600,21 +1600,55 @@ async def test_offline_alerts_on_off_after_unalerted_unavailable(
     ]
 
 
-async def test_offline_ignores_restored_state_on_startup(
+@pytest.mark.parametrize("treat_unavailable", [True, False])
+@pytest.mark.parametrize("startup_minutes", [0, 6])
+async def test_offline_alerts_after_restored_startup_state(
+    hass: HomeAssistant,
+    *,
+    freezer: FrozenDateTimeFactory,
+    blueprint_dir: _BlueprintProgress,
+    calls: list[ServiceCall],
+    treat_unavailable: bool,
+    startup_minutes: int,
+) -> None:
+    """A device found offline after a restart alerts once the delay passes.
+
+    A restored startup state never counts as already alerted, even when the
+    integration takes longer than the delay to load, so a device that went
+    offline while Home Assistant was down is not missed.
+    """
+    hass.states.async_set(SWITCH_ONLINE, STATE_UNAVAILABLE, {"restored": True})
+    await _use_blueprint(
+        hass,
+        INFRASTRUCTURE_OFFLINE,
+        _offline_inputs(treat_unavailable_as_offline=treat_unavailable),
+    )
+    if startup_minutes:
+        await _advance(hass, freezer, minutes=startup_minutes)
+
+    await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=4)
+    assert calls == []
+
+    await _advance(hass, freezer, minutes=2)
+    assert _data(calls) == [
+        {"event": "offline", "entity": SWITCH_ONLINE, "state": "off"}
+    ]
+
+
+async def test_offline_skips_brief_off_after_restored_startup_state(
     hass: HomeAssistant,
     *,
     freezer: FrozenDateTimeFactory,
     blueprint_dir: _BlueprintProgress,
     calls: list[ServiceCall],
 ) -> None:
-    """A restored state on startup does not alert on next offline state."""
+    """A device that is briefly off after a restart and comes back stays quiet."""
     hass.states.async_set(SWITCH_ONLINE, STATE_UNAVAILABLE, {"restored": True})
-    await _use_blueprint(
-        hass,
-        INFRASTRUCTURE_OFFLINE,
-        _offline_inputs(treat_unavailable_as_offline=True),
-    )
+    await _use_blueprint(hass, INFRASTRUCTURE_OFFLINE, _offline_inputs())
 
     await _set_state(hass, SWITCH_ONLINE, "off")
+    await _advance(hass, freezer, minutes=2)
+    await _set_state(hass, SWITCH_ONLINE, "on")
     await _advance(hass, freezer, minutes=6)
     assert calls == []

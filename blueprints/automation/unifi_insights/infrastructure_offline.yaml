@@ -132,8 +132,8 @@ conditions:
                                       and treat_unavailable_as_offline))
                                  and prev_seconds >= delay_seconds %}
         {{ prev.state == 'on'
-           or (not prev.attributes.get('restored', false)
-               and not already_alerted) }}
+           or prev.attributes.get('restored', false)
+           or not already_alerted }}
       {% endif %}
 
 actions:
