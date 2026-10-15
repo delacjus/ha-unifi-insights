@@ -1,3 +1,1 @@
-# Sentinel Journal
-
 ## YYYY-MM-DD - Use HMAC for deriving keys from secrets\n**Vulnerability:** Raw API keys were directly hashed with SHA-256 to create unique configuration identifiers, which could expose the first 16 bytes of the secret hash in UI, logs, and database.\n**Learning:** Directly hashing secrets without a salt or a key (HMAC) allows potential offline dictionary and rainbow table attacks if the hash is disclosed.\n**Prevention:** Use `hmac.new()` with a distinct salt/key and a strong hash function (like SHA-256) when generating identifiers or fingerprints from secrets, and avoid storing/logging raw hashes.
