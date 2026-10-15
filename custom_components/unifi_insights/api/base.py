@@ -50,8 +50,8 @@ _T = TypeVar("_T")
 # Group 1 keeps the key and separator. The value pattern consumes escaped
 # quotes, so a secret containing a colon or an escaped quote is replaced whole.
 _SENSITIVE_KEYS_RE = re.compile(
-    r'("(?:password|psk|passphrase|token|apiKey|api_key|secret|credential|'
-    r'x-api-key|authorization|code|voucher|fingerprint)"\s*:\s*)"(?:[^"\\]|\\.)*"',
+    r'("(?:password|psk|passphrase|token|accessToken|access_token|refreshToken|refresh_token|apiKey|api_key|secret|credential|'
+    r'x-api-key|authorization|code|voucher|fingerprint|qr_code|x_passphrase|x_authkey|x_fingerprint|x_iapp_key|x_ssh_hostkey_fingerprint|x_vwirekey)"\s*:\s*)"(?:[^"\\]|\\.)*"',
     re.IGNORECASE,
 )
 
@@ -62,6 +62,10 @@ _SENSITIVE_KEYS = frozenset(
         "psk",
         "passphrase",
         "token",
+        "accesstoken",
+        "access_token",
+        "refreshtoken",
+        "refresh_token",
         "apikey",
         "api_key",
         "secret",
@@ -71,6 +75,13 @@ _SENSITIVE_KEYS = frozenset(
         "code",
         "voucher",
         "fingerprint",
+        "qr_code",
+        "x_passphrase",
+        "x_authkey",
+        "x_fingerprint",
+        "x_iapp_key",
+        "x_ssh_hostkey_fingerprint",
+        "x_vwirekey",
     }
 )
 
