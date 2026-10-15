@@ -126,12 +126,25 @@ def normalize_mac(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     candidate = value.strip().lower()
+
     if len(candidate) == _NORMALIZED_MAC_LENGTH:
-        if candidate[2] == ":":
+        if (
+            candidate[2] == ":"
+            and candidate[5] == ":"
+            and candidate[8] == ":"
+            and candidate[11] == ":"
+            and candidate[14] == ":"
+        ):
             if _MAC_RE.fullmatch(candidate):
                 return candidate
             return None
-        if candidate[2] == "-":
+        if (
+            candidate[2] == "-"
+            and candidate[5] == "-"
+            and candidate[8] == "-"
+            and candidate[11] == "-"
+            and candidate[14] == "-"
+        ):
             if _MAC_RE.fullmatch(candidate):
                 return candidate.replace("-", ":")
             return None
