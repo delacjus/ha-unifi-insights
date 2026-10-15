@@ -734,3 +734,259 @@ async def test_talkback_stream_worker_skips_cancelled_future(
         assert stream._error.__cause__ is mux_error
     else:
         assert stream._error is None
+
+
+@pytest.mark.asyncio
+async def test_talkback_stream_stop_with_cancelled_future(hass: Any) -> None:
+    """Test stop() when _worker_future was directly cancelled."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    def _worker(
+        sess: Any,
+        media_url: str,
+        stop_event: threading.Event,
+    ) -> None:
+        worker_started.set()
+        stop_event.wait(timeout=5)
+        release_worker.wait(timeout=5)
+
+    with patch(
+        "custom_components.unifi_insights.api.protect.talkback._transcode_and_stream",
+        side_effect=_worker,
+    ):
+        try:
+            await stream.start()
+            assert await asyncio.to_thread(worker_started.wait, 5)
+            assert stream._worker_future is not None
+            stream._worker_future.cancel()
+            assert stream._worker_future.done()
+            assert stream._worker_future.cancelled()
+
+            # Calling stop() sets stop_event and returns without awaiting/raising
+            await stream.stop()
+            assert stream._stop_event.is_set()
+            release_worker.set()
+            assert stream._thread is not None
+            await asyncio.to_thread(stream._thread.join, 5)
+            assert not stream._thread.is_alive()
+        finally:
+            release_worker.set()
+            stream._stop_event.set()
+            if stream._thread is not None:
+                stream._thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_talkback_stream_cancelled_waiter_leaves_worker_running(
+    hass: Any,
+) -> None:
+    """Test reproducing ticket: cancelled waiter leaves worker alive until stop."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    def _worker(
+        sess: Any,
+        media_url: str,
+        stop_event: threading.Event,
+    ) -> None:
+        worker_started.set()
+        stop_event.wait(timeout=5)
+        release_worker.wait(timeout=5)
+
+    with patch(
+        "custom_components.unifi_insights.api.protect.talkback._transcode_and_stream",
+        side_effect=_worker,
+    ):
+        try:
+            await stream.start()
+            assert await asyncio.to_thread(worker_started.wait, 5)
+
+            waiter = asyncio.create_task(stream.wait_until_complete())
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+
+            # Future was cancelled by waiter, so running is False, but thread is alive
+            assert not stream.running
+            assert stream._thread is not None
+            assert stream._thread.is_alive()
+
+            # Now stop() signals the worker and returns without raising CancelledError
+            await stream.stop()
+            assert stream._stop_event.is_set()
+            release_worker.set()
+            await asyncio.to_thread(stream._thread.join, 5)
+            assert not stream._thread.is_alive()
+        finally:
+            release_worker.set()
+            stream._stop_event.set()
+            if stream._thread is not None:
+                stream._thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("outcome", ["success", "error"])
+@pytest.mark.asyncio
+async def test_talkback_stream_resolve_callback_race(outcome: str, hass: Any) -> None:
+    """Test race where future is cancelled before resolve callback runs on loop."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    worker_finished = threading.Event()
+    worker_error = RuntimeError("transcode crashed")
+
+    def _worker(
+        sess: Any,
+        media_url: str,
+        stop_event: threading.Event,
+    ) -> None:
+        try:
+            if outcome == "error":
+                raise worker_error
+        finally:
+            worker_finished.set()
+
+    loop = asyncio.get_running_loop()
+    original_call_soon_threadsafe = loop.call_soon_threadsafe
+    captured_callbacks: list[tuple[Any, tuple[Any, ...]]] = []
+
+    def _intercept_call_soon_threadsafe(callback: Any, *args: Any) -> Any:
+        if getattr(callback, "__name__", None) == "_resolve":
+            captured_callbacks.append((callback, args))
+            return None
+        return original_call_soon_threadsafe(callback, *args)
+
+    with (
+        patch(
+            (
+                "custom_components.unifi_insights.api.protect.talkback"
+                "._transcode_and_stream"
+            ),
+            side_effect=_worker,
+        ),
+        patch.object(
+            loop, "call_soon_threadsafe", side_effect=_intercept_call_soon_threadsafe
+        ),
+    ):
+        try:
+            await stream.start()
+            assert await asyncio.to_thread(worker_finished.wait, 5)
+            assert stream._thread is not None
+            await asyncio.to_thread(stream._thread.join, 5)
+            assert not stream._thread.is_alive()
+
+            # Worker finished and scheduled call_soon_threadsafe(_resolve, ...)
+            assert len(captured_callbacks) == 1
+            cb, cb_args = captured_callbacks[0]
+
+            # Simulate race: future is cancelled before callback executes on loop
+            assert stream._worker_future is not None
+            stream._worker_future.cancel()
+            assert stream._worker_future.done()
+
+            # Invoking the callback must return safely without InvalidStateError
+            cb(*cb_args)
+
+            if outcome == "error":
+                assert stream._error is worker_error
+            else:
+                assert stream._error is None
+        finally:
+            if stream._thread is not None:
+                stream._thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_talkback_stream_stop_after_completed_worker_error(hass: Any) -> None:
+    """Test stop() after worker error completes future; wait_until_complete raises."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    worker_error = RuntimeError("transcode crashed")
+
+    def _worker(
+        sess: Any,
+        media_url: str,
+        stop_event: threading.Event,
+    ) -> None:
+        raise worker_error
+
+    with patch(
+        "custom_components.unifi_insights.api.protect.talkback._transcode_and_stream",
+        side_effect=_worker,
+    ):
+        try:
+            await stream.start()
+            assert stream._thread is not None
+            await asyncio.to_thread(stream._thread.join, 5)
+            assert not stream._thread.is_alive()
+
+            # Yield to let the resolve callback execute on the loop
+            await asyncio.sleep(0)
+            assert stream._worker_future is not None
+            assert stream._worker_future.done()
+            assert not stream._worker_future.cancelled()
+
+            # Calling stop() should retrieve exception without raising
+            await stream.stop()
+
+            # wait_until_complete should still raise the stored error
+            with pytest.raises(RuntimeError, match="transcode crashed"):
+                await stream.wait_until_complete()
+        finally:
+            if stream._thread is not None:
+                stream._thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_talkback_stream_pending_stop_caller_cancellation(hass: Any) -> None:
+    """Test caller cancellation during stop propagates while shield protects future."""
+    session = _make_session()
+    stream = TalkbackStream(session, "media.mp3", hass)
+    worker_started = threading.Event()
+    worker_unblock = threading.Event()
+
+    def _worker(
+        sess: Any,
+        media_url: str,
+        stop_event: threading.Event,
+    ) -> None:
+        worker_started.set()
+        worker_unblock.wait(timeout=5)
+
+    with patch(
+        "custom_components.unifi_insights.api.protect.talkback._transcode_and_stream",
+        side_effect=_worker,
+    ):
+        try:
+            await stream.start()
+            assert await asyncio.to_thread(worker_started.wait, 5)
+            assert stream.running is True
+
+            stop_task = asyncio.create_task(stream.stop())
+            await asyncio.sleep(0)
+
+            # Cancel caller of stop()
+            stop_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stop_task
+
+            # Underlying future is shielded, so still pending and running
+            assert stream.running is True
+            assert stream._worker_future is not None
+            assert not stream._worker_future.done()
+
+            # Unblock worker and let it finish cleanly
+            worker_unblock.set()
+            assert stream._thread is not None
+            await asyncio.to_thread(stream._thread.join, 5)
+            await asyncio.sleep(0)
+            assert not stream.running
+        finally:
+            worker_unblock.set()
+            stream._stop_event.set()
+            if stream._thread is not None:
+                stream._thread.join(timeout=5)

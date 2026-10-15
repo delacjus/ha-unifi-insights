@@ -90,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Talkback audio now stops when a Protect camera speaker entity is removed, reloaded, or unloaded. [#325](https://github.com/tinkerologie/ha-unifi-insights/issues/325)
 - Corrected ten known vendored API contract mismatches against Network v10.6.106 and Protect v7.3.70: network creation no longer injects legacy DHCP fields; traffic lists send `items`; firewall policies and Wi-Fi broadcasts use nested configuration; WAN listing omits the unsupported filter; DPI category and application IDs accept integers; Protect uploads send multipart binary content with a fresh body per retry; and sensor motion sensitivity uses `motionSettings.sensitivity`. [#320](https://github.com/tinkerologie/ha-unifi-insights/issues/320)
 - Vendored Network creation methods now raise `ValueError` before sending unsupported or ambiguous legacy DHCP, traffic-list, firewall and Wi-Fi inputs. Supply management-specific network fields and traffic-list `items` when legacy arguments have no supported translation. Traffic-list `description` is unsupported; WAN `filter_str` remains accepted but is ignored.
 - Disabling Carrier Fabric subscriber tracking now preserves devices and entities owned by another config entry on older Home Assistant registries. [#323](https://github.com/tinkerologie/ha-unifi-insights/issues/323)

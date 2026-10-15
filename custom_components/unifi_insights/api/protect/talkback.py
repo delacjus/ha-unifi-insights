@@ -297,6 +297,14 @@ class TalkbackStream:
         future: asyncio.Future[None] = loop.create_future()
         self._worker_future = future
 
+        def _resolve(error: Exception | None = None) -> None:
+            if future.done():
+                return
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(None)
+
         def _run() -> None:
             try:
                 _transcode_and_stream(
@@ -307,11 +315,9 @@ class TalkbackStream:
             except Exception as err:
                 self._error = err
                 _LOGGER.debug("Talkback stream worker encountered error: %s", err)
-                if not future.done():
-                    loop.call_soon_threadsafe(future.set_exception, err)
+                loop.call_soon_threadsafe(_resolve, err)
             else:
-                if not future.done():
-                    loop.call_soon_threadsafe(future.set_result, None)
+                loop.call_soon_threadsafe(_resolve)
 
         self._thread = threading.Thread(
             target=_run,
@@ -324,14 +330,21 @@ class TalkbackStream:
         """
         Cooperatively stop the stream.
 
-        Idempotent; does not raise if the stream is already finished.
+        Sets the stop event and returns immediately if the worker future is
+        already done or cancelled. Idempotent; does not raise if the stream
+        is already finished.
         """
         self._stop_event.set()
-        if self._worker_future is not None:
-            try:
-                await asyncio.shield(self._worker_future)
-            except Exception:
-                pass
+        future = self._worker_future
+        if future is None or future.done():
+            if future is not None and not future.cancelled():
+                future.exception()
+            return
+
+        try:
+            await asyncio.shield(future)
+        except Exception:
+            pass
 
     async def wait_until_complete(self) -> None:
         """

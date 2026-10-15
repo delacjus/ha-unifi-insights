@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,8 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from custom_components.unifi_insights.api.protect.models.files import TalkbackSession
+from custom_components.unifi_insights.api.protect.talkback import TalkbackStream
 from custom_components.unifi_insights.const import (
     CAMERA_STATE_CONNECTED,
     DOMAIN,
@@ -703,23 +706,143 @@ class TestUnifiProtectCameraSpeaker:
     async def test_async_will_remove_from_hass(
         self, mock_coordinator: MagicMock
     ) -> None:
-        """Test removal from Home Assistant cancels completion task and stops stream."""
+        """Test removal from Home Assistant stops stream before cancelling task."""
         entity = UnifiProtectCameraSpeaker(mock_coordinator, "cam1")
 
         mock_task = MagicMock()
         mock_task.done.return_value = False
         entity._completion_task = mock_task
 
+        async def _stop_assert_not_cancelled() -> None:
+            mock_task.cancel.assert_not_called()
+
         mock_stream = MagicMock()
         mock_stream.running = True
-        mock_stream.stop = AsyncMock()
+        mock_stream.stop = AsyncMock(side_effect=_stop_assert_not_cancelled)
         entity._current_stream = mock_stream
 
         await entity.async_will_remove_from_hass()
 
-        mock_task.cancel.assert_called_once()
         mock_stream.stop.assert_called_once()
+        mock_task.cancel.assert_called_once()
         assert entity._current_stream is None
+
+    @pytest.mark.asyncio
+    async def test_async_will_remove_from_hass_stream_running_false(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test removal awaits stop() even if stream.running is False."""
+        entity = UnifiProtectCameraSpeaker(mock_coordinator, "cam1")
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        entity._completion_task = mock_task
+
+        async def _stop_assert_not_cancelled() -> None:
+            mock_task.cancel.assert_not_called()
+
+        mock_stream = MagicMock()
+        mock_stream.running = False
+        mock_stream.stop = AsyncMock(side_effect=_stop_assert_not_cancelled)
+        entity._current_stream = mock_stream
+
+        await entity.async_will_remove_from_hass()
+
+        mock_stream.stop.assert_called_once()
+        mock_task.cancel.assert_called_once()
+        assert entity._current_stream is None
+
+    @pytest.mark.asyncio
+    async def test_async_will_remove_from_hass_mismatched_stream(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test removal does not clear reference if stream changed during stop."""
+        entity = UnifiProtectCameraSpeaker(mock_coordinator, "cam1")
+        stream1 = MagicMock()
+        stream2 = MagicMock()
+
+        async def _mock_stop() -> None:
+            entity._current_stream = stream2
+
+        stream1.stop = AsyncMock(side_effect=_mock_stop)
+        entity._current_stream = stream1
+
+        await entity.async_will_remove_from_hass()
+
+        stream1.stop.assert_called_once()
+        assert entity._current_stream is stream2
+
+    @pytest.mark.asyncio
+    async def test_async_will_remove_from_hass_end_to_end_real_stream(
+        self, hass: Any, mock_coordinator: MagicMock
+    ) -> None:
+        """Test entity removal stops a live real TalkbackStream end-to-end."""
+        entity = UnifiProtectCameraSpeaker(mock_coordinator, "cam1")
+        entity.hass = hass
+
+        session = TalkbackSession(
+            url="rtp://192.168.1.10:7004",
+            codec="opus",
+            samplingRate=24000,
+            bitsPerSample=16,
+        )
+        stream = TalkbackStream(session, "http://processed.local/test.mp3", hass)
+
+        transcoder_started = threading.Event()
+
+        def _mock_transcode(
+            sess: Any,
+            media_url: str,
+            stop_event: threading.Event,
+        ) -> None:
+            transcoder_started.set()
+            assert stop_event.wait(timeout=5)
+
+        async def _mock_start_camera_talkback(cam_id: str, url: str) -> TalkbackStream:
+            await stream.start()
+            return stream
+
+        mock_coordinator.async_start_camera_talkback = AsyncMock(
+            side_effect=_mock_start_camera_talkback
+        )
+
+        with (
+            patch.object(entity, "async_write_ha_state"),
+            patch(
+                (
+                    "custom_components.unifi_insights.media_player"
+                    ".async_process_play_media_url"
+                ),
+                return_value="http://processed.local/test.mp3",
+            ),
+            patch(
+                (
+                    "custom_components.unifi_insights.api.protect.talkback"
+                    "._transcode_and_stream"
+                ),
+                side_effect=_mock_transcode,
+            ),
+        ):
+            try:
+                await entity.async_play_media(
+                    media_type=MediaType.MUSIC,
+                    media_id="http://media.local/test.mp3",
+                )
+                assert await asyncio.to_thread(transcoder_started.wait, 5)
+                assert entity._current_stream is stream
+                assert stream.running is True
+
+                await entity.async_will_remove_from_hass()
+
+                assert stream._stop_event.is_set()
+                assert stream._thread is not None
+                await asyncio.to_thread(stream._thread.join, 5)
+                assert not stream._thread.is_alive()
+                assert entity._current_stream is None
+            finally:
+                stream._stop_event.set()
+                if stream._thread is not None:
+                    stream._thread.join(timeout=5)
 
     @pytest.mark.asyncio
     async def test_async_will_remove_from_hass_no_task_no_stream(

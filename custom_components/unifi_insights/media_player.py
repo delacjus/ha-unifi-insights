@@ -249,9 +249,11 @@ class UnifiProtectCameraSpeaker(UnifiProtectEntity, MediaPlayerEntity):
         """Clean up when entity is removed from Home Assistant."""
         self._removing = True
         async with self._play_lock:
+            stream = self._current_stream
+            if stream is not None:
+                await stream.stop()
+                if self._current_stream is stream:
+                    self._current_stream = None
             if self._completion_task is not None and not self._completion_task.done():
                 self._completion_task.cancel()
-            if self._current_stream is not None and self._current_stream.running:
-                await self._current_stream.stop()
-                self._current_stream = None
         await super().async_will_remove_from_hass()
