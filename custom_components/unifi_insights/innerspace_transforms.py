@@ -555,8 +555,7 @@ def normalize_innerspace_snapshot(
     project_plans_by_id: dict[str, dict[str, Any]] = {}
     if normalized_project and isinstance(normalized_project.get("plans"), list):
         for p_plan in normalized_project["plans"]:
-            if isinstance(p_plan, dict) and p_plan.get("id"):
-                project_plans_by_id[str(p_plan["id"])] = p_plan
+            project_plans_by_id[p_plan["id"]] = p_plan
 
     floor_plans_dict: dict[str, dict[str, Any]] = {}
     for fp_item in floor_plans or []:
