@@ -854,18 +854,18 @@ async def async_unload_entry(
         await async_unload_access_webhook(hass, entry)
         if data.access_client:
             await _async_close_access(data.access_client)
+        # Stop the WebSocket (and await its background task) *before*
+        # closing the client below - stopping it after would leave the
+        # loop trying to use an already-closed session for whatever
+        # brief window passes before entry.async_on_unload's registered
+        # copy of this same call runs (see async_setup_entry - that
+        # registration is the safety net for a setup failure that
+        # happens after the WebSocket starts but before this function
+        # ever runs; async_stop_websocket() is idempotent so running it
+        # twice on a normal unload is harmless).
+        if data.protect_coordinator:
+            await data.protect_coordinator.async_stop_websocket()
         if data.protect_client:
-            # Stop the WebSocket (and await its background task) *before*
-            # closing the client below - stopping it after would leave the
-            # loop trying to use an already-closed session for whatever
-            # brief window passes before entry.async_on_unload's registered
-            # copy of this same call runs (see async_setup_entry - that
-            # registration is the safety net for a setup failure that
-            # happens after the WebSocket starts but before this function
-            # ever runs; async_stop_websocket() is idempotent so running it
-            # twice on a normal unload is harmless).
-            if data.protect_coordinator:
-                await data.protect_coordinator.async_stop_websocket()
             # Close Protect client (await the async close)
             try:
                 await data.protect_client.close()
@@ -880,11 +880,10 @@ async def async_unload_entry(
                 _LOGGER.debug("Error closing InnerSpace client: %s", err)
 
         # Close Network client (await the async close)
-        if data.network_client:
-            try:
-                await data.network_client.close()
-            except Exception as err:
-                _LOGGER.debug("Error closing Network client: %s", err)
+        try:
+            await data.network_client.close()
+        except Exception as err:
+            _LOGGER.debug("Error closing Network client: %s", err)
 
         if data.site_manager_fingerprint:
             await async_release_site_manager(
