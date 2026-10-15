@@ -38,8 +38,8 @@ def get_field(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
     Skips keys whose value is None so that fallback keys are still checked.
     """
     for key in keys:
-        if (value := data.get(key)) is not None:
-            return value
+        if key in data and data[key] is not None:
+            return data[key]
     return default
 
 
@@ -56,10 +56,7 @@ def first_not_none(*values: Any, default: Any = None) -> Any:
     (rate, power, bytes, temperature, percentage, count) are combined, so a
     real `0` reading is preserved instead of being coerced into `None`.
     """
-    for value in values:
-        if value is not None:
-            return value
-    return default
+    return next((v for v in values if v is not None), default)
 
 
 def device_has_feature(device_data: dict[str, Any], *features_to_match: str) -> bool:

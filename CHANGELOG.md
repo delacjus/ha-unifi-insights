@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- `get_field` now uses the walrus operator and `dict.get()` for improved performance by reducing double dictionary lookups.
+- `first_not_none` now uses `next()` for improved performance.
 
 ### Added
 
