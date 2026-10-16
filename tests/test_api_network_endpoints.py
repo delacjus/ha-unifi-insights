@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Self
 
 import pytest
@@ -953,6 +954,27 @@ async def test_wifi_get_legacy_configs_pins_request() -> None:
     assert req["url"] == "https://192.168.1.1/proxy/network/api/s/default/rest/wlanconf"
 
     assert await client.wifi.get_legacy_configs("default") == []
+
+
+async def test_wifi_get_legacy_configs_omits_log_body_and_preserves_secret(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """wifi.get_legacy_configs omits body from logs and preserves raw secrets."""
+    dummy_val = "dummy-wifi-psk-payload"
+    payload = {"data": [{"name": "HomeWlan", "x_passphrase": dummy_val}]}
+    session = _Session([payload])
+    client = _client(session)
+
+    with caplog.at_level(logging.DEBUG):
+        configs = await client.wifi.get_legacy_configs("default")
+
+    assert configs == [{"name": "HomeWlan", "x_passphrase": dummy_val}]
+    assert not any(dummy_val in record.message for record in caplog.records)
+    assert any("<body omitted," in record.message for record in caplog.records)
+
+    req = session.requests[0]
+    assert req["method"] == "GET"
+    assert req["url"] == "https://192.168.1.1/proxy/network/api/s/default/rest/wlanconf"
 
 
 async def test_wifi_update_pins_spec_request_and_strips_read_only() -> None:

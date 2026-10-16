@@ -10,17 +10,25 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from homeassistant.components.diagnostics.const import REDACTED
+from homeassistant.const import CONF_API_KEY
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import __version__
+from custom_components.unifi_insights.api.const import SENSITIVE_CREDENTIAL_KEYS
 from custom_components.unifi_insights.api.network.models.client import Client
+from custom_components.unifi_insights.const import (
+    CONF_ACCESS_WEBHOOK_ENDPOINT_ID,
+    CONF_ACCESS_WEBHOOK_ID,
+    CONF_ACCESS_WEBHOOK_SECRET,
+)
 from custom_components.unifi_insights.coordinators.config import (
     UnifiConfigCoordinator,
 )
 from custom_components.unifi_insights.diagnostics import (
+    TO_REDACT,
     _redact_coordinator_data,
     async_get_config_entry_diagnostics,
 )
@@ -971,3 +979,39 @@ async def test_diagnostics_keeps_storage_mounts_readable(
 
     device = diagnostics["data"]["devices"]["site-1"]["device-1"]
     assert device["storage_mounts"] == udm_storage
+
+
+def test_diagnostics_shared_credentials_policy_invariants() -> None:
+    """Verify shared credentials subset, aliases, x_* keys, and webhooks."""
+    # Shared credentials must be a subset of TO_REDACT
+    assert SENSITIVE_CREDENTIAL_KEYS.issubset(TO_REDACT)
+
+    # Token aliases
+    for key in ("accessToken", "access_token", "refreshToken", "refresh_token"):
+        assert key in TO_REDACT
+
+    # qr_code
+    assert "qr_code" in TO_REDACT
+
+    # Classic API x_* keys
+    for key in (
+        "x_passphrase",
+        "x_authkey",
+        "x_fingerprint",
+        "x_iapp_key",
+        "x_ssh_hostkey_fingerprint",
+        "x_vwirekey",
+    ):
+        assert key in TO_REDACT
+
+    # HA config and Access webhook constants
+    assert CONF_API_KEY in TO_REDACT
+    assert CONF_ACCESS_WEBHOOK_ID in TO_REDACT
+    assert CONF_ACCESS_WEBHOOK_ENDPOINT_ID in TO_REDACT
+    assert CONF_ACCESS_WEBHOOK_SECRET in TO_REDACT
+
+    # Transport-only keys must NOT be globally in TO_REDACT (code/pin contextual)
+    assert "code" not in TO_REDACT
+    assert "pin" not in TO_REDACT
+    assert "pin_code" not in TO_REDACT
+    assert "pin_codes" not in TO_REDACT

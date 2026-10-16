@@ -75,7 +75,7 @@ class WifiEndpoint:
 
         """
         path = self._client.build_legacy_api_path(site_name, "/rest/wlanconf")
-        response = await self._client._get(path)
+        response = await self._client._get(path, log_body=False)
 
         if response is None:
             return []

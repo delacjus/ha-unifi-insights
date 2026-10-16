@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -32,6 +32,7 @@ from custom_components.unifi_insights.api.const import (
     PROTECT_RATE_LIMIT_WINDOW,
     RATE_LIMIT_MAX_RETRY_AFTER,
     RATE_LIMIT_WINDOW_MARGIN,
+    SENSITIVE_CREDENTIAL_KEYS,
 )
 from custom_components.unifi_insights.api.exceptions import (
     UniFiAuthenticationError,
@@ -2301,6 +2302,122 @@ async def test_handle_response_debug_body_redacts_secret_with_colons(
     assert "**REDACTED**" in caplog.text
     assert "LEAK-" not in caplog.text
     assert "tail" not in caplog.text
+
+
+NEW_CREDENTIAL_KEYS: Final[list[str]] = [
+    "x_passphrase",
+    "x_authkey",
+    "x_fingerprint",
+    "x_iapp_key",
+    "x_ssh_hostkey_fingerprint",
+    "x_vwirekey",
+    "accessToken",
+    "access_token",
+    "refreshToken",
+    "refresh_token",
+    "qr_code",
+]
+
+
+def test_new_credential_keys_guard() -> None:
+    """Guard against accidentally omitting expected credential keys from shared set."""
+    expected_new_keys = set(NEW_CREDENTIAL_KEYS)
+    assert expected_new_keys.issubset(SENSITIVE_CREDENTIAL_KEYS)
+    assert {k.lower() for k in expected_new_keys}.issubset(api_base._SENSITIVE_KEYS)
+
+
+@pytest.mark.parametrize("key", NEW_CREDENTIAL_KEYS)
+def test_redact_new_credential_keys_in_nested_json(key: str) -> None:
+    """New credential keys in nested JSON are redacted while other keys stay visible."""
+    dummy_val = "dummy-credential-12345"
+    payload = {"data": [{"name": "Home", key: dummy_val}]}
+    redacted = api_base._redact(json.dumps(payload))
+    assert dummy_val not in redacted
+    assert "**REDACTED**" in redacted
+    data = json.loads(redacted)
+    assert data["data"][0]["name"] == "Home"
+    assert data["data"][0][key] == "**REDACTED**"
+
+
+@pytest.mark.parametrize(
+    ("key", "val"),
+    [
+        ("x_passphrase", 987654321),
+        ("accessToken", {"nested_token": "dummy_nested_data"}),
+    ],
+)
+def test_redact_new_credential_non_string_json_values(key: str, val: Any) -> None:
+    """Numeric and object JSON credential values are replaced with **REDACTED**."""
+    payload = {"data": [{"name": "Home", key: val}]}
+    redacted = api_base._redact(json.dumps(payload))
+    assert str(val) not in redacted
+    assert "**REDACTED**" in redacted
+    data = json.loads(redacted)
+    assert data["data"][0]["name"] == "Home"
+    assert data["data"][0][key] == "**REDACTED**"
+
+
+@pytest.mark.parametrize("key", NEW_CREDENTIAL_KEYS)
+@pytest.mark.parametrize("casing", ["exact", "upper", "mixed"])
+def test_redact_fallback_regex_html_and_truncated(key: str, casing: str) -> None:
+    """Non-JSON fallback redacts secrets with exact, upper, and mixed casing."""
+    cased_key = (
+        key.upper()
+        if casing == "upper"
+        else (key.swapcase() if casing == "mixed" else key)
+    )
+    dummy_val = "fallback-dummy-value"
+    # HTML wrapper case
+    html_text = (
+        f"<html><head><title>Login</title></head>"
+        f'<body>"{cased_key}": "{dummy_val}"</body></html>'
+    )
+    redacted_html = api_base._redact(html_text)
+    assert dummy_val not in redacted_html
+    assert "**REDACTED**" in redacted_html
+    assert f'"{cased_key}": "**REDACTED**"' in redacted_html
+
+    # Truncated non-JSON excerpt case (broken JSON syntax)
+    truncated_text = f'{{"data": [{{"name": "Home", "{cased_key}": "{dummy_val}"'
+    redacted_truncated = api_base._redact(truncated_text)
+    assert dummy_val not in redacted_truncated
+    assert "**REDACTED**" in redacted_truncated
+    assert f'"{cased_key}": "**REDACTED**"' in redacted_truncated
+
+
+@pytest.mark.parametrize("key", sorted(api_base._SENSITIVE_KEYS))
+def test_redact_sync_both_json_and_fallback_for_all_transport_keys(key: str) -> None:
+    """Every combined transport key must be redacted on both JSON and fallback paths."""
+    dummy_val = "sync-dummy-payload"
+    # JSON path
+    json_text = json.dumps({key: dummy_val, "item_name": "Device"})
+    json_redacted = api_base._redact(json_text)
+    assert dummy_val not in json_redacted
+    assert "**REDACTED**" in json_redacted
+    parsed = json.loads(json_redacted)
+    assert parsed[key] == "**REDACTED**"
+    assert parsed["item_name"] == "Device"
+
+    # Non-JSON fallback regex path
+    fallback_text = f'<html>"{key}": "{dummy_val}"</html>'
+    fallback_redacted = api_base._redact(fallback_text)
+    assert dummy_val not in fallback_redacted
+    assert "**REDACTED**" in fallback_redacted
+    assert f'"{key}": "**REDACTED**"' in fallback_redacted
+
+
+@pytest.mark.parametrize("ident_key", ["ip", "host", "ssid", "id", "name"])
+def test_redact_transport_scope_keeps_identifiers_visible(ident_key: str) -> None:
+    """Network and entity identifiers must remain visible in transport logs."""
+    ident_val = f"sample-{ident_key}-value"
+    # JSON path
+    payload = {ident_key: ident_val, "status": "active"}
+    json_text = json.dumps(payload)
+    assert api_base._redact(json_text) == json_text
+
+    # Fallback non-JSON path
+    non_json_text = f'<html>"{ident_key}": "{ident_val}"</html>'
+    assert api_base._redact(non_json_text) == non_json_text
 
 
 async def test_handle_response_2xx_non_json_raises() -> None:

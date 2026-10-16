@@ -7,6 +7,33 @@ from typing import Final
 
 __version__: Final[str] = "1.2.0+vendored"
 
+# Credential keys redacted in transport response logs and Home Assistant diagnostics.
+# Identifiers, privacy keys, and integration-specific webhook/HA constants are excluded
+# and managed separately by consumers.
+SENSITIVE_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "token",
+        "accessToken",
+        "access_token",
+        "refreshToken",
+        "refresh_token",
+        "password",
+        "psk",
+        "passphrase",
+        "qr_code",
+        "secret",
+        "voucher",
+        "fingerprint",
+        "api_key",
+        "x_passphrase",
+        "x_authkey",
+        "x_fingerprint",
+        "x_iapp_key",
+        "x_ssh_hostkey_fingerprint",
+        "x_vwirekey",
+    }
+)
+
 
 class ConnectionType(str, Enum):
     """

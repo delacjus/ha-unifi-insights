@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from http import HTTPStatus
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, TypeVar
 
 import aiohttp
 from yarl import URL
@@ -29,6 +29,7 @@ from .const import (
     HEADER_USER_AGENT,
     RATE_LIMIT_MAX_RETRY_AFTER,
     RATE_LIMIT_WINDOW_MARGIN,
+    SENSITIVE_CREDENTIAL_KEYS,
     USER_AGENT,
 )
 from .exceptions import (
@@ -49,34 +50,31 @@ _LOGGER = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-# Group 1 keeps the key and separator. The value pattern consumes escaped
-# quotes, so a secret containing a colon or an escaped quote is replaced whole.
-_SENSITIVE_KEYS_RE = re.compile(
-    r'("(?:password|psk|passphrase|token|apiKey|api_key|secret|credential|'
-    r'x-api-key|authorization|code|voucher|fingerprint|pin|pin_code|pin_codes)"\s*:\s*)"(?:[^"\\]|\\.)*"',
-    re.IGNORECASE,
-)
-
-
-_SENSITIVE_KEYS = frozenset(
+_TRANSPORT_ONLY_SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
     {
-        "password",
-        "psk",
-        "passphrase",
-        "token",
         "apikey",
-        "api_key",
-        "secret",
         "credential",
         "x-api-key",
         "authorization",
         "code",
-        "voucher",
-        "fingerprint",
         "pin",
         "pin_code",
         "pin_codes",
     }
+)
+
+_SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
+    {k.lower() for k in SENSITIVE_CREDENTIAL_KEYS} | _TRANSPORT_ONLY_SENSITIVE_KEYS
+)
+
+# Group 1 keeps the key and separator. The value pattern consumes escaped
+# quotes, so a secret containing a colon or an escaped quote is replaced whole.
+_SENSITIVE_KEYS_PATTERN: Final[str] = "|".join(
+    re.escape(k) for k in sorted(_SENSITIVE_KEYS, key=lambda k: (-len(k), k))
+)
+_SENSITIVE_KEYS_RE: Final[re.Pattern[str]] = re.compile(
+    rf'("(?:{_SENSITIVE_KEYS_PATTERN})"\s*:\s*)"(?:[^"\\]|\\.)*"',
+    re.IGNORECASE,
 )
 
 

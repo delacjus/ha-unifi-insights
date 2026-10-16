@@ -13,6 +13,7 @@ from homeassistant.components.diagnostics import REDACTED, async_redact_data
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 
 from .api import __version__ as api_version
+from .api.const import SENSITIVE_CREDENTIAL_KEYS
 from .carrier_fabric_data import CarrierFabricData
 from .const import (
     CONF_ACCESS_WEBHOOK_ENDPOINT_ID,
@@ -47,31 +48,14 @@ _LOGGER = logging.getLogger(__name__)
 _MAX_HOST_SITE_COUNTS = 20
 _MAX_ISP_SAMPLES = 8
 TO_REDACT = {
-    # Credentials and secrets
+    # Credentials and secrets (shared with API transport logging, plus
+    # HA-layer constants)
+    *SENSITIVE_CREDENTIAL_KEYS,
     CONF_API_KEY,
-    "token",
-    "accessToken",
-    "access_token",
     # Access webhook state: the receiver ID, endpoint ID and signing secret
     CONF_ACCESS_WEBHOOK_ID,
     CONF_ACCESS_WEBHOOK_ENDPOINT_ID,
     CONF_ACCESS_WEBHOOK_SECRET,
-    "refreshToken",
-    "refresh_token",
-    "password",
-    "psk",
-    "passphrase",
-    "qr_code",
-    "secret",
-    "voucher",
-    "fingerprint",
-    # Classic-API secrets that ride along with legacy device and WiFi payloads
-    "x_passphrase",
-    "x_authkey",
-    "x_fingerprint",
-    "x_iapp_key",
-    "x_ssh_hostkey_fingerprint",
-    "x_vwirekey",
     # Network identifiers
     CONF_HOST,
     "ip",
