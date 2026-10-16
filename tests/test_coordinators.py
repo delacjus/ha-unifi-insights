@@ -3549,6 +3549,38 @@ class TestUnifiDeviceCoordinator:
         }
 
     @pytest.mark.asyncio
+    async def test_process_device_filters_clients_without_index(
+        self, coordinator: UnifiDeviceCoordinator
+    ) -> None:
+        """Direct device callers retain filtering, order, and client identity."""
+        coordinator.network_client.devices.get_statistics = AsyncMock(
+            return_value=_create_mock_model({"uptimeSec": 60})
+        )
+        camel = {"id": "camel", "uplinkDeviceId": "device1"}
+        snake = {"id": "snake", "uplink_device_id": "device1"}
+        other = {"id": "other", "uplinkDeviceId": "device2"}
+        fallback = {
+            "id": "fallback",
+            "uplinkDeviceId": "",
+            "uplink_device_id": "device1",
+        }
+        camel_priority = {
+            "id": "priority",
+            "uplinkDeviceId": "device2",
+            "uplink_device_id": "device1",
+        }
+        clients = [snake, other, camel, fallback, camel_priority, {"id": "unlinked"}]
+
+        _, _, stats = await coordinator._process_device(
+            "default", {"id": "device1"}, clients
+        )
+
+        assert stats["clients"] == [snake, camel, fallback]
+        assert stats["clients"][0] is snake
+        assert stats["clients"][1] is camel
+        assert stats["clients"][2] is fallback
+
+    @pytest.mark.asyncio
     async def test_process_site_groups_clients_by_uplink(
         self, coordinator: UnifiDeviceCoordinator
     ) -> None:
