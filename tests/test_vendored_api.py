@@ -2384,6 +2384,14 @@ def test_redact_fallback_regex_html_and_truncated(key: str, casing: str) -> None
     assert "**REDACTED**" in redacted_truncated
     assert f'"{cased_key}": "**REDACTED**"' in redacted_truncated
 
+    # Truncated non-JSON excerpt case without closing quote on value
+    unterminated_text = f'{{"data": [{{"name": "Home", "{cased_key}": "{dummy_val}'
+    redacted_unterminated = api_base._redact(unterminated_text)
+    assert dummy_val not in redacted_unterminated
+    assert "**REDACTED**" in redacted_unterminated
+    assert f'"{cased_key}": "**REDACTED**"' in redacted_unterminated
+    assert '"name": "Home"' in redacted_unterminated
+
 
 @pytest.mark.parametrize("key", sorted(api_base._SENSITIVE_KEYS))
 def test_redact_sync_both_json_and_fallback_for_all_transport_keys(key: str) -> None:
@@ -2418,6 +2426,68 @@ def test_redact_transport_scope_keeps_identifiers_visible(ident_key: str) -> Non
     # Fallback non-JSON path
     non_json_text = f'<html>"{ident_key}": "{ident_val}"</html>'
     assert api_base._redact(non_json_text) == non_json_text
+
+
+@pytest.mark.parametrize("key", ["x_passphrase", "password", "token"])
+def test_redact_fallback_unterminated_and_edge_cases(key: str) -> None:
+    """Non-JSON fallback redacts secrets with unclosed, escaped, and trailing inputs."""
+    # 1. Trailing dangling backslash
+    payload_dangling = (
+        f'<html><div id="device-header">Device</div>"{key}": "secret-val\\'
+    )
+    redacted_dangling = api_base._redact(payload_dangling)
+    assert "secret-val" not in redacted_dangling
+    assert "**REDACTED**" in redacted_dangling
+    assert 'id="device-header"' in redacted_dangling
+
+    # 2. Escaped quotes in unterminated secret
+    payload_escaped = (
+        f'<html><div id="device-header">Device</div>"{key}": "sec\\"ret-part'
+    )
+    redacted_escaped = api_base._redact(payload_escaped)
+    assert "sec\\" not in redacted_escaped
+    assert "ret-part" not in redacted_escaped
+    assert "**REDACTED**" in redacted_escaped
+    assert 'id="device-header"' in redacted_escaped
+
+    # 3. Literal newline in unterminated secret
+    payload_nl = f'<html><div id="device-header">Device</div>"{key}": "secret\nnewline'
+    redacted_nl = api_base._redact(payload_nl)
+    assert "secret" not in redacted_nl
+    assert "newline" not in redacted_nl
+    assert "**REDACTED**" in redacted_nl
+    assert 'id="device-header"' in redacted_nl
+
+    # 4. Escaped newline in unterminated secret
+    payload_esc_nl = (
+        f'<html><div id="device-header">Device</div>"{key}": "secret\\\nnewline'
+    )
+    redacted_esc_nl = api_base._redact(payload_esc_nl)
+    assert "secret" not in redacted_esc_nl
+    assert "newline" not in redacted_esc_nl
+    assert "**REDACTED**" in redacted_esc_nl
+    assert 'id="device-header"' in redacted_esc_nl
+
+    # 5. Mixed-case and nested prefix
+    swap_key = key.swapcase()
+    payload_nested = (
+        f'{{"settings": {{"nested_prefix": "keep", "{swap_key}": "secret-swap'
+    )
+    redacted_nested = api_base._redact(payload_nested)
+    assert "secret-swap" not in redacted_nested
+    assert "**REDACTED**" in redacted_nested
+    assert '"nested_prefix": "keep"' in redacted_nested
+
+    # 6. Proper closed value followed by normal fields
+    payload_closed = (
+        f'{{"{key}": "secret-closed\\"quote", "device_name": "UDM-Pro", "port": 443}}'
+    )
+    wrapped_closed = f"<html><body>{payload_closed}</body></html>"
+    redacted_closed = api_base._redact(wrapped_closed)
+    assert "secret-closed" not in redacted_closed
+    assert "**REDACTED**" in redacted_closed
+    assert '"device_name": "UDM-Pro"' in redacted_closed
+    assert '"port": 443' in redacted_closed
 
 
 async def test_handle_response_2xx_non_json_raises() -> None:
@@ -2517,6 +2587,55 @@ async def test_handle_response_non_json_warning_omits_query_string(
     assert "SUPER-SECRET" not in message
     assert "apiKey" not in message
     assert path in message
+
+
+async def test_handle_response_unterminated_credential_redacted_in_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unterminated credentials in malformed responses are redacted in logs."""
+    client = UniFiNetworkClient(
+        auth=ApiKeyAuth(api_key="test-key"),
+        base_url="https://192.168.1.1",
+        connection_type=ConnectionType.LOCAL,
+    )
+    dummy_val = "fallback-unterminated-payload"
+    path = "/proxy/network/v2/api/site/default/trafficroutes"
+    response_body = f'{{"x_passphrase": "{dummy_val}'
+    response = _make_response(
+        status=200,
+        text=response_body,
+        json_side_effect=aiohttp.ContentTypeError(MagicMock(), MagicMock()),
+        method="GET",
+        path=path,
+    )
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(UniFiResponseError) as exc_info:
+        await client._handle_response(response)
+
+    assert exc_info.value.status_code == 200
+    assert exc_info.value.response_body == response_body
+
+    # Check DEBUG sink
+    debug_records = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+    ]
+    debug_body_msg = next(
+        msg for msg in debug_records if "Response status: 200, body:" in msg
+    )
+    assert dummy_val not in debug_body_msg
+    assert '"x_passphrase": "**REDACTED**"' in debug_body_msg
+
+    # Check WARNING sink (architecture analysis non-JSON 2xx warning path)
+    warning_records = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+    ]
+    warning_body_msg = next(
+        msg for msg in warning_records if "Response is not JSON" in msg
+    )
+    assert dummy_val not in warning_body_msg
+    assert '"x_passphrase": "**REDACTED**"' in warning_body_msg
+    assert "GET" in warning_body_msg
+    assert path in warning_body_msg
 
 
 async def test_handle_response_expected_unsupported_logs_debug_without_warning(

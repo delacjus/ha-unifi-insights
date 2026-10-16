@@ -3601,6 +3601,37 @@ class TestUnifiDeviceCoordinator:
             "name": "Client Unknown",
             "uplinkDeviceId": "unknown-uplink",
         }
+        client_bad_list = {
+            "id": "bad_list",
+            "name": "Client Bad List",
+            "uplinkDeviceId": ["bad", "list"],
+        }
+        client_bad_dict = {
+            "id": "bad_dict",
+            "name": "Client Bad Dict",
+            "uplinkDeviceId": {"nested": "dict"},
+        }
+        client_bad_int = {
+            "id": "bad_int",
+            "name": "Client Bad Int",
+            "uplinkDeviceId": 123,
+        }
+        client_bad_bool = {
+            "id": "bad_bool",
+            "name": "Client Bad Bool",
+            "uplinkDeviceId": True,
+        }
+        client_bad_float = {
+            "id": "bad_float",
+            "name": "Client Bad Float",
+            "uplinkDeviceId": 45.67,
+        }
+        client_camel_priority = {
+            "id": "camel_priority",
+            "name": "Client Camel Priority",
+            "uplinkDeviceId": ["bad"],
+            "uplink_device_id": "a",
+        }
 
         coordinator.network_client.clients.get_all = AsyncMock(
             return_value=[
@@ -3612,6 +3643,12 @@ class TestUnifiDeviceCoordinator:
                 _create_mock_model(client_missing),
                 _create_mock_model(client_unlinked),
                 _create_mock_model(client_unknown),
+                _create_mock_model(client_bad_list),
+                _create_mock_model(client_bad_dict),
+                _create_mock_model(client_bad_int),
+                _create_mock_model(client_bad_bool),
+                _create_mock_model(client_bad_float),
+                _create_mock_model(client_camel_priority),
             ]
         )
 
@@ -3650,7 +3687,7 @@ class TestUnifiDeviceCoordinator:
         assert stats_dict["b"]["clients"][0] is clients_dict["b1"]
         assert stats_dict["b"]["clients"][1] is clients_dict["both"]
 
-        # Sitewide clients dictionary retains all clients including unlinked and unknown
+        # Sitewide dictionary retains all clients including unlinked and malformed
         assert set(clients_dict.keys()) == {
             "a1",
             "b1",
@@ -3660,10 +3697,26 @@ class TestUnifiDeviceCoordinator:
             "missing",
             "unlinked",
             "unknown",
+            "bad_list",
+            "bad_dict",
+            "bad_int",
+            "bad_bool",
+            "bad_float",
+            "camel_priority",
         }
         assert clients_dict["missing"] == client_missing
         assert clients_dict["unlinked"] == client_unlinked
         assert clients_dict["unknown"] == client_unknown
+        assert clients_dict["bad_list"] == client_bad_list
+        assert clients_dict["bad_dict"] == client_bad_dict
+        assert clients_dict["bad_int"] == client_bad_int
+        assert clients_dict["bad_bool"] == client_bad_bool
+        assert clients_dict["bad_float"] == client_bad_float
+        assert clients_dict["camel_priority"] == client_camel_priority
+
+        # Object identity is preserved for sitewide unassigned clients
+        assert clients_dict["bad_list"] is client_bad_list
+        assert clients_dict["camel_priority"] is client_camel_priority
 
 
 # ============================================================================

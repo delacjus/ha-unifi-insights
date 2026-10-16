@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Group clients by uplink device once per site to reduce repeated scans while preserving client ordering. [#328](https://github.com/tinkerologie/ha-unifi-insights/issues/328)
+- Group clients by uplink device once per site to reduce repeated scans while preserving client ordering and skipping non-string uplink identifiers. [#328](https://github.com/tinkerologie/ha-unifi-insights/issues/328)
 - Mobility router entity child linking detects `via_device_id` using `DeviceInfo.__annotations__` instead of `DeviceInfo.__optional_keys__` for Home Assistant 2026.11 dataclass compatibility. [#324](https://github.com/tinkerologie/ha-unifi-insights/issues/324), [home-assistant/core#185211](https://github.com/home-assistant/core/issues/185211)
 
 - Local validation now uses the project environment for the complete mypy check, including Home Assistant's actual schema types. Generated frontend bundles are excluded from source spelling/formatting hooks; source formatting, YAML, copyright notices and keyword-only helper calls were aligned with the repository's existing checks. Runtime schema imports remain compatible with the supported older HA versions. [#283](https://github.com/tinkerologie/ha-unifi-insights/issues/283)
@@ -91,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Redact classic Network API secrets and token aliases from debug response logs using a shared credential policy, and omit response bodies for classic Wi-Fi configurations. [#327](https://github.com/tinkerologie/ha-unifi-insights/issues/327)
+- Redact classic Network API secrets and token aliases, including unterminated quoted values, from response logs using a shared credential policy, and omit response bodies for classic Wi-Fi configurations. [#327](https://github.com/tinkerologie/ha-unifi-insights/issues/327)
 - Talkback audio now stops when a Protect camera speaker entity is removed, reloaded, or unloaded. [#325](https://github.com/tinkerologie/ha-unifi-insights/issues/325)
 - Corrected ten known vendored API contract mismatches against Network v10.6.106 and Protect v7.3.70: network creation no longer injects legacy DHCP fields; traffic lists send `items`; firewall policies and Wi-Fi broadcasts use nested configuration; WAN listing omits the unsupported filter; DPI category and application IDs accept integers; Protect uploads send multipart binary content with a fresh body per retry; and sensor motion sensitivity uses `motionSettings.sensitivity`. [#320](https://github.com/tinkerologie/ha-unifi-insights/issues/320)
 - Vendored Network creation methods now raise `ValueError` before sending unsupported or ambiguous legacy DHCP, traffic-list, firewall and Wi-Fi inputs. Supply management-specific network fields and traffic-list `items` when legacy arguments have no supported translation. Traffic-list `description` is unsupported; WAN `filter_str` remains accepted but is ignored.

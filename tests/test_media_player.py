@@ -714,6 +714,7 @@ class TestUnifiProtectCameraSpeaker:
         entity._completion_task = mock_task
 
         async def _stop_assert_not_cancelled() -> None:
+            """Assert that the completion task is not cancelled when stopping."""
             mock_task.cancel.assert_not_called()
 
         mock_stream = MagicMock()
@@ -739,6 +740,7 @@ class TestUnifiProtectCameraSpeaker:
         entity._completion_task = mock_task
 
         async def _stop_assert_not_cancelled() -> None:
+            """Assert that the completion task is not cancelled when stopping."""
             mock_task.cancel.assert_not_called()
 
         mock_stream = MagicMock()
@@ -762,6 +764,7 @@ class TestUnifiProtectCameraSpeaker:
         stream2 = MagicMock()
 
         async def _mock_stop() -> None:
+            """Simulate stream replacement during stop."""
             entity._current_stream = stream2
 
         stream1.stop = AsyncMock(side_effect=_mock_stop)
@@ -795,10 +798,12 @@ class TestUnifiProtectCameraSpeaker:
             media_url: str,
             stop_event: threading.Event,
         ) -> None:
+            """Simulate transcoding worker blocking on the stop event."""
             transcoder_started.set()
             assert stop_event.wait(timeout=5)
 
         async def _mock_start_camera_talkback(cam_id: str, url: str) -> TalkbackStream:
+            """Start and return the mock talkback stream."""
             await stream.start()
             return stream
 

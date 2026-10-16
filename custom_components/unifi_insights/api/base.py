@@ -73,7 +73,7 @@ _SENSITIVE_KEYS_PATTERN: Final[str] = "|".join(
     re.escape(k) for k in sorted(_SENSITIVE_KEYS, key=lambda k: (-len(k), k))
 )
 _SENSITIVE_KEYS_RE: Final[re.Pattern[str]] = re.compile(
-    rf'("(?:{_SENSITIVE_KEYS_PATTERN})"\s*:\s*)"(?:[^"\\]|\\.)*"',
+    rf'("(?:{_SENSITIVE_KEYS_PATTERN})"\s*:\s*)"(?:[^"\\]|\\[\s\S])*\\?(?:"|$)',
     re.IGNORECASE,
 )
 

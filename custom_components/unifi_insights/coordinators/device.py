@@ -1034,7 +1034,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
         clients_by_uplink: dict[str, list[dict[str, Any]]] = {}
         for client in clients:
             uplink_id = client.get("uplinkDeviceId") or client.get("uplink_device_id")
-            if uplink_id:
+            if isinstance(uplink_id, str) and uplink_id:
                 clients_by_uplink.setdefault(uplink_id, []).append(client)
 
         # Process devices in parallel (get stats)

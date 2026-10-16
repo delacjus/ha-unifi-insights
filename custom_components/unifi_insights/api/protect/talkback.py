@@ -298,6 +298,7 @@ class TalkbackStream:
         self._worker_future = future
 
         def _resolve(error: Exception | None = None) -> None:
+            """Resolve the worker future on the event loop."""
             if future.done():
                 return
             if error is not None:
@@ -306,6 +307,7 @@ class TalkbackStream:
                 future.set_result(None)
 
         def _run() -> None:
+            """Execute the transcoding and streaming loop in a background thread."""
             try:
                 _transcode_and_stream(
                     self.session,

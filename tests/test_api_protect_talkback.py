@@ -749,6 +749,7 @@ async def test_talkback_stream_stop_with_cancelled_future(hass: Any) -> None:
         media_url: str,
         stop_event: threading.Event,
     ) -> None:
+        """Simulate worker execution until stopped and released."""
         worker_started.set()
         stop_event.wait(timeout=5)
         release_worker.wait(timeout=5)
@@ -794,6 +795,7 @@ async def test_talkback_stream_cancelled_waiter_leaves_worker_running(
         media_url: str,
         stop_event: threading.Event,
     ) -> None:
+        """Simulate worker execution until stopped and released."""
         worker_started.set()
         stop_event.wait(timeout=5)
         release_worker.wait(timeout=5)
@@ -844,6 +846,7 @@ async def test_talkback_stream_resolve_callback_race(outcome: str, hass: Any) ->
         media_url: str,
         stop_event: threading.Event,
     ) -> None:
+        """Simulate worker execution yielding an error or normal exit."""
         try:
             if outcome == "error":
                 raise worker_error
@@ -855,6 +858,7 @@ async def test_talkback_stream_resolve_callback_race(outcome: str, hass: Any) ->
     captured_callbacks: list[tuple[Any, tuple[Any, ...]]] = []
 
     def _intercept_call_soon_threadsafe(callback: Any, *args: Any) -> Any:
+        """Intercept threadsafe callbacks targeting the worker resolver."""
         if getattr(callback, "__name__", None) == "_resolve":
             captured_callbacks.append((callback, args))
             return None
@@ -912,6 +916,7 @@ async def test_talkback_stream_stop_after_completed_worker_error(hass: Any) -> N
         media_url: str,
         stop_event: threading.Event,
     ) -> None:
+        """Simulate worker failure by raising a runtime error."""
         raise worker_error
 
     with patch(
@@ -954,6 +959,7 @@ async def test_talkback_stream_pending_stop_caller_cancellation(hass: Any) -> No
         media_url: str,
         stop_event: threading.Event,
     ) -> None:
+        """Simulate worker execution until manually unblocked."""
         worker_started.set()
         worker_unblock.wait(timeout=5)
 
