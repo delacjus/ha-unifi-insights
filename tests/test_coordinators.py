@@ -3548,6 +3548,123 @@ class TestUnifiDeviceCoordinator:
             "uplink_remote_port": 6,
         }
 
+    @pytest.mark.asyncio
+    async def test_process_site_groups_clients_by_uplink(
+        self, coordinator: UnifiDeviceCoordinator
+    ) -> None:
+        """Site processing groups clients by uplink device in a single pass."""
+        dev_a = {"id": "a", "name": "Device A"}
+        dev_b = {"id": "b", "name": "Device B"}
+        dev_empty = {"id": "empty", "name": "Device Empty"}
+
+        coordinator.network_client.devices.get_all = AsyncMock(
+            return_value=[
+                _create_mock_model(dev_a),
+                _create_mock_model(dev_b),
+                _create_mock_model(dev_empty),
+            ]
+        )
+        coordinator.network_client.devices.get_statistics = AsyncMock(
+            side_effect=lambda site_id, device_id: _create_mock_model(
+                {
+                    "cpuUtilizationPct": 15.2,
+                    "memoryUtilizationPct": 42.8,
+                    "uptimeSec": 864000,
+                }
+            )
+        )
+
+        client_a1 = {"id": "a1", "name": "Client A1", "uplinkDeviceId": "a"}
+        client_b1 = {"id": "b1", "name": "Client B1", "uplink_device_id": "b"}
+        client_a2 = {"id": "a2", "name": "Client A2", "uplink_device_id": "a"}
+        client_both = {
+            "id": "both",
+            "name": "Client Both",
+            "uplinkDeviceId": "b",
+            "uplink_device_id": "a",
+        }
+        client_fallback = {
+            "id": "fallback",
+            "name": "Client Fallback",
+            "uplinkDeviceId": "",
+            "uplink_device_id": "a",
+        }
+        client_missing = {
+            "id": "missing",
+            "name": "Client Missing",
+            "uplinkDeviceId": None,
+            "uplink_device_id": "",
+        }
+        client_unlinked = {"id": "unlinked", "name": "Client Unlinked"}
+        client_unknown = {
+            "id": "unknown",
+            "name": "Client Unknown",
+            "uplinkDeviceId": "unknown-uplink",
+        }
+
+        coordinator.network_client.clients.get_all = AsyncMock(
+            return_value=[
+                _create_mock_model(client_a1),
+                _create_mock_model(client_b1),
+                _create_mock_model(client_a2),
+                _create_mock_model(client_both),
+                _create_mock_model(client_fallback),
+                _create_mock_model(client_missing),
+                _create_mock_model(client_unlinked),
+                _create_mock_model(client_unknown),
+            ]
+        )
+
+        devices_dict, stats_dict, clients_dict = await coordinator._process_site(
+            "default"
+        )
+
+        # Device dictionary retains all devices
+        assert set(devices_dict.keys()) == {"a", "b", "empty"}
+
+        # Client id ordering in device stats
+        assert [c["id"] for c in stats_dict["a"]["clients"]] == [
+            "a1",
+            "a2",
+            "fallback",
+        ]
+        assert [c["id"] for c in stats_dict["b"]["clients"]] == ["b1", "both"]
+        assert stats_dict["empty"]["clients"] == []
+
+        # Concrete independent expected values
+        assert stats_dict["a"]["clients"] == [
+            client_a1,
+            client_a2,
+            client_fallback,
+        ]
+        assert stats_dict["b"]["clients"] == [client_b1, client_both]
+
+        # Empty device retains its statistics
+        assert stats_dict["empty"]["id"] == "empty"
+        assert "cpuUtilizationPct" in stats_dict["empty"]
+
+        # Object identity is shared between group list and sitewide clients dictionary
+        assert stats_dict["a"]["clients"][0] is clients_dict["a1"]
+        assert stats_dict["a"]["clients"][1] is clients_dict["a2"]
+        assert stats_dict["a"]["clients"][2] is clients_dict["fallback"]
+        assert stats_dict["b"]["clients"][0] is clients_dict["b1"]
+        assert stats_dict["b"]["clients"][1] is clients_dict["both"]
+
+        # Sitewide clients dictionary retains all clients including unlinked and unknown
+        assert set(clients_dict.keys()) == {
+            "a1",
+            "b1",
+            "a2",
+            "both",
+            "fallback",
+            "missing",
+            "unlinked",
+            "unknown",
+        }
+        assert clients_dict["missing"] == client_missing
+        assert clients_dict["unlinked"] == client_unlinked
+        assert clients_dict["unknown"] == client_unknown
+
 
 # ============================================================================
 # UnifiProtectCoordinator Tests
