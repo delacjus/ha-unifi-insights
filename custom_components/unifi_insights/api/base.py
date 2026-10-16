@@ -67,13 +67,26 @@ _SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
     {k.lower() for k in SENSITIVE_CREDENTIAL_KEYS} | _TRANSPORT_ONLY_SENSITIVE_KEYS
 )
 
+_REDACTED_MALFORMED_BODY: Final[str] = "<malformed body redacted>"
+
 # Group 1 keeps the key and separator. The value pattern consumes escaped
 # quotes, so a secret containing a colon or an escaped quote is replaced whole.
 _SENSITIVE_KEYS_PATTERN: Final[str] = "|".join(
     re.escape(k) for k in sorted(_SENSITIVE_KEYS, key=lambda k: (-len(k), k))
 )
 _SENSITIVE_KEYS_RE: Final[re.Pattern[str]] = re.compile(
-    rf'("(?:{_SENSITIVE_KEYS_PATTERN})"\s*:\s*)"(?:[^"\\]|\\[\s\S])*\\?(?:"|$)',
+    rf'("(?:{_SENSITIVE_KEYS_PATTERN})"\s*:\s*)'
+    r'"(?:[^"\\]|\\[\s\S])*(?:"(?=\s*(?:[,}\]]|<|$))|\\?$)',
+    re.IGNORECASE,
+)
+# Start at a quote to avoid rescanning unmatched backslash runs.
+_UNSAFE_SENSITIVE_KEY_RE: Final[re.Pattern[str]] = re.compile(
+    rf'["\'](?:{_SENSITIVE_KEYS_PATTERN})(?:\\*["\'])\s*:',
+    re.IGNORECASE,
+)
+# Decode each backslash run once when checking escaped credential keys.
+_UNICODE_ESCAPE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<!\\)\\+u([0-9a-fA-F]{4})",
     re.IGNORECASE,
 )
 
@@ -93,10 +106,17 @@ def _redact_json(value: Any) -> Any:
 
 
 def _redact(text: str) -> str:
-    """Redact parsed JSON credentials, falling back to regex for non-JSON text."""
+    """Redact parsed JSON credentials, or fail closed on unsafe non-JSON text."""
     try:
         value = json.loads(text)
     except ValueError:
+        # Keep removed fragments apart while checking for unsafe key prefixes.
+        remainder = _UNICODE_ESCAPE_RE.sub(
+            lambda match: chr(int(match.group(1), 16)),
+            _SENSITIVE_KEYS_RE.sub("\x00", text),
+        )
+        if _UNSAFE_SENSITIVE_KEY_RE.search(remainder):
+            return _REDACTED_MALFORMED_BODY
         return _SENSITIVE_KEYS_RE.sub(r'\1"**REDACTED**"', text)
     return json.dumps(_redact_json(value))
 
