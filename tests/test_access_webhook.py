@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components import webhook
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.setup import async_setup_component
@@ -367,7 +368,13 @@ def _coordinator_state(
 def test_dispatch_is_refused_while_inactive_or_unauthenticated(hass: Any) -> None:
     """Accepted events do not dispatch once the coordinator stops accepting results."""
     events: list[dict[str, Any]] = []
-    async_dispatcher_connect(hass, access_result_signal("entry-x"), events.append)
+
+    @callback
+    def _record(payload: dict[str, Any]) -> None:
+        """Record on the event loop so synchronous assertions cannot race."""
+        events.append(payload)
+
+    async_dispatcher_connect(hass, access_result_signal("entry-x"), _record)
     event = _door_event("Access Granted")
     aw._dispatch_verified(
         hass, "entry-x", _coordinator_state(webhook_active=False), event
