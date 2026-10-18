@@ -603,11 +603,9 @@ class TestUnifiInsightsEntity:
         mock_coordinator.device_available = False
         entity._handle_coordinator_update()
         assert entity.available is False
-        assert entity.available is False
 
         mock_coordinator.device_available = True
         entity._handle_coordinator_update()
-        assert entity.available is True
         assert entity.available is True
 
     async def test_entity_device_data(self, hass: HomeAssistant, mock_coordinator):
@@ -840,11 +838,9 @@ class TestUnifiProtectEntity:
         mock_coordinator.protect_available = False
         entity._handle_coordinator_update()
         assert entity.available is False
-        assert entity.available is False
 
         mock_coordinator.protect_available = True
         entity._handle_coordinator_update()
-        assert entity.available is True
         assert entity.available is True
 
     async def test_protect_entity_coordinator_update_refreshes_state(
