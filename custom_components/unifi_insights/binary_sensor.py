@@ -263,7 +263,6 @@ BINARY_SENSOR_TYPES: tuple[UnifiInsightsBinarySensorEntityDescription, ...] = (
         translation_key="wan_status",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
-        icon="mdi:wan",
         value_fn=is_device_online,
         entity_type="device",
     ),
@@ -1008,7 +1007,6 @@ class UnifiInsightsSiteToSiteVpnBinarySensor(UnifiInsightsEntity, BinarySensorEn
             key=f"site_to_site_vpn_{tunnel_id}",
             translation_key="site_to_site_vpn",
             device_class=BinarySensorDeviceClass.CONNECTIVITY,
-            icon="mdi:vpn",
             entity_type="device",
         )
         super().__init__(coordinator, desc, site_id, device_id)

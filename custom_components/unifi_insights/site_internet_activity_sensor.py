@@ -56,7 +56,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:download-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1h",
@@ -72,7 +71,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:upload-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1d",
@@ -88,7 +86,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:download-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1d",
@@ -104,7 +101,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:upload-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1w",
@@ -120,7 +116,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:download-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1w",
@@ -136,7 +131,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:upload-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1m",
@@ -152,7 +146,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:download-network",
     ),
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1m",
@@ -168,7 +161,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:upload-network",
     ),
 )
 

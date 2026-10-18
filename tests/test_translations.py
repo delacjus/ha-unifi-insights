@@ -688,3 +688,60 @@ def test_media_player_speaker_translations_and_icon() -> None:
         assert exc_key in en_data["exceptions"]
         assert strings_data["exceptions"][exc_key] == en_data["exceptions"][exc_key]
         assert strings_data["exceptions"][exc_key]["message"]
+
+
+def test_all_icons_json_entity_keys_match_live_inventory() -> None:
+    """Every entity key in icons.json must correspond to a live translation key."""
+    icons_entity = json.loads(_ICONS_JSON.read_text())["entity"]
+    icon_keys = {
+        (plat, key) for plat, entries in icons_entity.items() for key in entries
+    }
+    live_inventory, unresolved = _collect_live_entity_translation_keys()
+    assert not unresolved, f"Unresolved dynamic translation keys: {unresolved}"
+    dead_icon_keys = icon_keys - live_inventory
+    assert not dead_icon_keys, (
+        f"Found dead icon keys in icons.json: {sorted(dead_icon_keys)}"
+    )
+
+
+def test_no_static_mdi_strings_in_python_code() -> None:
+    """Acceptance criteria #335: no static mdi: string in Python.
+
+    Only dynamic icon properties (e.g. switches whose icon depends on state)
+    may return mdi: icons.
+    """
+    violations: list[str] = []
+    for py_file in _INTEGRATION_DIR.glob("**/*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                violations.extend(
+                    f"{py_file.name}:{node.lineno}: icon={kw.value.value}"
+                    for kw in node.keywords
+                    if (
+                        kw.arg == "icon"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, str)
+                        and kw.value.value.startswith("mdi:")
+                    )
+                )
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    is_attr_icon = (
+                        isinstance(target, ast.Name) and target.id == "_attr_icon"
+                    ) or (
+                        isinstance(target, ast.Attribute)
+                        and target.attr == "_attr_icon"
+                    )
+                    if (
+                        is_attr_icon
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)
+                        and node.value.value.startswith("mdi:")
+                    ):
+                        violations.append(
+                            f"{py_file.name}:{node.lineno}: "
+                            f"_attr_icon={node.value.value}"
+                        )
+
+    assert not violations, f"Found static mdi: assignments in Python: {violations}"

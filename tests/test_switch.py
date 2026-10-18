@@ -2553,7 +2553,7 @@ class TestUnifiProtectStatusLightSwitch:
         assert switch._attr_has_entity_name is True
         assert switch._attr_translation_key == "status_light"
         assert switch._attr_entity_category == EntityCategory.CONFIG
-        assert switch._attr_icon == "mdi:led-on"
+        assert getattr(switch, "_attr_icon", None) is None
 
     def test_update_from_data_led_enabled(self, mock_coordinator) -> None:
         """Test _update_from_data with LED enabled."""
@@ -2732,7 +2732,7 @@ class TestUnifiProtectHighFPSSwitch:
         assert switch._attr_has_entity_name is True
         assert switch._attr_translation_key == "high_fps_mode"
         assert switch._attr_entity_category == EntityCategory.CONFIG
-        assert switch._attr_icon == "mdi:fast-forward"
+        assert getattr(switch, "_attr_icon", None) is None
 
     def test_update_from_data_default_mode(self, mock_coordinator) -> None:
         """Test _update_from_data with default video mode."""
@@ -3566,7 +3566,7 @@ class TestUnifiOutletSwitch:
         assert switch.translation_placeholders == {"outlet_name": "Main Server"}
         assert switch.is_on is True
         assert switch.available is True
-        assert switch.icon == "mdi:power-socket-us"
+        assert switch.icon is None
 
         attrs = switch.extra_state_attributes
         assert attrs["index"] == 1

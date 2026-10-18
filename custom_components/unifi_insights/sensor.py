@@ -350,7 +350,6 @@ NVR_SENSOR_TYPES: tuple[UnifiProtectSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfInformation.GIGABYTES,
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:harddisk",
         value_fn=lambda nvr: _bytes_to_gb(_get_storage_bytes(nvr, "used")),
         device_type=DEVICE_TYPE_NVR,
     ),
@@ -361,7 +360,6 @@ NVR_SENSOR_TYPES: tuple[UnifiProtectSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfInformation.GIGABYTES,
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:harddisk",
         value_fn=lambda nvr: _bytes_to_gb(_get_storage_bytes(nvr, "total")),
         device_type=DEVICE_TYPE_NVR,
     ),
@@ -372,7 +370,6 @@ NVR_SENSOR_TYPES: tuple[UnifiProtectSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfInformation.GIGABYTES,
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:harddisk",
         value_fn=_calculate_storage_available,
         device_type=DEVICE_TYPE_NVR,
     ),
@@ -383,7 +380,6 @@ NVR_SENSOR_TYPES: tuple[UnifiProtectSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:harddisk",
         value_fn=_calculate_storage_percent,
         device_type=DEVICE_TYPE_NVR,
     ),
@@ -397,7 +393,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:cpu-64-bit",
         value_fn=lambda stats: get_stats_field(
             stats, "cpuUtilizationPct", "cpu_utilization_pct", "cpu_percent", "cpu"
         ),
@@ -408,7 +403,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:memory",
         value_fn=lambda stats: get_stats_field(
             stats,
             "memoryUtilizationPct",
@@ -425,7 +419,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # Gold: Disable diagnostic entities by default
         entity_registry_enabled_default=False,
-        icon="mdi:clock-start",
         value_fn=lambda stats: format_uptime(
             get_stats_field(
                 stats, "uptimeSec", "uptime_sec", "uptime_seconds", "uptime"
@@ -440,7 +433,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         suggested_display_precision=1,
         device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:upload-network",
         value_fn=lambda stats: bytes_to_bits(
             _uplink_rate_bps(stats, "txRateBps", "tx_rate_bps", "tx_bytes_per_sec")
         ),
@@ -453,7 +445,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         suggested_display_precision=1,
         device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:download-network",
         value_fn=lambda stats: bytes_to_bits(
             _uplink_rate_bps(stats, "rxRateBps", "rx_rate_bps", "rx_bytes_per_sec")
         ),
@@ -464,7 +455,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash",
         # Only show on switch devices (devices with 'switching' feature)
         required_feature="switching",
         value_fn=lambda stats: get_stats_field(
@@ -481,7 +471,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # Gold: Disable diagnostic entities by default
         entity_registry_enabled_default=False,
-        icon="mdi:text-box-check",
         value_fn=lambda device: get_field(
             device, "firmwareVersion", "firmware_version", "version"
         ),
@@ -494,14 +483,12 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        icon="mdi:thermometer",
         value_fn=get_network_device_temperature,
     ),
     UnifiInsightsSensorEntityDescription(
         key="wired_clients",
         translation_key="wired_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:network",
         # Only show on switch devices (devices with 'switching' feature)
         required_feature="switching",
         value_fn=lambda stats: len(
@@ -512,7 +499,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         key="wireless_clients",
         translation_key="wireless_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:wifi",
         # Only show on access point devices (devices with 'accessPoint' feature)
         required_feature="accessPoint",
         value_fn=lambda stats: len(
@@ -525,7 +511,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash",
         value_fn=lambda device: get_field(
             device,
             "ac_power_consumption",
@@ -540,7 +525,6 @@ SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash-outline",
         value_fn=lambda device: get_field(
             device,
             "ac_power_budget",
@@ -560,7 +544,6 @@ OUTLET_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash",
         value_fn=lambda outlet: (
             outlet.get("outlet_power")
             if outlet.get("outlet_power") is not None
@@ -574,7 +557,6 @@ OUTLET_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:sine-wave",
         value_fn=lambda outlet: (
             outlet.get("outlet_voltage")
             if outlet.get("outlet_voltage") is not None
@@ -588,7 +570,6 @@ OUTLET_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:current-ac",
         value_fn=lambda outlet: (
             outlet.get("outlet_current")
             if outlet.get("outlet_current") is not None
@@ -601,7 +582,6 @@ OUTLET_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         translation_key="outlet_power_factor",
         device_class=SensorDeviceClass.POWER_FACTOR,
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:angle-acute",
         value_fn=lambda outlet: (
             outlet.get("outlet_power_factor")
             if outlet.get("outlet_power_factor") is not None
@@ -650,7 +630,6 @@ PORT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,  # Changed from DIAGNOSTIC to make visible by default
-        icon="mdi:flash",
         value_fn=lambda port: first_not_none(
             get_field(port, "poe_power_w"),
             get_field(port, "poe", default={}).get("power"),
@@ -668,7 +647,6 @@ PORT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # Gold: Disable diagnostic entities by default
         entity_registry_enabled_default=False,
-        icon="mdi:speedometer",
         value_fn=lambda port: (
             get_field(port, "speedMbps", "speed_mbps", "speed")
             if get_field(port, "state", "status", default="").upper() == "UP"
@@ -685,7 +663,6 @@ PORT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=None,  # Changed from DIAGNOSTIC to make visible by default
-        icon="mdi:upload",
         value_fn=lambda port: (
             get_field(port, "stats", default={}).get("txBytes")
             or get_field(port, "stats", default={}).get("tx_bytes", 0)
@@ -701,7 +678,6 @@ PORT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=None,  # Changed from DIAGNOSTIC to make visible by default
-        icon="mdi:download",
         value_fn=lambda port: (
             get_field(port, "stats", default={}).get("rxBytes")
             or get_field(port, "stats", default={}).get("rx_bytes", 0)
@@ -721,7 +697,6 @@ PORT_RATE_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,
-        icon="mdi:upload-network",
         value_fn=lambda _port: None,  # Handled in entity native_value
     ),
     # Port RX Rate
@@ -734,7 +709,6 @@ PORT_RATE_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,
-        icon="mdi:download-network",
         value_fn=lambda _port: None,  # Handled in entity native_value
     ),
 )
@@ -748,7 +722,6 @@ SFP_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=None,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        icon="mdi:expansion-card",
         value_fn=lambda port: port.get("sfp_part"),
     ),
     # SFP Vendor
@@ -758,7 +731,6 @@ SFP_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=None,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        icon="mdi:factory",
         value_fn=lambda port: port.get("sfp_vendor"),
     ),
     # SFP Compliance (DAC, SR, LR, etc.)
@@ -768,7 +740,6 @@ SFP_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=None,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        icon="mdi:tag",
         value_fn=lambda port: port.get("sfp_compliance"),
     ),
     # SFP Serial
@@ -778,7 +749,6 @@ SFP_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         device_class=None,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        icon="mdi:barcode",
         value_fn=lambda port: port.get("sfp_serial"),
     ),
 )
@@ -805,7 +775,6 @@ WAN_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # Gold: Disable diagnostic entities by default
         entity_registry_enabled_default=False,
-        icon="mdi:ip-network",
         value_fn=lambda device: get_field(device, "ipAddress", "ip_address", "ip"),
     ),
     # WAN Uptime
@@ -816,7 +785,6 @@ WAN_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # Gold: Disable diagnostic entities by default
         entity_registry_enabled_default=False,
-        icon="mdi:clock-start",
         value_fn=lambda stats: format_uptime(
             get_stats_field(
                 stats, "uptimeSec", "uptime_sec", "uptime_seconds", "uptime"
@@ -832,14 +800,12 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         key="site_total_clients",
         translation_key="site_total_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:account-group",
         value_fn=len,
     ),
     UnifiInsightsSensorEntityDescription(
         key="site_wired_clients",
         translation_key="site_wired_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:ethernet",
         value_fn=lambda clients: len(
             [c for c in clients.values() if _get_client_type(c) == "WIRED"]
         ),
@@ -848,7 +814,6 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         key="site_wireless_clients",
         translation_key="site_wireless_clients",
         state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:wifi",
         value_fn=lambda clients: len(
             [c for c in clients.values() if _get_client_type(c) == "WIRELESS"]
         ),
@@ -2360,7 +2325,6 @@ class UnifiWifiClientCountSensor(
 
     _attr_has_entity_name = True
     _attr_translation_key = "wifi_client_count"
-    _attr_icon = "mdi:wifi"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(

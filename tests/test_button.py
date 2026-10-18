@@ -64,7 +64,7 @@ class TestButtonTypes:
 
         assert restart.name in (None, UNDEFINED)
         assert restart.translation_key == "device_restart"
-        assert restart.icon == "mdi:restart"
+        assert restart.icon in (None, UNDEFINED)
 
 
 class TestUnifiInsightsButton:

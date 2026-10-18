@@ -1125,7 +1125,6 @@ class UnifiProtectStatusLightSwitch(UnifiProtectEntity, SwitchEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "status_light"
-    _attr_icon = "mdi:led-on"
 
     def __init__(
         self,
@@ -1203,7 +1202,6 @@ class UnifiProtectHighFPSSwitch(UnifiProtectEntity, SwitchEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "high_fps_mode"
-    _attr_icon = "mdi:fast-forward"
 
     def __init__(
         self,
@@ -1284,7 +1282,6 @@ class UnifiClientBlockSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
     """
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:account-lock"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
@@ -1396,7 +1393,6 @@ class UnifiWifiSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntity)
     """Switch to enable/disable a WiFi network."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:wifi"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
@@ -1520,7 +1516,6 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
     """Per-outlet relay switch for UniFi PDU and smart power strip devices."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:power-socket-us"
 
     def __init__(
         self,
@@ -1728,7 +1723,6 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
     _attr_entity_registry_enabled_default = False
-    _attr_icon = "mdi:restart"
 
     def __init__(
         self,
