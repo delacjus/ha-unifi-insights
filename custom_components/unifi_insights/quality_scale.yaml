@@ -80,8 +80,10 @@ rules:
     status: todo
     comment: Audit README.md setup instructions against all three connection modes.
   entity-unavailable:
-    status: done
-    comment: Entity properties gate coordinator health; client button outages are tested.
+    status: todo
+    comment: >-
+      Device trackers deliberately remain available when the device refresh fails;
+      other entity properties gate coordinator health and client buttons are tested.
   integration-owner:
     status: done
     comment: manifest.json declares codeowners.

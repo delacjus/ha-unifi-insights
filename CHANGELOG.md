@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Console polling failures now rely on Home Assistant's unavailable/recovered transition logs instead of repeated per-poll warnings. Client reconnect, Wake-on-LAN and network restart buttons follow device coordinator availability; offline clients remain wakeable while the console is reachable. Removed shadowed availability assignments and redundant rule-audit state writes while preserving every event and availability transition. [#336](https://github.com/tinkerologie/ha-unifi-insights/issues/336)
+- Console polling failures now rely on Home Assistant's unavailable/recovered transition logs instead of repeated per-poll warnings. Protect per-family failures and device legacy fallback now log once per outage and once on recovery. Client reconnect, Wake-on-LAN and network restart buttons follow device coordinator availability; offline clients remain wakeable while the console is reachable. Removed shadowed availability assignments and redundant rule-audit state writes while preserving every event and availability transition. [#336](https://github.com/tinkerologie/ha-unifi-insights/issues/336)
 - The topology card always roots the tree at the gateway. A gateway whose reported uplink is a switch on the same site (for example a mutual uplink over one 10G link between a UCG Fiber and its core switch) no longer makes that switch its parent, in both the tree and tiered layouts. [#346](https://github.com/tinkerologie/ha-unifi-insights/issues/346)
 
 ## [2026.10.2] - 2026-10-16
