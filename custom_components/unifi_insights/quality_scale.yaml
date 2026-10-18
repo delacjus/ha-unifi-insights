@@ -163,7 +163,9 @@ rules:
     comment: config_flow.py supports reconfiguration of existing entries.
   repair-issues:
     status: todo
-    comment: repairs.py exists but active issue creation and resolution need implementation.
+    comment: >-
+      The integration creates no repair issues; the unused RepairsFlow scaffold was
+      removed in #334. Authentication failures use standard reauthentication.
   stale-devices:
     status: done
     comment: Device and Protect coordinators reconcile stale device registry entries.
