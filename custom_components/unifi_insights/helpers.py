@@ -46,8 +46,8 @@ def get_port_label(port: dict[str, Any], port_idx: int) -> str:
     name = port.get("name")
     if name and name != f"Port {port_idx}":
         return str(name)
-    media = port.get("media", "")
-    if media.startswith("SFP"):
+    media = port.get("media")
+    if isinstance(media, str) and media.startswith("SFP"):
         return f"{media} {port_idx}"
     return f"Port {port_idx}"
 

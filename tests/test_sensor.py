@@ -859,6 +859,12 @@ class TestGetPortLabel:
         port = {"idx": 5}
         assert _get_port_label(port, 5) == "Port 5"
 
+    @pytest.mark.parametrize("media", [None, 1])
+    def test_port_label_non_string_media(self, media):
+        """Test _get_port_label falls back to the generic label for non-string media."""
+        port = {"name": "Port 7", "media": media, "idx": 7}
+        assert _get_port_label(port, 7) == "Port 7"
+
     def test_port_label_ignores_generic_name(self):
         """Test _get_port_label ignores default 'Port N' name and uses media."""
         port = {"name": "Port 25", "media": "SFP+", "idx": 25}

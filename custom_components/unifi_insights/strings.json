@@ -675,7 +675,7 @@
         }
       },
       "wan_status": {
-        "name": "WAN Status"
+        "name": "WAN status"
       },
       "wan_link": {
         "name": "{wan_name} Connection"
@@ -746,10 +746,10 @@
         "name": "Play"
       },
       "ptz_patrol_start": {
-        "name": "Start PTZ Patrol"
+        "name": "Start PTZ patrol"
       },
       "ptz_patrol_stop": {
-        "name": "Stop PTZ Patrol"
+        "name": "Stop PTZ patrol"
       },
       "poe_power_cycle": {
         "name": "{port_label} PoE Power Cycle"
