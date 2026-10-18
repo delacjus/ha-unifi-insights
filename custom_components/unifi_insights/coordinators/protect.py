@@ -2110,7 +2110,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
         count = self._consecutive_fetch_errors.get(collection_key, 0) + 1
         self._consecutive_fetch_errors[collection_key] = count
         if count > MAX_CONSECUTIVE_EMPTY_FETCHES:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Protect coordinator: %s fetch failed for %d consecutive polls "
                 "(%s); failing the update",
                 collection_key,
@@ -2118,7 +2118,7 @@ class UnifiProtectCoordinator(UnifiBaseCoordinator):
                 err,
             )
             return False
-        _LOGGER.warning(
+        _LOGGER.debug(
             "Protect coordinator: Error fetching %s (poll %d/%d): %s; "
             "preserving cached devices",
             collection_key,

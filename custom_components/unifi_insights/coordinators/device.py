@@ -904,7 +904,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
                 and devices_result.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
                 and legacy_site_name is not None
             ):
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Device coordinator: v1 devices endpoint returned %s for "
                     "site %s; falling back to legacy /stat/device",
                     devices_result.status_code,

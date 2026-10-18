@@ -570,12 +570,12 @@ class TestUnifiInsightsEntity:
 
         mock_coordinator.device_available = False
         entity._handle_coordinator_update()
-        assert entity._attr_available is False
+        assert entity.available is False
         assert entity.available is False
 
         mock_coordinator.device_available = True
         entity._handle_coordinator_update()
-        assert entity._attr_available is True
+        assert entity.available is True
         assert entity.available is True
 
     async def test_entity_device_data(self, hass: HomeAssistant, mock_coordinator):
@@ -807,12 +807,12 @@ class TestUnifiProtectEntity:
 
         mock_coordinator.protect_available = False
         entity._handle_coordinator_update()
-        assert entity._attr_available is False
+        assert entity.available is False
         assert entity.available is False
 
         mock_coordinator.protect_available = True
         entity._handle_coordinator_update()
-        assert entity._attr_available is True
+        assert entity.available is True
         assert entity.available is True
 
     async def test_protect_entity_coordinator_update_refreshes_state(
@@ -831,7 +831,7 @@ class TestUnifiProtectEntity:
 
         entity._handle_coordinator_update()
 
-        assert entity._attr_available is False
+        assert entity.available is False
         entity._update_from_data.assert_called_once()
         entity.async_write_ha_state.assert_called_once()
 
@@ -851,7 +851,7 @@ class TestUnifiProtectEntity:
 
         entity._handle_coordinator_update()
 
-        assert entity._attr_available is False
+        assert entity.available is False
         entity._update_from_data.assert_not_called()
         entity.async_write_ha_state.assert_called_once()
 
@@ -1385,7 +1385,7 @@ class TestUnifiInsightsEntityEdgeCases:
         entity._handle_coordinator_update()
 
         # Should set available to False
-        assert entity._attr_available is False
+        assert entity.available is False
         entity.async_write_ha_state.assert_called()
 
     async def test_entity_suggested_area_switch(

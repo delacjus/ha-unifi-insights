@@ -166,7 +166,6 @@ class UnifiInnerSpaceEntity(CoordinatorEntity[UnifiFacadeCoordinator]):
         """Handle updated data from the coordinator."""
         new_device_info = self._build_device_info()
         self._reconcile_device_association(new_device_info)
-        self._attr_available = self.available
         self.async_write_ha_state()
 
 
