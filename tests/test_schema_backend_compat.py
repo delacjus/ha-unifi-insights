@@ -16,7 +16,6 @@ from homeassistant.helpers import config_validation as cv
 
 from custom_components.unifi_insights import (
     config_flow,
-    repairs,
     services,
     websocket_api,
 )
@@ -161,38 +160,3 @@ def test_service_schemas_actual_validation() -> None:
 
     with pytest.raises(backend.Invalid):
         services.EXPORT_NETWORK_RULES_SCHEMA({"unexpected_param": "foo"})
-
-
-async def test_repairs_flow_actual_form_and_entry_lifecycle(
-    hass: HomeAssistant,
-) -> None:
-    """Verify repairs flow creates forms, handles acknowledgments, and aborts."""
-    # Deprecated YAML repair flow: form on initial step, create_entry on acknowledge
-    yaml_flow = repairs.UnifiInsightsRepairFlow("deprecated_yaml")
-    form_result = await yaml_flow.async_step_init(None)
-    assert form_result["type"] is FlowResultType.FORM
-    assert form_result["step_id"] == "deprecated_yaml"
-    assert form_result["description_placeholders"] == {
-        "integration": "UniFi Insights",
-    }
-
-    create_result = await yaml_flow.async_step_init({"acknowledged": "true"})
-    assert create_result["type"] is FlowResultType.CREATE_ENTRY
-    assert create_result["data"] == {}
-
-    # API key expired repair flow: aborts with reconfigure_required
-    expired_flow = repairs.UnifiInsightsRepairFlow("api_key_expired")
-    expired_abort = await expired_flow.async_step_init({"acknowledged": "true"})
-    assert expired_abort["type"] is FlowResultType.ABORT
-    assert expired_abort["reason"] == "reconfigure_required"
-
-    # Unknown issue repair flow: aborts with unknown_issue
-    unknown_flow = repairs.UnifiInsightsRepairFlow("unknown_issue_id")
-    unknown_abort = await unknown_flow.async_step_init(None)
-    assert unknown_abort["type"] is FlowResultType.ABORT
-    assert unknown_abort["reason"] == "unknown_issue"
-
-    # async_create_fix_flow factory returns configured UnifiInsightsRepairFlow instance
-    flow_instance = await repairs.async_create_fix_flow(hass, "deprecated_yaml", None)
-    assert isinstance(flow_instance, repairs.UnifiInsightsRepairFlow)
-    assert flow_instance.issue_id == "deprecated_yaml"

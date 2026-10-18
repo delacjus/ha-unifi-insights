@@ -217,7 +217,6 @@ This integration uses the following identifiers consistently:
 - `access_webhook.py` — UniFi Access webhook lifecycle management
 - `const.py` — Constants and endpoint paths
 - `diagnostics.py` — Three-layer redacted diagnostic data export
-- `repairs.py` — Repair issue helpers and `RepairsFlow`
 - Platform files (17 platforms): `alarm_control_panel.py`, `binary_sensor.py`, `button.py`, `camera.py`, `cover.py`, `device_tracker.py`, `event.py`, `image.py`, `light.py`, `lock.py`, `media_player.py`, `number.py`, `select.py`, `sensor.py`, `siren.py`, `switch.py`, `update.py`
 
 **Do NOT create:**

@@ -4,6 +4,11 @@ applyTo: "custom_components/unifi_insights/repairs.py"
 
 # Repairs Instructions
 
+> [!NOTE]
+> This guidance applies when a developer adds repair functionality. The integration
+> currently creates no repair issues and the scaffold is removed; when a user-fixable
+> condition requires a repair flow, follow the patterns below.
+
 **Applies to:** Repair issue creation and repair flow implementation (`repairs.py`)
 
 ## Creating Issues (IQS Gold `repair-issues`)
@@ -50,4 +55,4 @@ class UnifiInsightsRepairFlow(RepairsFlow):
 - Call `ir.async_delete_issue(hass, DOMAIN, issue_id)` automatically when the underlying condition clears or after the repair flow completes.
 - Define all repair titles, descriptions, and step labels under `"issues"` in `strings.json` and `translations/en.json`.
 - Do not use repair issues for authentication failures — raise `ConfigEntryAuthFailed` to trigger the standard reauthentication flow instead.
-- Test both creation/deletion of repair issues and full repair flow execution in `tests/test_repairs.py`.
+- When repair flows are added, test both creation/deletion of repair issues and full repair flow execution in `tests/test_repairs.py` (future test location).
