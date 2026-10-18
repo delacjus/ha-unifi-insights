@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Ruaan Deysel
 """Tests for UniFi Insights entity base classes."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -505,6 +505,38 @@ class TestUnifiInsightsEntity:
         )
 
         assert entity.available is True
+
+    @pytest.mark.parametrize(
+        ("devices", "expected"),
+        [
+            pytest.param(None, False, id="devices-none"),
+            pytest.param([], False, id="devices-list"),
+            pytest.param("invalid", False, id="devices-string"),
+            pytest.param(0, False, id="devices-number"),
+            pytest.param({"site1": None}, False, id="site-none"),
+            pytest.param({"site1": []}, False, id="site-list"),
+            pytest.param({"site1": "invalid"}, False, id="site-string"),
+            pytest.param({"site1": 0}, False, id="site-number"),
+            pytest.param(
+                {"site1": {"device1": {"state": "ONLINE"}}}, True, id="online"
+            ),
+        ],
+    )
+    async def test_entity_available_validates_device_containers(
+        self, mock_coordinator: MagicMock, devices: Any, *, expected: bool
+    ) -> None:
+        """Malformed containers are unavailable while valid online data works."""
+        entity = UnifiInsightsEntity(
+            coordinator=mock_coordinator,
+            description=EntityDescription(key="test"),
+            site_id="site1",
+            device_id="device1",
+        )
+        assert entity.available is True
+
+        mock_coordinator.data["devices"] = devices
+
+        assert entity.available is expected
 
     async def test_entity_available_offline(
         self, hass: HomeAssistant, mock_coordinator
