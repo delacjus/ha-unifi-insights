@@ -5,7 +5,7 @@
 
 ## Context
 
-`custom_components/unifi_insights/` has 57 top-level Python modules plus 16 in `coordinators/`, not counting the vendored `api/` package. The growth came from adding each feature as its own satellite file (`voucher_sensor.py`, `mobility_entity.py`, `network_rule_switch.py`, six dashboard snapshot builders, three topology files), which hides where a given entity lives and duplicates base-class and `EntityDescription` boilerplate. Several files are dead (`coordinator.py`, the legacy transforms, 110 constants, the repairs scaffold), and five modules inside `coordinators/` contain no coordinator.
+`custom_components/unifi_insights/` has 57 top-level Python modules plus 16 in `coordinators/`, not counting the vendored `api/` package. The growth came from adding each feature as its own satellite file (`voucher_sensor.py`, `mobility_entity.py`, `network_rule_switch.py`, six dashboard snapshot builders, three topology files), which hides where a given entity lives and duplicates base-class and `EntityDescription` boilerplate. Several files were dead (the legacy `coordinator.py`, transforms, 110 constants, the repairs scaffold, and the `SCAN_INTERVAL_NORMAL` alias, for 111 constants removed in total; removed in #334), and five modules inside `coordinators/` contain no coordinator.
 
 Home Assistant's guidance is explicit:
 
@@ -97,7 +97,7 @@ custom_components/unifi_insights/
 └── frontend/                   # built card bundles (unchanged; see ADR-005)
 ```
 
-Deleted outright: `coordinator.py` (dead legacy coordinator), `repairs.py` (scaffold never wired), `carrier_fabric_data.py` (into `__init__.py`), `helpers.py`, `led_level.py`, `storage_telemetry.py`, the 12 entity satellites, the 6 dashboard builders, 2 topology helpers, and 3 `coordinators/` helper modules.
+Deleted outright: `coordinator.py` (dead legacy coordinator; removed in #334), `repairs.py` (scaffold never wired; removed in #334), `carrier_fabric_data.py` (into `__init__.py`), `helpers.py`, `led_level.py`, `storage_telemetry.py`, the 12 entity satellites, the 6 dashboard builders, 2 topology helpers, and 3 `coordinators/` helper modules.
 
 | Area                       | Before | After |
 | -------------------------- | ------ | ----- |
@@ -187,7 +187,7 @@ docs/development/
 
 - A contributor looking for "the storage sensor" opens `sensor.py`; for "the Protect WebSocket", `coordinators/protect_ws.py`.
 - One `normalize_mac()`, one `get_field()`, one stale-device helper on `UnifiBaseCoordinator`.
-- The dead `coordinator.py` disappears, so the package no longer has both `coordinator.py` and `coordinators/`.
+- The dead `coordinator.py` disappears (completed in #334), so the package no longer has both `coordinator.py` and `coordinators/`.
 
 ### Negative
 

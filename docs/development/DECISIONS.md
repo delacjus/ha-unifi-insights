@@ -67,7 +67,7 @@ Consolidate 57 root modules into 33 by moving every base entity into `entity.py`
 
 **Status:** not implemented
 
-The `RepairsFlow` scaffold was never wired to `ir.async_create_issue()` and is removed by #330. Add repair issues (with `issues` entries in `strings.json`) when there is a user-fixable condition to surface, for example an expired API key that reauth cannot recover.
+The integration does not create repair issues, and the unused repair-flow scaffold was removed (#334). Developers should add repair issues and matching translations under `"issues"` in `strings.json` when a user-fixable condition requires them. Authentication failures continue to use standard reauthentication rather than repair issues.
 
 ### Discovery
 

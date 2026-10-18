@@ -36,8 +36,6 @@ custom_components/unifi_insights/
 ├── frontend.py                 # Serves the built Lovelace card bundles with cache busting
 ├── access_webhook.py           # Signed UniFi Access webhook lifecycle
 ├── diagnostics.py              # Three-layer redacted diagnostics export
-├── repairs.py                  # RepairsFlow scaffold (never wired; removed by #330)
-├── coordinator.py              # Legacy single coordinator (dead; removed by #330)
 ├── coordinators/               # Multi-coordinator package (see below)
 ├── api/                        # Vendored unifi-official-api clients (Network, Protect, Access,
 │                               # InnerSpace, Site Manager, Mobility, Carrier Fabric)
