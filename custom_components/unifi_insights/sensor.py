@@ -831,7 +831,6 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
     UnifiInsightsSensorEntityDescription(
         key="site_total_clients",
         translation_key="site_total_clients",
-        name="Total Clients",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:account-group",
         value_fn=len,
@@ -839,7 +838,6 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
     UnifiInsightsSensorEntityDescription(
         key="site_wired_clients",
         translation_key="site_wired_clients",
-        name="Wired Clients",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:ethernet",
         value_fn=lambda clients: len(
@@ -849,7 +847,6 @@ SITE_CLIENT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
     UnifiInsightsSensorEntityDescription(
         key="site_wireless_clients",
         translation_key="site_wireless_clients",
-        name="Wireless Clients",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:wifi",
         value_fn=lambda clients: len(
@@ -2151,9 +2148,6 @@ class UnifiProtectSensor(UnifiProtectEntity, SensorEntity):
         if description.key == "battery":
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
-        # Set name
-        self._attr_name = description.name  # type: ignore[assignment]
-
         # Update initial state
         self._update_from_data()
 
@@ -2246,9 +2240,6 @@ class UnifiProtectNVRSensor(UnifiProtectEntity, SensorEntity):
             coordinator, description.device_type or "", device_id, description.key
         )
         self.entity_description = description
-
-        # Set name
-        self._attr_name = description.name  # type: ignore[assignment]
 
         # Update initial state
         self._update_from_data()
@@ -2368,6 +2359,7 @@ class UnifiWifiClientCountSensor(
     """Number of clients connected to a specific WiFi network (SSID)."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "wifi_client_count"
     _attr_icon = "mdi:wifi"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -2386,7 +2378,6 @@ class UnifiWifiClientCountSensor(
         wifi_name = wifi_data.get("name") or wifi_data.get("ssid", wifi_id)
 
         self._attr_unique_id = f"{site_id}_{wifi_id}_client_count"
-        self._attr_name = "Connected clients"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"wifi_{wifi_id}")},
             name=f"WiFi: {wifi_name}",

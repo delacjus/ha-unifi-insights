@@ -178,7 +178,6 @@ BUTTON_TYPES: tuple[UnifiInsightsButtonEntityDescription, ...] = (
     UnifiInsightsButtonEntityDescription(
         key="device_restart",
         translation_key="device_restart",
-        name="Device Restart",
         icon="mdi:restart",
     ),
 )
@@ -735,6 +734,7 @@ class UnifiClientReconnectButton(ButtonEntity):
     """Button to force a client to reconnect."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "client_reconnect"
     _attr_icon = "mdi:refresh"
 
     def __init__(
@@ -757,7 +757,7 @@ class UnifiClientReconnectButton(ButtonEntity):
         )
 
         self._attr_unique_id = f"{site_id}_{client_id}_reconnect"
-        self._attr_name = f"{client_name} Reconnect"
+        self._attr_translation_placeholders = {"client_name": client_name}
 
         # Device info - associate with the connected network device (switch/AP)
         uplink_device_id = client_data.get("uplinkDeviceId") or client_data.get(

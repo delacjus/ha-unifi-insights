@@ -2180,3 +2180,50 @@ async def test_local_reconfigure_compares_normalized_hardware_addresses(
         ).unique_id == build_site_unique_id(
             discovered, "site_shared", "site_total_clients"
         )
+
+
+async def test_affected_entities_retain_registry_identities_after_setup(
+    hass, entity_registry, mock_coordinator
+):
+    """Confirm entities with removed hardcoded names preserve registry identity."""
+    entry = _entry(hass, "console_a", "entry_a")
+    mock_coordinator.protect_client = None
+    mock_coordinator.data = {
+        "sites": {"site_shared": {"id": "site_shared", "name": "Default"}},
+        "clients": {"site_shared": {}},
+        "vouchers": {"site_shared": {}},
+        "internet_activity": {
+            "site_shared": {
+                window: {"rx_bytes": 100, "tx_bytes": 200}
+                for window in ("1h", "1d", "1w", "1m")
+            }
+        },
+    }
+    # Pre-create registry entries with existing unique IDs and entity IDs
+    pre_registered = {}
+    for key in (
+        "site_total_clients",
+        "site_wired_clients",
+        "site_wireless_clients",
+        "internet_download_1h",
+        "internet_upload_1h",
+    ):
+        uid = build_site_unique_id("console_a", "site_shared", key)
+        row = entity_registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            uid,
+            suggested_object_id=f"default_{key}",
+            config_entry=entry,
+        )
+        pre_registered[key] = (row.entity_id, row.unique_id)
+
+    entities = await _discover_all(hass, entry, mock_coordinator)
+    assert len(entities) > 0
+
+    # Verify that post-setup, entity_id and unique_id are completely unchanged
+    for orig_entity_id, orig_unique_id in pre_registered.values():
+        entry_record = entity_registry.async_get(orig_entity_id)
+        assert entry_record is not None
+        assert entry_record.unique_id == orig_unique_id
+        assert entry_record.entity_id == orig_entity_id

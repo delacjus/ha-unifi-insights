@@ -176,7 +176,6 @@ def test_site_internet_activity_sensor_translations_resolve_in_both_files() -> N
         assert en_sensor[key] == strings_sensor[key], (
             f"{key} differs between strings.json and translations/en.json"
         )
-        assert desc.name == strings_sensor[key]["name"]
 
 
 def test_mobility_translations_and_icons_resolve_in_every_file() -> None:

@@ -45,7 +45,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1h",
         translation_key="internet_download_1h",
-        name="Internet Download (Last Hour)",
         window="1h",
         metric="rx_bytes",
         period_label="Last Hour",
@@ -62,7 +61,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1h",
         translation_key="internet_upload_1h",
-        name="Internet Upload (Last Hour)",
         window="1h",
         metric="tx_bytes",
         period_label="Last Hour",
@@ -79,7 +77,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1d",
         translation_key="internet_download_1d",
-        name="Internet Download (Last 24 Hours)",
         window="1d",
         metric="rx_bytes",
         period_label="Last 24 Hours",
@@ -96,7 +93,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1d",
         translation_key="internet_upload_1d",
-        name="Internet Upload (Last 24 Hours)",
         window="1d",
         metric="tx_bytes",
         period_label="Last 24 Hours",
@@ -113,7 +109,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1w",
         translation_key="internet_download_1w",
-        name="Internet Download (Last 7 Days)",
         window="1w",
         metric="rx_bytes",
         period_label="Last 7 Days",
@@ -130,7 +125,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1w",
         translation_key="internet_upload_1w",
-        name="Internet Upload (Last 7 Days)",
         window="1w",
         metric="tx_bytes",
         period_label="Last 7 Days",
@@ -147,7 +141,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_download_1m",
         translation_key="internet_download_1m",
-        name="Internet Download (Last 30 Days)",
         window="1m",
         metric="rx_bytes",
         period_label="Last 30 Days",
@@ -164,7 +157,6 @@ SITE_INTERNET_ACTIVITY_SENSOR_TYPES: tuple[
     UnifiSiteInternetActivitySensorEntityDescription(
         key="internet_upload_1m",
         translation_key="internet_upload_1m",
-        name="Internet Upload (Last 30 Days)",
         window="1m",
         metric="tx_bytes",
         period_label="Last 30 Days",

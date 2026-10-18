@@ -880,7 +880,6 @@ class UnifiPortBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
         desc = UnifiInsightsBinarySensorEntityDescription(
             key=f"port_sfp_present_{port_idx}",
             translation_key="port_sfp_present",
-            name=f"{port_label} SFP Module",
             device_class=BinarySensorDeviceClass.CONNECTIVITY,
             entity_category=EntityCategory.DIAGNOSTIC,
             entity_type="device",
@@ -888,7 +887,8 @@ class UnifiPortBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
         super().__init__(coordinator, desc, site_id, device_id)
         self.entity_description = desc
         self._port_idx = port_idx
-        self._attr_name = f"{port_label} SFP Module"
+        label = port_label or f"Port {port_idx}"
+        self._attr_translation_placeholders = {"port_label": label}
         self._attr_unique_id = f"{device_id}_port_sfp_present_{port_idx}"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 

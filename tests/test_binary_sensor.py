@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.typing import UNDEFINED
 
 from custom_components.unifi_insights.binary_sensor import (
     BINARY_SENSOR_TYPES,
@@ -1707,7 +1708,20 @@ class TestUnifiPortBinarySensor:
             port_idx=25,
             port_label="SFP+ 1",
         )
-        assert sensor.name == "SFP+ 1 SFP Module"
+        assert sensor.translation_key == "port_sfp_present"
+        assert sensor.translation_placeholders == {"port_label": "SFP+ 1"}
+        assert getattr(sensor, "_attr_name", None) is None
+
+        assert sensor.entity_description.name in (None, UNDEFINED)
+
+        sensor_fallback = UnifiPortBinarySensor(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            device_id="device1",
+            port_idx=25,
+            port_label="",
+        )
+        assert sensor_fallback.translation_placeholders == {"port_label": "Port 25"}
 
     async def test_sfp_no_port_data(self, hass: HomeAssistant, mock_coordinator):
         """Test SFP binary sensor with missing port data."""

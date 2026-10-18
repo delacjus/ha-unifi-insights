@@ -11,6 +11,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.typing import UNDEFINED
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_insights.api import ApiKeyAuth, ConnectionType
@@ -60,7 +61,9 @@ class TestButtonTypes:
         """Test device restart button is defined."""
         restart = next((b for b in BUTTON_TYPES if b.key == "device_restart"), None)
         assert restart is not None
-        assert restart.name == "Device Restart"
+
+        assert restart.name in (None, UNDEFINED)
+        assert restart.translation_key == "device_restart"
         assert restart.icon == "mdi:restart"
 
 
@@ -290,8 +293,10 @@ class TestUnifiClientReconnectButton:
         )
 
         assert button._client_id == "client1"
-        assert "My Laptop" in button._attr_name
-        assert "Reconnect" in button._attr_name
+        assert button.translation_key == "client_reconnect"
+        assert button.translation_placeholders == {"client_name": "My Laptop"}
+        assert button.has_entity_name is True
+        assert getattr(button, "_attr_name", None) is None
 
     async def test_reconnect_button_available(
         self, hass: HomeAssistant, mock_coordinator
@@ -977,7 +982,8 @@ class TestClientReconnectButtonEdgeCases:
         )
 
         # Name should include MAC address
-        assert "11:22:33:44:55:66" in button._attr_name
+        assert button.translation_key == "client_reconnect"
+        assert button.translation_placeholders == {"client_name": "11:22:33:44:55:66"}
 
 
 class TestChimePlayButtonEdgeCases:
@@ -1173,6 +1179,10 @@ class TestAsyncSetupEntryWithClients:
             (b for b in reconnect_buttons if b._client_id == "client2"), None
         )
         assert client2_button is not None
+        assert client2_button.translation_key == "client_reconnect"
+        assert client2_button.translation_placeholders == {
+            "client_name": "laptop-hostname"
+        }
 
     async def test_setup_entry_client_button_uses_mac_fallback(
         self, hass: HomeAssistant, mock_coordinator, mock_config_entry
@@ -1193,6 +1203,10 @@ class TestAsyncSetupEntryWithClients:
             (b for b in reconnect_buttons if b._client_id == "client3"), None
         )
         assert client3_button is not None
+        assert client3_button.translation_key == "client_reconnect"
+        assert client3_button.translation_placeholders == {
+            "client_name": "CC:DD:EE:FF:00:11"
+        }
 
 
 class TestUnifiInsightsButtonAvailableEdgeCases:

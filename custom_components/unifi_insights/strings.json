@@ -446,37 +446,37 @@
         "name": "WAN Uptime"
       },
       "site_total_clients": {
-        "name": "Total Clients"
+        "name": "Total clients"
       },
       "site_wired_clients": {
-        "name": "Wired Clients"
+        "name": "Wired clients"
       },
       "site_wireless_clients": {
-        "name": "Wireless Clients"
+        "name": "Wireless clients"
       },
       "internet_download_1h": {
-        "name": "Internet Download (Last Hour)"
+        "name": "Internet download (last hour)"
       },
       "internet_upload_1h": {
-        "name": "Internet Upload (Last Hour)"
+        "name": "Internet upload (last hour)"
       },
       "internet_download_1d": {
-        "name": "Internet Download (Last 24 Hours)"
+        "name": "Internet download (last 24 hours)"
       },
       "internet_upload_1d": {
-        "name": "Internet Upload (Last 24 Hours)"
+        "name": "Internet upload (last 24 hours)"
       },
       "internet_download_1w": {
-        "name": "Internet Download (Last 7 Days)"
+        "name": "Internet download (last 7 days)"
       },
       "internet_upload_1w": {
-        "name": "Internet Upload (Last 7 Days)"
+        "name": "Internet upload (last 7 days)"
       },
       "internet_download_1m": {
-        "name": "Internet Download (Last 30 Days)"
+        "name": "Internet download (last 30 days)"
       },
       "internet_upload_1m": {
-        "name": "Internet Upload (Last 30 Days)"
+        "name": "Internet upload (last 30 days)"
       },
       "ac_power_consumption": {
         "name": "AC Power Consumption"
@@ -664,6 +664,9 @@
       },
       "active_vouchers": {
         "name": "Active vouchers"
+      },
+      "wifi_client_count": {
+        "name": "Connected clients"
       }
     },
     "binary_sensor": {
@@ -720,7 +723,7 @@
         "name": "External Leak Detection"
       },
       "port_sfp_present": {
-        "name": "SFP Module"
+        "name": "{port_label} SFP module"
       },
       "motion": {
         "name": "Motion"
@@ -755,7 +758,7 @@
     },
     "button": {
       "device_restart": {
-        "name": "Restart"
+        "name": "Device restart"
       },
       "reboot": {
         "name": "Reboot"
@@ -780,6 +783,9 @@
       },
       "access_door_unlock": {
         "name": "Unlock"
+      },
+      "client_reconnect": {
+        "name": "{client_name} reconnect"
       }
     },
     "camera": {
@@ -965,6 +971,9 @@
       },
       "voucher_qr_code": {
         "name": "Latest voucher QR code"
+      },
+      "wifi_qr_code": {
+        "name": "WiFi QR code"
       }
     },
     "lock": {
