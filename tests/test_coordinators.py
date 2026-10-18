@@ -1190,7 +1190,7 @@ class TestUnifiConfigCoordinator:
         result = coordinator.get_site("nonexistent")
         assert result is None
 
-    def test_get_site_non_dict_entry(self, coordinator: UnifiConfigCoordinator):
+    def test_get_site_non_dict_entry(self, coordinator: UnifiConfigCoordinator) -> None:
         """Test getting site when site entry in data is not a dict."""
         coordinator.data["sites"] = {"site1": "not a dict"}
         assert coordinator.get_site("site1") is None
