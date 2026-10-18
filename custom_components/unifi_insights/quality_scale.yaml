@@ -90,9 +90,10 @@ rules:
   log-when-unavailable:
     status: todo
     comment: >-
-      Base and Protect escalation polling use DataUpdateCoordinator transition logs.
-      Protect and Access WebSocket reconnect warnings still repeat; partial Protect
-      family-fetch warnings also need a separate failure-streak audit.
+      Base and Protect escalation polling use DataUpdateCoordinator transition logs;
+      Protect partial family fetches and the device legacy fallback log once per
+      outage and once on recovery. Protect and Access WebSocket reconnect warnings
+      still repeat and are tracked as a follow-up.
   parallel-updates:
     status: done
     comment: All 17 platform modules declare PARALLEL_UPDATES.
