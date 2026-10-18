@@ -4914,3 +4914,14 @@ class TestStalePortCleanupNativeRegistry:
         )
         await async_setup_entry(hass, mock_config_entry, MagicMock())
         assert entity_registry.async_get(row.entity_id) == row
+
+
+def test_port_speed_statistics_metadata(hass: HomeAssistant, mock_coordinator):
+    """Port speed exposes data-rate measurements in Mbit/s for statistics."""
+    mock_coordinator.hass = hass
+    mock_coordinator.data["devices"] = {"site1": {"device1": {"name": "Switch"}}}
+    description = next(desc for desc in PORT_SENSOR_TYPES if desc.key == "port_speed")
+    sensor = UnifiPortSensor(mock_coordinator, description, "site1", "device1", 25)
+    assert sensor.state_class == SensorStateClass.MEASUREMENT
+    assert sensor.device_class == SensorDeviceClass.DATA_RATE
+    assert sensor.native_unit_of_measurement == UnitOfDataRate.MEGABITS_PER_SECOND

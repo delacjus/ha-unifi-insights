@@ -16,6 +16,7 @@ from pathlib import Path
 from string import Formatter
 from typing import Final
 
+import pytest
 import yaml
 
 from custom_components.unifi_insights.binary_sensor import BINARY_SENSOR_TYPES
@@ -255,13 +256,17 @@ def _collect_live_entity_translation_keys() -> tuple[
                         ):
                             if plat:
                                 inventory.add((plat, constants[node.value.id]))
-                        elif isinstance(node.value, ast.JoinedStr) or (
-                            isinstance(node.value, ast.Attribute)
-                            and node.value.attr
-                            in (
-                                "translation_key",
-                                "unnamed_translation_key",
-                            )
+                        elif (
+                            module_name == "switch"
+                            and isinstance(node.value, ast.JoinedStr)
+                            and ast.unparse(node.value) == "f'access_emergency_{mode}'"
+                        ):
+                            inventory |= _ALLOW_LISTED_DYNAMIC_ENTITY_KEYS
+                        elif isinstance(
+                            node.value, ast.Attribute
+                        ) and node.value.attr in (
+                            "translation_key",
+                            "unnamed_translation_key",
                         ):
                             pass
                         else:
@@ -269,7 +274,6 @@ def _collect_live_entity_translation_keys() -> tuple[
                                 (py_file.name, node.lineno, ast.unparse(node.value))
                             )
 
-    inventory |= _ALLOW_LISTED_DYNAMIC_ENTITY_KEYS
     return inventory, dynamic_unresolved
 
 
@@ -704,44 +708,166 @@ def test_all_icons_json_entity_keys_match_live_inventory() -> None:
     )
 
 
-def test_no_static_mdi_strings_in_python_code() -> None:
-    """Acceptance criteria #335: no static mdi: string in Python.
+# Four state-dependent icon choices: firewall, VPN route, ordinary route, VPN
+# client. The two route choices share one property in the current implementation.
+_DYNAMIC_ICON_PROPERTIES: Final = {
+    ("switch.py", "UnifiFirewallRuleSwitch"),
+    ("switch.py", "UnifiInsightsPolicyBasedRouteSwitch"),
+    ("switch.py", "UnifiInsightsVpnClientSwitch"),
+}
 
-    Only dynamic icon properties (e.g. switches whose icon depends on state)
-    may return mdi: icons.
-    """
-    violations: list[str] = []
-    for py_file in _INTEGRATION_DIR.glob("**/*.py"):
-        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                violations.extend(
-                    f"{py_file.name}:{node.lineno}: icon={kw.value.value}"
-                    for kw in node.keywords
-                    if (
-                        kw.arg == "icon"
-                        and isinstance(kw.value, ast.Constant)
-                        and isinstance(kw.value.value, str)
-                        and kw.value.value.startswith("mdi:")
-                    )
+
+def _static_icon_violations(source: str, filename: str) -> list[str]:
+    """Reject icon overrides, including nonliteral values, outside reviewed icons."""
+    tree = ast.parse(source, filename=filename)
+    allowed_nodes: set[ast.AST] = set()
+    for cls in ast.walk(tree):
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        for method in cls.body:
+            if (
+                isinstance(method, ast.FunctionDef)
+                and method.name == "icon"
+                and (filename, cls.name) in _DYNAMIC_ICON_PROPERTIES
+                and any(
+                    isinstance(decorator, ast.Name) and decorator.id == "property"
+                    for decorator in method.decorator_list
                 )
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    is_attr_icon = (
-                        isinstance(target, ast.Name) and target.id == "_attr_icon"
-                    ) or (
-                        isinstance(target, ast.Attribute)
-                        and target.attr == "_attr_icon"
-                    )
-                    if (
-                        is_attr_icon
-                        and isinstance(node.value, ast.Constant)
-                        and isinstance(node.value.value, str)
-                        and node.value.value.startswith("mdi:")
-                    ):
-                        violations.append(
-                            f"{py_file.name}:{node.lineno}: "
-                            f"_attr_icon={node.value.value}"
-                        )
+                and any(
+                    isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "self"
+                    and node.attr == "is_on"
+                    for node in ast.walk(method)
+                )
+            ):
+                for node in ast.walk(method):
+                    if isinstance(node, ast.Return):
+                        allowed_nodes.update(ast.walk(node))
 
-    assert not violations, f"Found static mdi: assignments in Python: {violations}"
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            violations.extend(
+                f"{filename}:{node.lineno}: icon override"
+                for keyword in node.keywords
+                if keyword.arg == "icon"
+            )
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                (isinstance(target, ast.Name) and target.id == "_attr_icon")
+                or (isinstance(target, ast.Attribute) and target.attr == "_attr_icon")
+                for target in targets
+            ):
+                violations.append(f"{filename}:{node.lineno}: _attr_icon override")
+        elif (
+            node not in allowed_nodes
+            and isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith("mdi:")
+        ):
+            violations.append(f"{filename}:{node.lineno}: static {node.value}")
+    return violations
+
+
+def test_no_static_mdi_strings_in_python_code() -> None:
+    """Static icons belong in icons.json; only reviewed state icons may remain."""
+    violations = [
+        violation
+        for py_file in _INTEGRATION_DIR.glob("**/*.py")
+        for violation in _static_icon_violations(
+            py_file.read_text(encoding="utf-8"), py_file.name
+        )
+    ]
+    assert not violations, f"Found static icon overrides in Python: {violations}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '_attr_icon = "mdi:power"',
+        "self._attr_icon = ICON",
+        '_attr_icon = f"mdi:{kind}"',
+        "_attr_icon: str = ICON",
+        "SensorEntityDescription(key='test', icon=ICON)",
+        "SensorEntityDescription(key='test', icon=f'mdi:{kind}')",
+        'class NewSwitch:\n @property\n def icon(self):\n  return "mdi:power"',
+        (
+            "class UnifiFirewallRuleSwitch:\n @property\n"
+            ' def icon(self):\n  return "mdi:power"'
+        ),
+    ],
+)
+def test_static_icon_guard_rejects_overrides(source: str) -> None:
+    """Aliases, computed overrides and unreviewed properties cannot bypass guard."""
+    assert _static_icon_violations(source, "switch.py")
+
+
+@pytest.mark.parametrize(
+    "override", ["self._attr_icon = ICON", "SensorEntityDescription(icon=ICON)"]
+)
+def test_static_icon_guard_rejects_overrides_inside_reviewed_properties(
+    override: str,
+) -> None:
+    """Only returned state icons are exempt; overrides cannot hide in properties."""
+    source = (
+        "class UnifiFirewallRuleSwitch:\n @property\n def icon(self):\n"
+        f"  {override}\n"
+        '  return "mdi:power" if self.is_on else "mdi:power-off"'
+    )
+    assert _static_icon_violations(source, "switch.py")
+
+
+@pytest.mark.parametrize(("filename", "class_name"), sorted(_DYNAMIC_ICON_PROPERTIES))
+def test_static_icon_guard_allows_reviewed_state_properties(
+    filename: str, class_name: str
+) -> None:
+    """Keep the reviewed switches' state-dependent Python icons."""
+    source = (
+        f"class {class_name}:\n @property\n def icon(self):\n"
+        '  return "mdi:power" if self.is_on else "mdi:power-off"'
+    )
+    assert not _static_icon_violations(source, filename)
+
+
+@pytest.mark.parametrize(
+    ("module", "expression", "expected"),
+    [
+        ("switch", 'f"access_emergency_{mode}"', True),
+        ("sensor", 'f"access_emergency_{mode}"', False),
+        ("switch", 'f"unreviewed_{mode}"', False),
+        ("sensor", 'f"sensor_{kind}"', False),
+        ("event", "RULE_CHANGE_EVENT_KEY", True),
+    ],
+)
+def test_translation_inventory_rejects_unreviewed_dynamic_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module: str,
+    expression: str,
+    *,
+    expected: bool,
+) -> None:
+    """Resolve reviewed emergency keys and constants; reject other dynamic keys."""
+    (tmp_path / f"{module}.py").write_text(
+        'RULE_CHANGE_EVENT_KEY = "network_rule_changes"\n'
+        f"class Example:\n _attr_translation_key = {expression}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(__name__ + "._INTEGRATION_DIR", tmp_path)
+    inventory, unresolved = _collect_live_entity_translation_keys()
+    assert bool(unresolved) is not expected
+    if expected:
+        assert inventory == (
+            _ALLOW_LISTED_DYNAMIC_ENTITY_KEYS
+            if module == "switch"
+            else {("event", "network_rule_changes")}
+        )
+
+
+def test_outlet_icon_resource() -> None:
+    """Outlet switches retain their effective icon through icon translations."""
+    assert json.loads(_ICONS_JSON.read_text())["entity"]["switch"]["outlet"] == {
+        "default": "mdi:power-socket-us"
+    }

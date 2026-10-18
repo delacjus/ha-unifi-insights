@@ -302,6 +302,20 @@ class TestUnifiClientReconnectButton:
         assert button.has_entity_name is True
         assert getattr(button, "_attr_name", None) is None
 
+    @pytest.mark.parametrize("mac", [None, ""])
+    async def test_reconnect_placeholder_falls_back_with_empty_mac(
+        self, hass: HomeAssistant, mock_coordinator, mac
+    ):
+        """A present but empty MAC still falls back to the stable client ID."""
+        mock_coordinator.data["clients"]["site1"]["client1"] = {
+            "name": None,
+            "hostname": None,
+            "mac": mac,
+        }
+        button = UnifiClientReconnectButton(mock_coordinator, "site1", "client1")
+        assert button.translation_placeholders == {"client_name": "client1"}
+        assert button.unique_id == "site1_client1_reconnect"
+
     async def test_reconnect_button_available(
         self, hass: HomeAssistant, mock_coordinator
     ):

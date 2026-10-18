@@ -737,7 +737,8 @@ class UnifiClientReconnectButton(
         client_name = (
             client_data.get("name")
             or client_data.get("hostname")
-            or client_data.get("mac", client_id)
+            or client_data.get("mac")
+            or client_id
         )
 
         self._attr_unique_id = f"{site_id}_{client_id}_reconnect"

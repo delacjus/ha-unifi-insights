@@ -49,7 +49,7 @@ from .entity import (
     is_device_online,
     is_gateway_device,
 )
-from .helpers import is_doorbell_camera_model
+from .helpers import get_port_label, is_doorbell_camera_model
 from .mobility_entity import async_setup_mobility_binary_sensors
 from .protect_security_entity import discover_protect_security_binary_sensors
 from .storage_entity import discover_storage_binary_sensors
@@ -512,7 +512,7 @@ async def async_setup_entry(
                             if sfp_key in known_sensor_keys:
                                 continue
                             known_sensor_keys.add(sfp_key)
-                            port_name = port.get("name") or f"{media} {port_idx}"
+                            port_name = get_port_label(port, port_idx)
                             entities.append(
                                 UnifiPortBinarySensor(
                                     coordinator=coordinator,

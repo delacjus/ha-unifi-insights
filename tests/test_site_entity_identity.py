@@ -15,10 +15,16 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_API_KEY, CONF_HOST, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockEntityPlatform,
+)
 
 from custom_components.unifi_insights import (
     async_setup_entry,
+)
+from custom_components.unifi_insights import (
+    binary_sensor as binary_sensor_platform,
 )
 from custom_components.unifi_insights import (
     button as button_platform,
@@ -43,6 +49,7 @@ from custom_components.unifi_insights.console_identity import (
     resolve_console_namespace,
 )
 from custom_components.unifi_insights.const import (
+    CONF_CLIENT_CONTROL,
     CONF_CONNECTION_TYPE,
     CONF_CONSOLE_ID,
     CONNECTION_TYPE_LOCAL,
@@ -62,7 +69,11 @@ from custom_components.unifi_insights.internet_activity_snapshot import (
 )
 from custom_components.unifi_insights.number import VOUCHER_NUMBER_DESCRIPTIONS
 from custom_components.unifi_insights.probe import ProbeResult, ProbeStatus
-from custom_components.unifi_insights.sensor import SITE_CLIENT_SENSOR_TYPES
+from custom_components.unifi_insights.sensor import (
+    NVR_SENSOR_TYPES,
+    PROTECT_SENSOR_TYPES,
+    SITE_CLIENT_SENSOR_TYPES,
+)
 from custom_components.unifi_insights.site_internet_activity_sensor import (
     SITE_INTERNET_ACTIVITY_SENSOR_TYPES,
 )
@@ -2182,48 +2193,176 @@ async def test_local_reconfigure_compares_normalized_hardware_addresses(
         )
 
 
+@pytest.mark.parametrize(
+    ("port_name", "port_label"), [("Port 25", "SFP+ 25"), ("Uplink", "Uplink")]
+)
 async def test_affected_entities_retain_registry_identities_after_setup(
-    hass, entity_registry, mock_coordinator
+    hass, entity_registry, mock_coordinator, port_name, port_label
 ):
-    """Confirm entities with removed hardcoded names preserve registry identity."""
+    """Add every renamed family to HA and reuse its existing registry identity."""
     entry = _entry(hass, "console_a", "entry_a")
-    mock_coordinator.protect_client = None
-    mock_coordinator.data = {
-        "sites": {"site_shared": {"id": "site_shared", "name": "Default"}},
-        "clients": {"site_shared": {}},
-        "vouchers": {"site_shared": {}},
-        "internet_activity": {
-            "site_shared": {
-                window: {"rx_bytes": 100, "tx_bytes": 200}
-                for window in ("1h", "1d", "1w", "1m")
-            }
-        },
+    hass.config_entries.async_update_entry(entry, options={CONF_CLIENT_CONTROL: True})
+    mock_coordinator.hass = hass
+    mock_coordinator.config_entry = entry
+    mock_coordinator.async_add_listener.return_value = lambda: None
+    mock_coordinator.async_get_wake_history = AsyncMock(return_value={})
+    mock_coordinator.get_site.return_value = {"meta": {"name": "Default"}}
+    mock_coordinator.data.update(
+        {
+            "sites": {"site_shared": {"id": "site_shared", "name": "Default"}},
+            "devices": {
+                "site_shared": {
+                    "device1": {
+                        "id": "device1",
+                        "name": "Switch",
+                        "state": "ONLINE",
+                        "model": "USW-24",
+                        "mac": "aa:bb:cc:dd:ee:ff",
+                        "ports": [
+                            {
+                                "idx": 25,
+                                "name": port_name,
+                                "media": "SFP+",
+                                "sfp_found": True,
+                                "state": "UP",
+                                "speedMbps": 10000,
+                            }
+                        ],
+                    }
+                }
+            },
+            "clients": {
+                "site_shared": {
+                    "client1": {
+                        "id": "client1",
+                        "name": "Laptop",
+                        "type": "WIRELESS",
+                        "uplinkDeviceId": "device1",
+                    }
+                }
+            },
+            "wifi": {
+                "site_shared": {
+                    "wifi1": {
+                        "id": "wifi1",
+                        "name": "Guests",
+                        "qr_code": "WIFI:S:Guests;;",
+                    }
+                }
+            },
+            "vouchers": {},
+            "internet_activity": {
+                "site_shared": {
+                    window: {"rx_bytes": 100, "tx_bytes": 200}
+                    for window in ("1h", "1d", "1w", "1m")
+                }
+            },
+        }
+    )
+    mock_coordinator.data["protect"]["sensors"] = {
+        "sensor1": {
+            "id": "sensor1",
+            "name": "Environment",
+            "state": "CONNECTED",
+            "stats": {
+                name: {"value": 20} for name in ("temperature", "humidity", "light")
+            },
+            "batteryStatus": {"percentage": 90},
+        }
     }
-    # Pre-create registry entries with existing unique IDs and entity IDs
-    pre_registered = {}
-    for key in (
-        "site_total_clients",
-        "site_wired_clients",
-        "site_wireless_clients",
-        "internet_download_1h",
-        "internet_upload_1h",
-    ):
-        uid = build_site_unique_id("console_a", "site_shared", key)
-        row = entity_registry.async_get_or_create(
-            "sensor",
+    mock_coordinator.data["protect"]["nvrs"] = {
+        "nvr1": {
+            "id": "nvr1",
+            "name": "NVR",
+            "state": "CONNECTED",
+            "storage_used_bytes": 1024**3,
+            "storage_total_bytes": 2 * 1024**3,
+        }
+    }
+    entry.runtime_data = SimpleNamespace(
+        coordinator=mock_coordinator, mobility_coordinator=None, access_coordinator=None
+    )
+
+    # Use independent, pre-change unique IDs and deliberately customized entity
+    # IDs. Reading the same registry rows is insufficient: every target must
+    # become a live entity on its real HA EntityPlatform below.
+    expected = [
+        ("sensor", build_site_unique_id("console_a", "site_shared", desc.key), desc.key)
+        for desc in (*SITE_CLIENT_SENSOR_TYPES, *SITE_INTERNET_ACTIVITY_SENSOR_TYPES)
+    ]
+    expected.extend(
+        ("sensor", f"unifi_insights_sensor_sensor1_{desc.key}", desc.key)
+        for desc in PROTECT_SENSOR_TYPES
+    )
+    expected.extend(
+        ("sensor", f"unifi_insights_nvr_nvr1_{desc.key}", desc.key)
+        for desc in NVR_SENSOR_TYPES
+    )
+    expected.extend(
+        [
+            ("button", "site_shared_device1_device_restart", "device_restart"),
+            ("binary_sensor", "device1_port_sfp_present_25", "port_sfp_present"),
+            ("sensor", "device1_port_speed_25", "port_speed"),
+            ("sensor", "site_shared_wifi1_client_count", "wifi_client_count"),
+            ("image", "site_shared_wifi1_qr_code", "wifi_qr_code"),
+            ("button", "site_shared_client1_reconnect", "client_reconnect"),
+        ]
+    )
+    rows = [
+        entity_registry.async_get_or_create(
+            domain,
             DOMAIN,
-            uid,
-            suggested_object_id=f"default_{key}",
+            unique_id,
             config_entry=entry,
+            translation_key=key,
+            suggested_object_id=f"custom_existing_{index}",
+            disabled_by=None,
         )
-        pre_registered[key] = (row.entity_id, row.unique_id)
+        for index, (domain, unique_id, key) in enumerate(expected)
+    ]
+    platforms = {}
+    try:
+        for domain, module in (
+            ("sensor", sensor_platform),
+            ("button", button_platform),
+            ("binary_sensor", binary_sensor_platform),
+            ("image", image_platform),
+        ):
+            platform = MockEntityPlatform(hass, domain=domain, platform_name=DOMAIN)
+            platform.config_entry = entry
+            platforms[domain] = platform
+            added = []
+            await module.async_setup_entry(hass, entry, added.extend)
+            await platform.async_add_entities(added)
+        await hass.async_block_till_done()
 
-    entities = await _discover_all(hass, entry, mock_coordinator)
-    assert len(entities) > 0
+        for row in rows:
+            # Both assertions fail if discovery skips an entity or changes its
+            # unique ID, even if the old registry row is still present.
+            entity = platforms[row.domain].entities[row.entity_id]
+            assert entity.entity_id == row.entity_id
+            assert entity.unique_id == row.unique_id
+            assert hass.states.get(row.entity_id) is not None
+            current = entity_registry.async_get(row.entity_id)
+            assert current.unique_id == row.unique_id
+            assert current.entity_id == row.entity_id
+            assert current.id == row.id
 
-    # Verify that post-setup, entity_id and unique_id are completely unchanged
-    for orig_entity_id, orig_unique_id in pre_registered.values():
-        entry_record = entity_registry.async_get(orig_entity_id)
-        assert entry_record is not None
-        assert entry_record.unique_id == orig_unique_id
-        assert entry_record.entity_id == orig_entity_id
+        sfp = platforms["binary_sensor"].entities[
+            entity_registry.async_get_entity_id(
+                "binary_sensor", DOMAIN, "device1_port_sfp_present_25"
+            )
+        ]
+        speed = next(
+            entity
+            for entity in platforms["sensor"].entities.values()
+            if entity.unique_id == "device1_port_speed_25"
+        )
+        assert (
+            sfp.translation_placeholders
+            == speed.translation_placeholders
+            == {"port_label": port_label}
+        )
+    finally:
+        for platform in platforms.values():
+            await platform.async_reset()

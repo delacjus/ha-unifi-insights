@@ -65,6 +65,7 @@ from .entity import (
     get_client_type as _get_client_type,
 )
 from .helpers import async_migrate_site_entity
+from .helpers import get_port_label as _get_port_label
 from .innerspace_entity import (
     _discover_innerspace_sensors,
 )
@@ -752,17 +753,6 @@ SFP_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
         value_fn=lambda port: port.get("sfp_serial"),
     ),
 )
-
-
-def _get_port_label(port: dict[str, Any], port_idx: int) -> str:
-    """Return user-friendly port label based on port type."""
-    name = port.get("name")
-    if name and name != f"Port {port_idx}":
-        return str(name)
-    media = port.get("media", "")
-    if media.startswith("SFP"):
-        return f"{media} {port_idx}"
-    return f"Port {port_idx}"
 
 
 # WAN sensor descriptions for UniFi gateways
