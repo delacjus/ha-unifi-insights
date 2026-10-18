@@ -19,7 +19,6 @@ api:
 coordinator:
   - changed-files:
       - any-glob-to-any-file:
-          - custom_components/unifi_insights/coordinator.py
           - custom_components/unifi_insights/coordinators/**
 
 entities:
@@ -47,11 +46,6 @@ diagnostics:
   - changed-files:
       - any-glob-to-any-file:
           - custom_components/unifi_insights/diagnostics.py
-
-repairs:
-  - changed-files:
-      - any-glob-to-any-file:
-          - custom_components/unifi_insights/repairs.py
 
 translations:
   - changed-files:

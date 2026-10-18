@@ -184,8 +184,6 @@ ISP_WAN_NUMBERS: Final = (
 # Protect coordinator - moderate updates for cameras, sensors (30 seconds)
 # Real-time updates via WebSocket when available
 SCAN_INTERVAL_PROTECT = timedelta(seconds=30)
-# Legacy alias for backward compatibility
-SCAN_INTERVAL_NORMAL = SCAN_INTERVAL_DEVICE
 
 UNIFI_API_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
 
@@ -255,90 +253,8 @@ SERVICE_PTZ_PATROL: Final = "ptz_patrol"
 SERVICE_PTZ_MOVE_DESCRIPTION: Final = "Move a PTZ camera to a preset position."
 SERVICE_PTZ_PATROL_DESCRIPTION: Final = "Start or stop a PTZ camera patrol."
 
-# API endpoints
-API_PATH_INFO: Final = "/proxy/protect/integration/v1/meta/info"
-API_PATH_CAMERAS: Final = "/proxy/protect/integration/v1/cameras"
-API_PATH_CAMERA: Final = "/proxy/protect/integration/v1/cameras/{id}"
-API_PATH_CAMERA_SNAPSHOT: Final = "/proxy/protect/integration/v1/cameras/{id}/snapshot"
-API_PATH_CAMERA_RTSPS: Final = "/proxy/protect/integration/v1/cameras/{id}/rtsps-stream"
-API_PATH_LIGHTS: Final = "/proxy/protect/integration/v1/lights"
-API_PATH_LIGHT: Final = "/proxy/protect/integration/v1/lights/{id}"
-API_PATH_SENSORS: Final = "/proxy/protect/integration/v1/sensors"
-API_PATH_SENSOR: Final = "/proxy/protect/integration/v1/sensors/{id}"
-API_PATH_NVRS: Final = "/proxy/protect/integration/v1/nvrs"
-API_PATH_NVR: Final = "/proxy/protect/integration/v1/nvrs/{id}"
-API_PATH_CHIMES: Final = "/proxy/protect/integration/v1/chimes"
-API_PATH_CHIME: Final = "/proxy/protect/integration/v1/chimes/{id}"
-API_PATH_PTZ_MOVE: Final = "/proxy/protect/integration/v1/cameras/{id}/ptz/goto/{slot}"
-API_PATH_PTZ_PATROL_START: Final = (
-    "/proxy/protect/integration/v1/cameras/{id}/ptz/patrol/start/{slot}"
-)
-API_PATH_PTZ_PATROL_STOP: Final = (
-    "/proxy/protect/integration/v1/cameras/{id}/ptz/patrol/stop"
-)
-
-# WebSocket endpoints
-API_PATH_WEBSOCKET_DEVICES: Final = "/proxy/protect/integration/v1/subscribe/devices"
-API_PATH_WEBSOCKET_EVENTS: Final = "/proxy/protect/integration/v1/subscribe/events"
-
-# WebSocket update types
-WS_DEVICE_UPDATE_TYPES: Final = [
-    "camera",
-    "light",
-    "sensor",
-    "nvr",
-    "doorlock",
-    "viewport",
-    "chime",
-]
-WS_EVENT_UPDATE_TYPES: Final = [
-    "motion",
-    "smartDetectZone",
-    "smartDetectLine",
-    "doorbell",
-    "disconnect",
-]
-
-# WebSocket connection parameters - Improved Timeouts
-WS_CONNECTION_TIMEOUT: Final = 15.0  # Increase from 30s to 15s for faster feedback
-WS_INITIAL_CONNECTION_TIMEOUT: Final = 20.0  # Even longer for first connection
-WS_ADAPTIVE_TIMEOUT_MULTIPLIER: Final = 1.5  # Increase timeout on retries
-WS_MAX_CONNECTION_TIMEOUT: Final = 60.0  # Maximum connection timeout
-
-# Heartbeat Configuration
-WS_HEARTBEAT_INTERVAL: Final = 30.0  # Send heartbeat every 30 seconds
-WS_HEARTBEAT_TIMEOUT: Final = 45.0  # Consider connection dead after 45 seconds
-WS_HEALTH_CHECK_INTERVAL: Final = 12.0  # Check health every 12 seconds
-
-# Reconnection Configuration
-WS_RECONNECT_BASE_DELAY: Final = 8.0  # Start with 8 seconds (matches your logs)
-WS_RECONNECT_MAX_DELAY: Final = 120.0  # Increase max delay to 2 minutes
-WS_RECONNECT_JITTER: Final = 0.2  # 20% jitter
-WS_MAX_CONSECUTIVE_ERRORS: Final = 15  # Allow more errors before giving up
-
-# Connection Health
-WS_STALE_CONNECTION_THRESHOLD: Final = (
-    60.0  # Force reconnect if no messages for 60 seconds
-)
-
-# WebSocket connection states
-WS_STATE_DISCONNECTED: Final = "disconnected"
-WS_STATE_CONNECTING: Final = "connecting"
-WS_STATE_CONNECTED: Final = "connected"
-WS_STATE_RECONNECTING: Final = "reconnecting"
-WS_STATE_FAILED: Final = "failed"
-
-# WebSocket error types
-WS_ERROR_NETWORK: Final = "network_error"
-WS_ERROR_AUTHENTICATION: Final = "authentication_error"
-WS_ERROR_SERVER: Final = "server_error"
-WS_ERROR_TIMEOUT: Final = "timeout_error"
-WS_ERROR_UNKNOWN: Final = "unknown_error"
-
 # Camera states
 CAMERA_STATE_CONNECTED: Final = "CONNECTED"
-CAMERA_STATE_CONNECTING: Final = "CONNECTING"
-CAMERA_STATE_DISCONNECTED: Final = "DISCONNECTED"
 
 # Camera types
 CAMERA_TYPE_REGULAR: Final = "regular"
@@ -370,14 +286,10 @@ SMART_DETECT_PACKAGE: Final = "package"
 # Sensor attributes
 ATTR_SENSOR_ID: Final = "sensor_id"
 ATTR_SENSOR_NAME: Final = "sensor_name"
-ATTR_SENSOR_TYPE: Final = "sensor_type"
-ATTR_SENSOR_STATE: Final = "sensor_state"
 ATTR_SENSOR_BATTERY: Final = "battery_percentage"
 ATTR_SENSOR_BATTERY_LOW: Final = "battery_low"
 ATTR_SENSOR_MOTION_DETECTED: Final = "motion_detected"
 ATTR_SENSOR_MOTION_DETECTED_AT: Final = "motion_detected_at"
-ATTR_SENSOR_MOTION_ENABLED: Final = "motion_enabled"
-ATTR_SENSOR_MOTION_SENSITIVITY: Final = "motion_sensitivity"
 ATTR_SENSOR_IS_OPENED: Final = "is_opened"
 ATTR_SENSOR_OPEN_STATUS_CHANGED_AT: Final = "open_status_changed_at"
 ATTR_SENSOR_LIGHT_VALUE: Final = "light_value"
@@ -385,7 +297,6 @@ ATTR_SENSOR_HUMIDITY_VALUE: Final = "humidity_value"
 ATTR_SENSOR_TEMPERATURE_VALUE: Final = "temperature_value"
 ATTR_SENSOR_TAMPER_DETECTED: Final = "tamper_detected"
 ATTR_SENSOR_TAMPER_DETECTED_AT: Final = "tamper_detected_at"
-ATTR_SENSOR_ALARM_ENABLED: Final = "alarm_enabled"
 ATTR_SENSOR_LEAK_DETECTED: Final = "leak_detected"
 ATTR_SENSOR_LEAK_DETECTED_AT: Final = "leak_detected_at"
 ATTR_SENSOR_EXTERNAL_LEAK_DETECTED: Final = "external_leak_detected"
@@ -425,12 +336,9 @@ STORAGE_NEARLY_FULL_PERCENT: Final = 90
 # Chime attributes
 ATTR_CHIME_ID: Final = "chime_id"
 ATTR_CHIME_NAME: Final = "chime_name"
-ATTR_CHIME_STATE: Final = "chime_state"
 ATTR_CHIME_VOLUME: Final = "chime_volume"
 ATTR_CHIME_RINGTONE_ID: Final = "chime_ringtone_id"
 ATTR_CHIME_REPEAT_TIMES: Final = "chime_repeat_times"
-ATTR_CHIME_CAMERA_IDS: Final = "chime_camera_ids"
-ATTR_CHIME_RING_SETTINGS: Final = "chime_ring_settings"
 
 # Chime services
 SERVICE_SET_CHIME_VOLUME: Final = "set_chime_volume"
@@ -443,83 +351,6 @@ SERVICE_SET_CHIME_PAIRED_DOORBELLS: Final = "set_chime_paired_doorbells"
 LIGHT_MODE_ALWAYS: Final = "always"
 LIGHT_MODE_MOTION: Final = "motion"
 LIGHT_MODE_OFF: Final = "off"
-
-# UniFi Network API endpoints
-API_PATH_NETWORK_INFO: Final = "/v1/info"
-API_PATH_NETWORK_SITES: Final = "/v1/sites"
-API_PATH_NETWORK_DEVICES: Final = "/v1/sites/{siteId}/devices"
-API_PATH_NETWORK_DEVICE: Final = "/v1/sites/{siteId}/devices/{deviceId}"
-API_PATH_NETWORK_DEVICE_STATS: Final = (
-    "/v1/sites/{siteId}/devices/{deviceId}/statistics/latest"
-)
-API_PATH_NETWORK_PORT_ACTION: Final = (
-    "/v1/sites/{siteId}/devices/{deviceId}/interfaces/ports/{portIdx}/actions"
-)
-API_PATH_NETWORK_CLIENTS: Final = "/v1/sites/{siteId}/clients"
-API_PATH_NETWORK_CLIENT: Final = "/v1/sites/{siteId}/clients/{clientId}"
-API_PATH_NETWORK_CLIENT_ACTION: Final = "/v1/sites/{siteId}/clients/{clientId}/actions"
-API_PATH_NETWORK_VOUCHERS: Final = "/v1/sites/{siteId}/hotspot/vouchers"
-API_PATH_NETWORK_VOUCHER: Final = "/v1/sites/{siteId}/hotspot/vouchers/{voucherId}"
-
-# UniFi Network switching endpoints (Network 10.4.57)
-API_PATH_NETWORK_LAGS: Final = "/v1/sites/{siteId}/switching/lags"
-API_PATH_NETWORK_LAG: Final = "/v1/sites/{siteId}/switching/lags/{lagId}"
-API_PATH_NETWORK_MC_LAG_DOMAINS: Final = "/v1/sites/{siteId}/switching/mc-lag-domains"
-API_PATH_NETWORK_MC_LAG_DOMAIN: Final = (
-    "/v1/sites/{siteId}/switching/mc-lag-domains/{mcLagDomainId}"
-)
-API_PATH_NETWORK_SWITCH_STACKS: Final = "/v1/sites/{siteId}/switching/switch-stacks"
-API_PATH_NETWORK_SWITCH_STACK: Final = (
-    "/v1/sites/{siteId}/switching/switch-stacks/{switchStackId}"
-)
-
-# UniFi Protect additional API endpoints
-API_PATH_VIEWERS: Final = "/proxy/protect/integration/v1/viewers"
-API_PATH_VIEWER: Final = "/proxy/protect/integration/v1/viewers/{id}"
-API_PATH_LIVEVIEWS: Final = "/proxy/protect/integration/v1/liveviews"
-API_PATH_LIVEVIEW: Final = "/proxy/protect/integration/v1/liveviews/{id}"
-API_PATH_ALARM_WEBHOOK: Final = (
-    "/proxy/protect/integration/v1/alarm-manager/webhook/{id}"
-)
-API_PATH_CAMERA_TALKBACK: Final = (
-    "/proxy/protect/integration/v1/cameras/{id}/talkback-session"
-)
-API_PATH_FILES: Final = "/proxy/protect/integration/v1/files/{fileType}"
-
-# UniFi Protect additional device families (Protect 7.1.87)
-API_PATH_ALARM_HUBS: Final = "/proxy/protect/integration/v1/alarm-hubs"
-API_PATH_ALARM_HUB: Final = "/proxy/protect/integration/v1/alarm-hubs/{id}"
-API_PATH_ALARM_HUB_OUTPUT_TRIGGER: Final = (
-    "/proxy/protect/integration/v1/alarm-hubs/{id}/outputs/{outputId}/trigger"
-)
-API_PATH_ARM_PROFILES: Final = "/proxy/protect/integration/v1/arm-profiles"
-API_PATH_ARM_PROFILE: Final = "/proxy/protect/integration/v1/arm-profiles/{id}"
-API_PATH_ARM_PROFILES_ENABLE: Final = (
-    "/proxy/protect/integration/v1/arm-profiles/enable"
-)
-API_PATH_ARM_PROFILES_DISABLE: Final = (
-    "/proxy/protect/integration/v1/arm-profiles/disable"
-)
-API_PATH_ARM_PROFILES_SETTINGS: Final = (
-    "/proxy/protect/integration/v1/arm-profiles/settings"
-)
-API_PATH_BRIDGES: Final = "/proxy/protect/integration/v1/bridges"
-API_PATH_BRIDGE: Final = "/proxy/protect/integration/v1/bridges/{id}"
-API_PATH_FOBS: Final = "/proxy/protect/integration/v1/fobs"
-API_PATH_FOB: Final = "/proxy/protect/integration/v1/fobs/{id}"
-API_PATH_RELAYS: Final = "/proxy/protect/integration/v1/relays"
-API_PATH_RELAY: Final = "/proxy/protect/integration/v1/relays/{id}"
-API_PATH_RELAY_OUTPUT_ACTIVATE: Final = (
-    "/proxy/protect/integration/v1/relays/{id}/outputs/{outputId}/activate"
-)
-API_PATH_SIRENS: Final = "/proxy/protect/integration/v1/sirens"
-API_PATH_SIREN: Final = "/proxy/protect/integration/v1/sirens/{id}"
-API_PATH_SIREN_PLAY: Final = "/proxy/protect/integration/v1/sirens/{id}/play"
-API_PATH_SIREN_STOP: Final = "/proxy/protect/integration/v1/sirens/{id}/stop"
-API_PATH_SPEAKERS: Final = "/proxy/protect/integration/v1/speakers"
-API_PATH_SPEAKER: Final = "/proxy/protect/integration/v1/speakers/{id}"
-API_PATH_LINK_STATIONS: Final = "/proxy/protect/integration/v1/link-stations"
-API_PATH_LINK_STATION: Final = "/proxy/protect/integration/v1/link-stations/{id}"
 
 # UniFi Network Services
 SERVICE_POWER_CYCLE_PORT: Final = "power_cycle_port"
@@ -554,18 +385,3 @@ CLIENT_ACTION_AUTHORIZE_GUEST: Final = "AUTHORIZE_GUEST_ACCESS"
 # Viewer attributes
 ATTR_VIEWER_ID: Final = "viewer_id"
 ATTR_VIEWER_NAME: Final = "viewer_name"
-ATTR_VIEWER_STATE: Final = "viewer_state"
-ATTR_VIEWER_LIVEVIEW: Final = "viewer_liveview"
-
-# Liveview attributes
-ATTR_LIVEVIEW_ID: Final = "liveview_id"
-ATTR_LIVEVIEW_NAME: Final = "liveview_name"
-ATTR_LIVEVIEW_LAYOUT: Final = "liveview_layout"
-ATTR_LIVEVIEW_IS_DEFAULT: Final = "liveview_is_default"
-
-# Sensor mount types
-SENSOR_MOUNT_DOOR: Final = "door"
-SENSOR_MOUNT_WINDOW: Final = "window"
-SENSOR_MOUNT_GARAGE: Final = "garage"
-SENSOR_MOUNT_LEAK: Final = "leak"
-SENSOR_MOUNT_MOTION: Final = "motion"

@@ -2,7 +2,7 @@
 
 The 7.1.87 integration REST API does not expose a dedicated ``/viewports``
 resource; viewports are surfaced through the ``viewport`` WebSocket
-``modelKey`` (see ``WS_DEVICE_UPDATE_TYPES``). This tolerant model is used to
+``modelKey`` mechanism. This tolerant model is used to
 parse those WebSocket payloads.
 """
 

@@ -1,5 +1,5 @@
 ---
-applyTo: "custom_components/unifi_insights/coordinator.py, custom_components/unifi_insights/coordinators/**/*.py"
+applyTo: "custom_components/unifi_insights/coordinators/**/*.py"
 ---
 
 # Coordinator Instructions
