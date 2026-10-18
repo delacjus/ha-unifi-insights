@@ -367,9 +367,6 @@
       "humidity": {
         "name": "Humidity"
       },
-      "light_level": {
-        "name": "Light Level"
-      },
       "light": {
         "name": "Light"
       },
@@ -725,21 +722,6 @@
       "port_sfp_present": {
         "name": "{port_label} SFP module"
       },
-      "motion": {
-        "name": "Motion"
-      },
-      "door": {
-        "name": "Door"
-      },
-      "is_recording": {
-        "name": "Recording"
-      },
-      "is_dark": {
-        "name": "Dark"
-      },
-      "doorbell": {
-        "name": "Doorbell"
-      },
       "alarm_hub_device_tamper": {
         "name": "Tamper Detection"
       },
@@ -759,9 +741,6 @@
     "button": {
       "device_restart": {
         "name": "Device restart"
-      },
-      "reboot": {
-        "name": "Reboot"
       },
       "play": {
         "name": "Play"
@@ -788,22 +767,9 @@
         "name": "{client_name} reconnect"
       }
     },
-    "camera": {
-      "camera": {
-        "name": "Camera"
-      }
-    },
-    "light": {
-      "floodlight": {
-        "name": "Floodlight"
-      }
-    },
     "switch": {
       "status_light": {
         "name": "Status Light"
-      },
-      "hdr_mode": {
-        "name": "HDR Mode"
       },
       "high_fps_mode": {
         "name": "High FPS Mode"
@@ -881,9 +847,6 @@
       },
       "liveview": {
         "name": "Liveview"
-      },
-      "infrared_mode": {
-        "name": "Infrared Mode"
       }
     },
     "number": {
@@ -892,9 +855,6 @@
       },
       "brightness_level": {
         "name": "Brightness Level"
-      },
-      "speaker_volume": {
-        "name": "Speaker Volume"
       },
       "chime_volume": {
         "name": "Chime Volume"
