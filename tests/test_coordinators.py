@@ -470,6 +470,29 @@ class TestUnifiBaseCoordinator:
         result = coordinator._model_to_dict(mock_model)
         assert result == {"id": "fallback"}
 
+    @pytest.mark.parametrize(
+        ("side_effects", "expected_calls"),
+        [
+            (["not_a_dict"], 1),
+            ([TypeError("by_alias not supported"), "not_a_dict"], 2),
+        ],
+        ids=["direct_non_dict", "type_error_fallback_non_dict"],
+    )
+    def test_model_to_dict_non_dict_results(
+        self,
+        coordinator: UnifiBaseCoordinator,
+        side_effects: list[Any],
+        expected_calls: int,
+    ) -> None:
+        """Test model_to_dict returns {} when model_dump or
+        TypeError fallback returns non-dict.
+        """
+        mock_model = MagicMock()
+        mock_model.model_dump = MagicMock(side_effect=side_effects)
+        result = coordinator._model_to_dict(mock_model)
+        assert result == {}
+        assert mock_model.model_dump.call_count == expected_calls
+
     def test_model_to_dict_with_object_dict(self, coordinator: UnifiBaseCoordinator):
         """Test model_to_dict with object having __dict__."""
 
@@ -1166,6 +1189,11 @@ class TestUnifiConfigCoordinator:
         """Test getting missing site."""
         result = coordinator.get_site("nonexistent")
         assert result is None
+
+    def test_get_site_non_dict_entry(self, coordinator: UnifiConfigCoordinator):
+        """Test getting site when site entry in data is not a dict."""
+        coordinator.data["sites"] = {"site1": "not a dict"}
+        assert coordinator.get_site("site1") is None
 
     def test_get_site_ids(self, coordinator: UnifiConfigCoordinator):
         """Test getting all site IDs."""
@@ -3581,6 +3609,37 @@ class TestUnifiDeviceCoordinator:
         assert stats["clients"][2] is fallback
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stats_response", [None, {}], ids=["stats_none", "stats_empty"]
+    )
+    @pytest.mark.parametrize(
+        "use_index", [False, True], ids=["scanning_path", "indexed_path"]
+    )
+    async def test_process_device_empty_stats_skips_client_assignment(
+        self,
+        coordinator: UnifiDeviceCoordinator,
+        stats_response: Any,
+        *,
+        use_index: bool,
+    ) -> None:
+        """When device statistics are empty or None, no clients or id keys are added."""
+        coordinator.network_client.devices.get_statistics = AsyncMock(
+            return_value=stats_response
+        )
+        device = {"id": "device1", "name": "Device 1"}
+        clients = [{"id": "client1", "uplinkDeviceId": "device1"}]
+        clients_by_uplink = {"device1": clients} if use_index else None
+
+        result = await coordinator._process_device(
+            "default",
+            device,
+            clients,
+            clients_by_uplink=clients_by_uplink,
+        )
+
+        assert result == ("device1", device, {})
+
+    @pytest.mark.asyncio
     async def test_process_site_groups_clients_by_uplink(
         self, coordinator: UnifiDeviceCoordinator
     ) -> None:
@@ -4315,6 +4374,53 @@ class TestUnifiProtectCoordinator:
         # Should not add device without ID
         assert len(coordinator.data["cameras"]) == 0
 
+    def test_handle_device_update_unknown_model_type(
+        self, coordinator: UnifiProtectCoordinator
+    ) -> None:
+        """Test handling unknown device model type notifies listeners and
+        preserves collections.
+        """
+        coordinator.data["cameras"] = {"camera1": {"id": "camera1", "name": "Cam 1"}}
+        coordinator.data["lights"] = {"light1": {"id": "light1", "name": "Light 1"}}
+        snapshot_cameras = dict(coordinator.data["cameras"])
+        snapshot_lights = dict(coordinator.data["lights"])
+        snapshot_sensors = dict(coordinator.data["sensors"])
+        snapshot_nvrs = dict(coordinator.data["nvrs"])
+        snapshot_viewers = dict(coordinator.data["viewers"])
+        snapshot_chimes = dict(coordinator.data["chimes"])
+
+        listener = MagicMock()
+        coordinator.async_add_listener(listener)
+
+        with patch.object(
+            coordinator,
+            "async_set_updated_data",
+            wraps=coordinator.async_set_updated_data,
+        ) as mock_set_data:
+            # 1. Update without id returns early and does not notify
+            coordinator._handle_device_update("unknown_type", {"name": "No ID"})
+            coordinator._handle_device_update(
+                "unknown_type", {"id": "", "name": "Empty ID"}
+            )
+            listener.assert_not_called()
+            mock_set_data.assert_not_called()
+
+            # 2. Update with id notifies through async_set_updated_data fall-through
+            coordinator._handle_device_update(
+                "unknown_type", {"id": "unk1", "name": "Unknown"}
+            )
+            listener.assert_called_once()
+            mock_set_data.assert_called_once_with(coordinator.data)
+            assert coordinator.last_update_success is True
+
+        # 3. Known collections are untouched
+        assert coordinator.data["cameras"] == snapshot_cameras
+        assert coordinator.data["lights"] == snapshot_lights
+        assert coordinator.data["sensors"] == snapshot_sensors
+        assert coordinator.data["nvrs"] == snapshot_nvrs
+        assert coordinator.data["viewers"] == snapshot_viewers
+        assert coordinator.data["chimes"] == snapshot_chimes
+
     def test_handle_event_update_motion(self, coordinator: UnifiProtectCoordinator):
         """Test handling motion event."""
         # First add a camera
@@ -4403,6 +4509,63 @@ class TestUnifiProtectCoordinator:
 
         # Events should not change without event ID
         assert coordinator.data["events"] == initial_events
+
+    def test_handle_event_update_event_id_semantics(
+        self, coordinator: UnifiProtectCoordinator
+    ) -> None:
+        """Test event ID semantics: missing/empty IDs dropped, distinct IDs accumulate,
+        repeated IDs replace, notification count matches accepted events."""
+        listener = MagicMock()
+        coordinator.async_add_listener(listener)
+
+        with patch.object(
+            coordinator,
+            "async_update_listeners",
+            wraps=coordinator.async_update_listeners,
+        ) as notify:
+            # 1. Missing or empty event ID is dropped and produces no notification
+            coordinator._handle_event_update("motion", {"device": "camera1"})
+            coordinator._handle_event_update("motion", {"id": "", "device": "camera1"})
+            assert coordinator.data["events"].get("motion", {}) == {}
+            notify.assert_not_called()
+            listener.assert_not_called()
+
+            # 2. Distinct IDs accumulate and notify once per accepted event
+            coordinator._handle_event_update(
+                "motion", {"id": "ev1", "device": "camera1", "start": 100}
+            )
+            assert notify.call_count == 1
+            assert listener.call_count == 1
+            assert coordinator.data["events"]["motion"]["ev1"] == {
+                "id": "ev1",
+                "device": "camera1",
+                "start": 100,
+            }
+
+            coordinator._handle_event_update(
+                "motion", {"id": "ev2", "device": "camera1", "start": 200}
+            )
+            assert notify.call_count == 2
+            assert listener.call_count == 2
+            assert set(coordinator.data["events"]["motion"].keys()) == {"ev1", "ev2"}
+            assert coordinator.data["events"]["motion"]["ev2"] == {
+                "id": "ev2",
+                "device": "camera1",
+                "start": 200,
+            }
+
+            # 3. Repeated ID replaces previous event and notifies
+            coordinator._handle_event_update(
+                "motion", {"id": "ev1", "device": "camera1", "end": 400}
+            )
+            assert notify.call_count == 3
+            assert listener.call_count == 3
+            assert set(coordinator.data["events"]["motion"].keys()) == {"ev1", "ev2"}
+            assert coordinator.data["events"]["motion"]["ev1"] == {
+                "id": "ev1",
+                "device": "camera1",
+                "end": 400,
+            }
 
     def test_get_camera_existing(self, coordinator: UnifiProtectCoordinator):
         """Test getting existing camera."""
@@ -5416,6 +5579,35 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["nvrs"] == {}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "empty_response",
+        [
+            None,
+            {},
+            {"name": "No ID NVR"},
+        ],
+        ids=["none", "empty_dict", "id_less_record"],
+    )
+    async def test_fetch_nvr_empty_responses_preserve_then_clear_cache(
+        self, coordinator: UnifiProtectCoordinator, empty_response: Any
+    ) -> None:
+        """Test NVR responses with None, empty dict, or ID-less record preserve
+        cache for MAX_CONSECUTIVE_EMPTY_FETCHES polls and then clear it,
+        without mocking _model_to_dict.
+        """
+        cached = {"nvr1": {"id": "nvr1", "name": "NVR"}}
+        coordinator.data["nvrs"] = dict(cached)
+        coordinator._consecutive_empty_fetches["nvrs"] = 0
+        coordinator.protect_client.nvr.get = AsyncMock(return_value=empty_response)
+
+        for _ in range(MAX_CONSECUTIVE_EMPTY_FETCHES):
+            await coordinator._fetch_nvr()
+            assert "nvr1" in coordinator.data["nvrs"]
+
+        await coordinator._fetch_nvr()
+        assert coordinator.data["nvrs"] == {}
+
+    @pytest.mark.asyncio
     async def test_fetch_cameras_preserves_cache_on_transient_empty(
         self, coordinator: UnifiProtectCoordinator
     ):
@@ -5935,16 +6127,43 @@ class TestUnifiProtectCoordinator:
         assert coordinator.data["cameras"]["camera1"]["hasPtz"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"featureFlags": "not_a_dict"},
+            {"feature_flags": "x"},
+            {"featureFlags": "not_a_dict", "feature_flags": "x"},
+            {"feature_flags": None},
+            {"featureFlags": "not_a_dict", "feature_flags": None},
+            {"feature_flags": []},
+            {"featureFlags": "not_a_dict", "feature_flags": []},
+            {"feature_flags": 5},
+            {"featureFlags": "not_a_dict", "feature_flags": 5},
+        ],
+        ids=[
+            "camel_non_dict",
+            "snake_str_absent_camel",
+            "snake_str_non_dict_camel",
+            "snake_none_absent_camel",
+            "snake_none_non_dict_camel",
+            "snake_list_absent_camel",
+            "snake_list_non_dict_camel",
+            "snake_int_absent_camel",
+            "snake_int_non_dict_camel",
+        ],
+    )
     async def test_fetch_cameras_non_dict_feature_flags(
-        self, coordinator: UnifiProtectCoordinator
-    ):
-        """Test camera fetch handles non-dict featureFlags."""
+        self, coordinator: UnifiProtectCoordinator, payload: dict[str, Any]
+    ) -> None:
+        """Test camera fetch handles non-dict featureFlags and
+        snake-case feature_flags.
+        """
         mock_camera = MagicMock()
         mock_camera.model_dump = MagicMock(
             return_value={
                 "id": "camera2",
                 "name": "Camera 2",
-                "featureFlags": "not_a_dict",  # Invalid type
+                **payload,
             }
         )
         coordinator.protect_client.cameras.get_all = AsyncMock(
@@ -5956,6 +6175,34 @@ class TestUnifiProtectCoordinator:
         assert "camera2" in coordinator.data["cameras"]
         # Should default to empty list when featureFlags is not a dict
         assert coordinator.data["cameras"]["camera2"]["smartDetectTypes"] == []
+        assert coordinator.data["cameras"]["camera2"]["featureFlags"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_cameras_valid_snake_case_feature_flags(
+        self, coordinator: UnifiProtectCoordinator
+    ) -> None:
+        """Test camera fetch normalises valid snake-case feature_flags into
+        featureFlags.
+        """
+        mock_camera = MagicMock()
+        mock_camera.model_dump = MagicMock(
+            return_value={
+                "id": "camera2",
+                "name": "Camera 2",
+                "feature_flags": {"smartDetectTypes": ["person"]},
+            }
+        )
+        coordinator.protect_client.cameras.get_all = AsyncMock(
+            return_value=[mock_camera]
+        )
+
+        await coordinator._fetch_cameras()
+
+        assert "camera2" in coordinator.data["cameras"]
+        assert coordinator.data["cameras"]["camera2"]["featureFlags"] == {
+            "smartDetectTypes": ["person"]
+        }
+        assert coordinator.data["cameras"]["camera2"]["smartDetectTypes"] == ["person"]
 
     @pytest.mark.asyncio
     async def test_fetch_cameras_no_feature_flags(
@@ -6331,6 +6578,19 @@ class TestUnifiProtectCoordinator:
         protect_client.lights.last_result_complete = True
         await coordinator._fetch_lights()
         assert list(coordinator.data["lights"].keys()) == ["light1"]
+        protect_client.cameras.get_all = AsyncMock(
+            return_value=[
+                Camera.model_validate(
+                    {"id": "camera1", "mac": "00:11:22:33:44:00", "name": "Camera 1"}
+                ),
+                Camera.model_validate(
+                    {"id": "", "mac": "00:11:22:33:44:01", "name": "NoIDCamera"}
+                ),
+            ]
+        )
+        protect_client.cameras.last_result_complete = True
+        await coordinator._fetch_cameras()
+        assert list(coordinator.data["cameras"].keys()) == ["camera1"]
         protect_client.sensors.get_all = AsyncMock(
             return_value=[
                 Sensor.model_validate(
