@@ -2,7 +2,7 @@
 
 The 7.1.87 integration REST API does not expose a dedicated ``/doorlocks``
 resource; door locks are surfaced through the ``doorlock`` WebSocket
-``modelKey`` (see ``WS_DEVICE_UPDATE_TYPES``). This tolerant model is used to
+``modelKey`` mechanism. This tolerant model is used to
 parse those WebSocket payloads.
 """
 
