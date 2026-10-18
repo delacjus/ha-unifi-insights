@@ -229,6 +229,13 @@ def _collect_live_entity_translation_keys() -> tuple[
                                 and call_platform
                             ):
                                 inventory.add((call_platform, constants[kw.value.id]))
+                            elif not (
+                                isinstance(kw.value, ast.Constant)
+                                and kw.value.value is None
+                            ):
+                                dynamic_unresolved.append(
+                                    (py_file.name, node.lineno, ast.unparse(kw.value))
+                                )
 
             elif isinstance(node, ast.Assign):
                 for target in node.targets:
@@ -864,6 +871,34 @@ def test_translation_inventory_rejects_unreviewed_dynamic_keys(
             if module == "switch"
             else {("event", "network_rule_changes")}
         )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ('"device_status"', True),
+        ("RULE_CHANGE_EVENT_KEY", True),
+        ("None", True),
+        ('f"port_{idx}"', False),
+        ("make_key()", False),
+    ],
+)
+def test_translation_inventory_rejects_unresolved_description_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expression: str,
+    *,
+    expected: bool,
+) -> None:
+    """Description translation keys must resolve to a literal or constant."""
+    (tmp_path / "sensor.py").write_text(
+        'RULE_CHANGE_EVENT_KEY = "network_rule_changes"\n'
+        f'DESC = SensorEntityDescription(key="k", translation_key={expression})\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(__name__ + "._INTEGRATION_DIR", tmp_path)
+    _, unresolved = _collect_live_entity_translation_keys()
+    assert bool(unresolved) is not expected
 
 
 def test_outlet_icon_resource() -> None:
