@@ -178,8 +178,6 @@ BUTTON_TYPES: tuple[UnifiInsightsButtonEntityDescription, ...] = (
     UnifiInsightsButtonEntityDescription(
         key="device_restart",
         translation_key="device_restart",
-        name="Device Restart",
-        icon="mdi:restart",
     ),
 )
 
@@ -670,7 +668,6 @@ class UnifiProtectChimePlayButton(UnifiProtectEntity, ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "play"
-    _attr_icon = "mdi:bell-ring-outline"
 
     def __init__(
         self,
@@ -722,7 +719,7 @@ class UnifiClientReconnectButton(
     """Button to force a client to reconnect."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:refresh"
+    _attr_translation_key = "client_reconnect"
 
     def __init__(
         self,
@@ -744,7 +741,7 @@ class UnifiClientReconnectButton(
         )
 
         self._attr_unique_id = f"{site_id}_{client_id}_reconnect"
-        self._attr_name = f"{client_name} Reconnect"
+        self._attr_translation_placeholders = {"client_name": client_name}
 
         # Device info - associate with the connected network device (switch/AP)
         uplink_device_id = client_data.get("uplinkDeviceId") or client_data.get(
@@ -876,7 +873,6 @@ class UnifiProtectPTZPatrolStartButton(UnifiProtectEntity, ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "ptz_patrol_start"
-    _attr_icon = "mdi:cctv"
 
     def __init__(
         self,
@@ -909,7 +905,6 @@ class UnifiProtectPTZPatrolStopButton(UnifiProtectEntity, ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "ptz_patrol_stop"
-    _attr_icon = "mdi:stop-circle-outline"
 
     def __init__(
         self,

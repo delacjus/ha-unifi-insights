@@ -13,6 +13,7 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_VERIFY_SSL,
     PERCENTAGE,
+    UnitOfDataRate,
     UnitOfInformation,
     UnitOfTemperature,
 )
@@ -20,6 +21,7 @@ from homeassistant.helpers.entity_registry import (
     RegistryEntryDisabler,
     RegistryEntryHider,
 )
+from homeassistant.helpers.typing import UNDEFINED
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 if TYPE_CHECKING:
@@ -751,6 +753,10 @@ class TestUnifiPortSensor:
     async def test_port_speed(self, hass: HomeAssistant, mock_coordinator):
         """Test port speed sensor."""
         description = next(s for s in PORT_SENSOR_TYPES if s.key == "port_speed")
+        assert description.device_class == SensorDeviceClass.DATA_RATE
+        assert (
+            description.native_unit_of_measurement == UnitOfDataRate.MEGABITS_PER_SECOND
+        )
 
         sensor = UnifiPortSensor(
             coordinator=mock_coordinator,
@@ -4017,6 +4023,9 @@ class TestUnifiWifiClientCountSensor:
             coordinator=coordinator, site_id="site1", wifi_id="wifi1"
         )
         assert sensor.available is True
+        assert sensor.translation_key == "wifi_client_count"
+        assert sensor.has_entity_name is True
+        assert getattr(sensor, "_attr_name", None) is None
 
         coordinator.wifi_available.return_value = False
         assert sensor.available is False
@@ -4071,9 +4080,10 @@ class TestUnifiSiteInternetActivitySensor:
                 unique_id="console_site1_" + desc.key,
             )
             assert "_attr_name" not in sensor.__dict__
-            assert sensor.entity_description.name == desc.name
-            assert isinstance(desc.name, str)
-            assert desc.name.startswith("Internet ")
+
+            assert sensor.entity_description.name in (None, UNDEFINED)
+            assert desc.name in (None, UNDEFINED)
+            assert desc.key.startswith("internet_")
             assert sensor.unique_id == f"console_site1_{desc.key}"
             assert sensor.available is True
             assert sensor.native_value == expected_keys[desc.key]

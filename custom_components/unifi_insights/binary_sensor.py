@@ -254,6 +254,7 @@ BINARY_SENSOR_TYPES: tuple[UnifiInsightsBinarySensorEntityDescription, ...] = (
         key="device_status",
         translation_key="device_status",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=is_device_online,
         entity_type="device",
     ),
@@ -263,7 +264,6 @@ BINARY_SENSOR_TYPES: tuple[UnifiInsightsBinarySensorEntityDescription, ...] = (
         translation_key="wan_status",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
-        icon="mdi:wan",
         value_fn=is_device_online,
         entity_type="device",
     ),
@@ -736,9 +736,6 @@ class UnifiInsightsBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
             site_id,
         )
 
-        # Mark binary sensors as "Diagnostic" entities
-        self._attr_entity_category = EntityCategory.DIAGNOSTIC
-
     @property
     def is_on(self) -> bool | None:
         """Return true if the binary sensor is on."""
@@ -880,7 +877,6 @@ class UnifiPortBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
         desc = UnifiInsightsBinarySensorEntityDescription(
             key=f"port_sfp_present_{port_idx}",
             translation_key="port_sfp_present",
-            name=f"{port_label} SFP Module",
             device_class=BinarySensorDeviceClass.CONNECTIVITY,
             entity_category=EntityCategory.DIAGNOSTIC,
             entity_type="device",
@@ -888,7 +884,8 @@ class UnifiPortBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
         super().__init__(coordinator, desc, site_id, device_id)
         self.entity_description = desc
         self._port_idx = port_idx
-        self._attr_name = f"{port_label} SFP Module"
+        label = port_label or f"Port {port_idx}"
+        self._attr_translation_placeholders = {"port_label": label}
         self._attr_unique_id = f"{device_id}_port_sfp_present_{port_idx}"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -1008,7 +1005,6 @@ class UnifiInsightsSiteToSiteVpnBinarySensor(UnifiInsightsEntity, BinarySensorEn
             key=f"site_to_site_vpn_{tunnel_id}",
             translation_key="site_to_site_vpn",
             device_class=BinarySensorDeviceClass.CONNECTIVITY,
-            icon="mdi:vpn",
             entity_type="device",
         )
         super().__init__(coordinator, desc, site_id, device_id)

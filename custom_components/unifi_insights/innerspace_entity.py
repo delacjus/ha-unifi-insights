@@ -175,7 +175,6 @@ INNERSPACE_PLACEMENT_DESCRIPTION = SensorEntityDescription(
     device_class=SensorDeviceClass.ENUM,
     options=["placed", "unplaced", "unknown"],
     entity_category=EntityCategory.DIAGNOSTIC,
-    icon="mdi:floor-plan",
 )
 
 

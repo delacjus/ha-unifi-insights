@@ -14,6 +14,7 @@ import ast
 import json
 from pathlib import Path
 from string import Formatter
+from typing import Final
 
 import yaml
 
@@ -88,33 +89,241 @@ def test_en_json_camera_and_sensor_names_match_strings_json() -> None:
             assert en_binary_sensor[key] == value
 
 
+_PLATFORMS: Final = {
+    "alarm_control_panel",
+    "binary_sensor",
+    "button",
+    "camera",
+    "cover",
+    "device_tracker",
+    "event",
+    "image",
+    "light",
+    "lock",
+    "media_player",
+    "number",
+    "select",
+    "sensor",
+    "siren",
+    "switch",
+    "update",
+}
+
+_DESC_CLASS_TO_PLATFORM: Final = {
+    "BinarySensorEntityDescription": "binary_sensor",
+    "UnifiInsightsBinarySensorEntityDescription": "binary_sensor",
+    "UnifiProtectSecurityBinarySensorEntityDescription": "binary_sensor",
+    "SensorEntityDescription": "sensor",
+    "UnifiInsightsSensorEntityDescription": "sensor",
+    "UnifiProtectSensorEntityDescription": "sensor",
+    "UnifiProtectSecuritySensorEntityDescription": "sensor",
+    "UnifiSiteInternetActivitySensorEntityDescription": "sensor",
+    "UnifiStorageSensorEntityDescription": "sensor",
+    "UnifiVoucherSensorEntityDescription": "sensor",
+    "CarrierFabricAggregateSensorDescription": "sensor",
+    "UnifiMobilitySensorEntityDescription": "sensor",
+    "UnifiMobilityWorkspaceSensorEntityDescription": "sensor",
+    "ButtonEntityDescription": "button",
+    "UnifiInsightsButtonEntityDescription": "button",
+    "SwitchEntityDescription": "switch",
+    "UnifiInsightsSwitchEntityDescription": "switch",
+    "UnifiNetworkRuleSwitchEntityDescription": "switch",
+    "SelectEntityDescription": "select",
+    "NumberEntityDescription": "number",
+    "UnifiInsightsNumberEntityDescription": "number",
+    "EventEntityDescription": "event",
+    "UpdateEntityDescription": "update",
+    "CoverEntityDescription": "cover",
+    "LockEntityDescription": "lock",
+    "ImageEntityDescription": "image",
+    "UnifiInsightsImageEntityDescription": "image",
+}
+
+_MODULE_DEFAULT_PLATFORM: Final = {
+    "carrier_fabric_sensor": "sensor",
+    "mobility_entity": "sensor",
+    "network_rule_switch": "switch",
+    "network_rule_audit_event": "event",
+    "site_internet_activity_sensor": "sensor",
+    "storage_entity": "sensor",
+    "voucher_sensor": "sensor",
+    "innerspace_entity": "sensor",
+}
+
+# Explicit allow-list for finite f-string keys.
+# In switch.py (UnifiAccessEmergencySwitch.__init__):
+#   (constructs access_emergency_lockdown and access_emergency_evacuation)
+# where mode is either "lockdown" or "evacuation".
+_ALLOW_LISTED_DYNAMIC_ENTITY_KEYS: Final = {
+    ("switch", "access_emergency_lockdown"),
+    ("switch", "access_emergency_evacuation"),
+}
+
+
+def _collect_live_entity_translation_keys() -> tuple[
+    set[tuple[str, str]], list[tuple[str, int, str]]
+]:
+    """Integration-wide AST collector of (platform, translation_key)."""
+    constants: dict[str, str] = {}
+    for py_file in _INTEGRATION_DIR.glob("*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)
+                    ):
+                        constants[target.id] = node.value.value
+
+    inventory: set[tuple[str, str]] = set()
+    dynamic_unresolved: list[tuple[str, int, str]] = []
+
+    entity_modules = [
+        f
+        for f in _INTEGRATION_DIR.glob("*.py")
+        if f.stem in _PLATFORMS
+        or f.stem in _MODULE_DEFAULT_PLATFORM
+        or f.stem == "protect_security_entity"
+    ]
+
+    for py_file in entity_modules:
+        module_name = py_file.stem
+        default_platform = (
+            module_name
+            if module_name in _PLATFORMS
+            else _MODULE_DEFAULT_PLATFORM.get(module_name)
+        )
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                call_func = getattr(node.func, "id", None) or getattr(
+                    node.func, "attr", None
+                )
+                if call_func in _DESC_CLASS_TO_PLATFORM or (
+                    isinstance(call_func, str)
+                    and call_func.endswith("EntityDescription")
+                ):
+                    call_platform = _DESC_CLASS_TO_PLATFORM.get(
+                        call_func, default_platform
+                    )
+                    if (
+                        call_func == "EntityDescription"
+                        and module_name == "mobility_entity"
+                    ):
+                        call_platform = "device_tracker"
+                    for kw in node.keywords:
+                        if kw.arg in ("translation_key", "unnamed_translation_key"):
+                            if (
+                                isinstance(kw.value, ast.Constant)
+                                and isinstance(kw.value.value, str)
+                                and call_platform
+                            ):
+                                inventory.add((call_platform, kw.value.value))
+                            elif (
+                                isinstance(kw.value, ast.Name)
+                                and kw.value.id in constants
+                                and call_platform
+                            ):
+                                inventory.add((call_platform, constants[kw.value.id]))
+
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    attr_name = None
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id == "_attr_translation_key"
+                    ):
+                        attr_name = target.id
+                    elif (
+                        isinstance(target, ast.Attribute)
+                        and target.attr == "_attr_translation_key"
+                    ):
+                        attr_name = target.attr
+                    if attr_name:
+                        plat = default_platform
+                        if isinstance(node.value, ast.Constant) and isinstance(
+                            node.value.value, str
+                        ):
+                            if plat:
+                                inventory.add((plat, node.value.value))
+                        elif (
+                            isinstance(node.value, ast.Name)
+                            and node.value.id in constants
+                        ):
+                            if plat:
+                                inventory.add((plat, constants[node.value.id]))
+                        elif isinstance(node.value, ast.JoinedStr) or (
+                            isinstance(node.value, ast.Attribute)
+                            and node.value.attr
+                            in (
+                                "translation_key",
+                                "unnamed_translation_key",
+                            )
+                        ):
+                            pass
+                        else:
+                            dynamic_unresolved.append(
+                                (py_file.name, node.lineno, ast.unparse(node.value))
+                            )
+
+    inventory |= _ALLOW_LISTED_DYNAMIC_ENTITY_KEYS
+    return inventory, dynamic_unresolved
+
+
 def _switch_translation_keys() -> set[str]:
-    """Collect every `_attr_translation_key` string literal in switch.py."""
-    tree = ast.parse((_INTEGRATION_DIR / "switch.py").read_text())
-    return {
-        node.value.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str)
-        for target in node.targets
-        if isinstance(target, ast.Attribute) and target.attr == "_attr_translation_key"
-    }
+    """Collect every live translation key for switch entities."""
+    inventory, unresolved = _collect_live_entity_translation_keys()
+    assert not unresolved, f"Unresolved dynamic translation keys: {unresolved}"
+    return {key for plat, key in inventory if plat == "switch"}
 
 
 def _switch_supplied_placeholders() -> set[str]:
-    """Collect every key passed to `_attr_translation_placeholders` in switch.py."""
-    tree = ast.parse((_INTEGRATION_DIR / "switch.py").read_text())
-    return {
-        key.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
-        for target in node.targets
-        if isinstance(target, ast.Attribute)
-        and target.attr == "_attr_translation_placeholders"
-        for key in node.value.keys
-        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    """Collect every key passed to placeholders in switch modules."""
+    placeholders: set[str] = set()
+    for fname in ("switch.py", "network_rule_switch.py"):
+        tree = ast.parse((_INTEGRATION_DIR / fname).read_text(encoding="utf-8"))
+        placeholders |= {
+            key.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+            for target in node.targets
+            if isinstance(target, ast.Attribute)
+            and target.attr == "_attr_translation_placeholders"
+            for key in node.value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+    return placeholders
+
+
+def test_english_translation_entity_sections_match() -> None:
+    """strings.json and translations/en.json entity sections must be identical."""
+    en_entity = json.loads(_EN_JSON.read_text())["entity"]
+    strings_entity = json.loads(_STRINGS_JSON.read_text())["entity"]
+    assert en_entity == strings_entity
+
+
+def test_translation_key_inventory_coverage_and_no_dead_keys() -> None:
+    """Every live entity key must have a translation and no dead keys exist."""
+    strings_entity = json.loads(_STRINGS_JSON.read_text())["entity"]
+    strings_keys = {
+        (plat, key) for plat, entries in strings_entity.items() for key in entries
     }
+
+    live_inventory, unresolved = _collect_live_entity_translation_keys()
+    assert not unresolved, f"Unresolved dynamic translation keys: {unresolved}"
+
+    dead_keys = strings_keys - live_inventory
+    assert not dead_keys, (
+        f"Found dead translation keys in strings.json: {sorted(dead_keys)}"
+    )
+
+    untranslated_keys = live_inventory - strings_keys
+    assert not untranslated_keys, (
+        f"Missing translations for live keys: {sorted(untranslated_keys)}"
+    )
 
 
 def test_switch_translation_keys_resolve_in_both_files() -> None:
@@ -176,7 +385,6 @@ def test_site_internet_activity_sensor_translations_resolve_in_both_files() -> N
         assert en_sensor[key] == strings_sensor[key], (
             f"{key} differs between strings.json and translations/en.json"
         )
-        assert desc.name == strings_sensor[key]["name"]
 
 
 def test_mobility_translations_and_icons_resolve_in_every_file() -> None:
@@ -480,3 +688,60 @@ def test_media_player_speaker_translations_and_icon() -> None:
         assert exc_key in en_data["exceptions"]
         assert strings_data["exceptions"][exc_key] == en_data["exceptions"][exc_key]
         assert strings_data["exceptions"][exc_key]["message"]
+
+
+def test_all_icons_json_entity_keys_match_live_inventory() -> None:
+    """Every entity key in icons.json must correspond to a live translation key."""
+    icons_entity = json.loads(_ICONS_JSON.read_text())["entity"]
+    icon_keys = {
+        (plat, key) for plat, entries in icons_entity.items() for key in entries
+    }
+    live_inventory, unresolved = _collect_live_entity_translation_keys()
+    assert not unresolved, f"Unresolved dynamic translation keys: {unresolved}"
+    dead_icon_keys = icon_keys - live_inventory
+    assert not dead_icon_keys, (
+        f"Found dead icon keys in icons.json: {sorted(dead_icon_keys)}"
+    )
+
+
+def test_no_static_mdi_strings_in_python_code() -> None:
+    """Acceptance criteria #335: no static mdi: string in Python.
+
+    Only dynamic icon properties (e.g. switches whose icon depends on state)
+    may return mdi: icons.
+    """
+    violations: list[str] = []
+    for py_file in _INTEGRATION_DIR.glob("**/*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                violations.extend(
+                    f"{py_file.name}:{node.lineno}: icon={kw.value.value}"
+                    for kw in node.keywords
+                    if (
+                        kw.arg == "icon"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, str)
+                        and kw.value.value.startswith("mdi:")
+                    )
+                )
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    is_attr_icon = (
+                        isinstance(target, ast.Name) and target.id == "_attr_icon"
+                    ) or (
+                        isinstance(target, ast.Attribute)
+                        and target.attr == "_attr_icon"
+                    )
+                    if (
+                        is_attr_icon
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)
+                        and node.value.value.startswith("mdi:")
+                    ):
+                        violations.append(
+                            f"{py_file.name}:{node.lineno}: "
+                            f"_attr_icon={node.value.value}"
+                        )
+
+    assert not violations, f"Found static mdi: assignments in Python: {violations}"
