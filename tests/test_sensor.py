@@ -13,6 +13,7 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_VERIFY_SSL,
     PERCENTAGE,
+    UnitOfDataRate,
     UnitOfInformation,
     UnitOfTemperature,
 )
@@ -752,6 +753,10 @@ class TestUnifiPortSensor:
     async def test_port_speed(self, hass: HomeAssistant, mock_coordinator):
         """Test port speed sensor."""
         description = next(s for s in PORT_SENSOR_TYPES if s.key == "port_speed")
+        assert description.device_class == SensorDeviceClass.DATA_RATE
+        assert (
+            description.native_unit_of_measurement == UnitOfDataRate.MEGABITS_PER_SECOND
+        )
 
         sensor = UnifiPortSensor(
             coordinator=mock_coordinator,

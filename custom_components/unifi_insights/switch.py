@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -1516,6 +1516,7 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
     """Per-outlet relay switch for UniFi PDU and smart power strip devices."""
 
     _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.OUTLET
 
     def __init__(
         self,

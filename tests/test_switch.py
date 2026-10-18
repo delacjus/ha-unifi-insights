@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components.switch import SwitchDeviceClass
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_registry import (
@@ -3564,6 +3565,7 @@ class TestUnifiOutletSwitch:
         assert switch.unique_id == "site1_pdu1_outlet_1"
         assert switch.translation_key == "outlet"
         assert switch.translation_placeholders == {"outlet_name": "Main Server"}
+        assert switch.device_class == SwitchDeviceClass.OUTLET
         assert switch.is_on is True
         assert switch.available is True
         assert switch.icon is None

@@ -640,8 +640,8 @@ PORT_SENSOR_TYPES: tuple[UnifiInsightsSensorEntityDescription, ...] = (
     UnifiInsightsSensorEntityDescription(
         key="port_speed",
         translation_key="port_speed",
-        native_unit_of_measurement="Mbps",
-        device_class=None,
+        native_unit_of_measurement=UnitOfDataRate.MEGABITS_PER_SECOND,
+        device_class=SensorDeviceClass.DATA_RATE,
         state_class=SensorStateClass.MEASUREMENT,
         # Diagnostic - port speed is configuration/status, not monitored data
         entity_category=EntityCategory.DIAGNOSTIC,

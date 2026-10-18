@@ -145,6 +145,14 @@ class TestBinarySensorTypes:
         assert leak.device_class == BinarySensorDeviceClass.MOISTURE
         assert leak.device_type == DEVICE_TYPE_SENSOR
 
+    def test_device_status_category(self):
+        """Test device_status binary sensor has diagnostic category."""
+        status = next(
+            (s for s in BINARY_SENSOR_TYPES if s.key == "device_status"), None
+        )
+        assert status is not None
+        assert status.entity_category == EntityCategory.DIAGNOSTIC
+
 
 class TestUnifiInsightsBinarySensor:
     """Tests for UnifiInsightsBinarySensor."""
@@ -278,7 +286,6 @@ class TestUnifiInsightsBinarySensor:
         """Test is_on returns None when entity_description value_fn is None."""
         description = UnifiInsightsBinarySensorEntityDescription(
             key="test_no_fn",
-            name="Test Sensor",
             value_fn=None,
         )
         sensor = UnifiInsightsBinarySensor(
@@ -288,6 +295,34 @@ class TestUnifiInsightsBinarySensor:
             device_id="device1",
         )
         assert sensor.is_on is None
+
+    async def test_entity_category_inherited_from_description(
+        self, hass: HomeAssistant, mock_coordinator
+    ) -> None:
+        """Test entity_category is inherited from entity_description and not forced."""
+        desc_diag = UnifiInsightsBinarySensorEntityDescription(
+            key="test_diag",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        )
+        sensor_diag = UnifiInsightsBinarySensor(
+            coordinator=mock_coordinator,
+            description=desc_diag,
+            site_id="site1",
+            device_id="device1",
+        )
+        assert sensor_diag.entity_category == EntityCategory.DIAGNOSTIC
+
+        desc_none = UnifiInsightsBinarySensorEntityDescription(
+            key="test_none",
+            entity_category=None,
+        )
+        sensor_none = UnifiInsightsBinarySensor(
+            coordinator=mock_coordinator,
+            description=desc_none,
+            site_id="site1",
+            device_id="device1",
+        )
+        assert sensor_none.entity_category is None
 
 
 class TestUnifiProtectBinarySensor:

@@ -254,6 +254,7 @@ BINARY_SENSOR_TYPES: tuple[UnifiInsightsBinarySensorEntityDescription, ...] = (
         key="device_status",
         translation_key="device_status",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=is_device_online,
         entity_type="device",
     ),
@@ -734,9 +735,6 @@ class UnifiInsightsBinarySensor(UnifiInsightsEntity, BinarySensorEntity):
             device_id,
             site_id,
         )
-
-        # Mark binary sensors as "Diagnostic" entities
-        self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def is_on(self) -> bool | None:
