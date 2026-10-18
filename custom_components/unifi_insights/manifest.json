@@ -1,9 +1,15 @@
 {
   "domain": "unifi_insights",
   "name": "UniFi Insights",
-  "after_dependencies": ["http", "frontend", "lovelace"],
+  "after_dependencies": [
+    "http",
+    "frontend",
+    "lovelace"
+  ],
   "bluetooth": [],
-  "codeowners": ["@ruaan-deysel"],
+  "codeowners": [
+    "@ruaan-deysel"
+  ],
   "config_flow": true,
   "dependencies": [
     "ffmpeg",
@@ -18,9 +24,13 @@
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/tinkerologie/ha-unifi-insights/issues",
-  "loggers": ["custom_components.unifi_insights"],
-  "requirements": ["segno==1.6.6"],
+  "loggers": [
+    "custom_components.unifi_insights"
+  ],
+  "requirements": [
+    "segno==1.6.6"
+  ],
   "usb": [],
-  "version": "2026.10.2",
+  "version": "2026.10.2+pr350",
   "zeroconf": []
 }
