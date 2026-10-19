@@ -1,0 +1,3 @@
+Optimize `_is_unspecified_address` hotpath
+
+Replaced the expensive `ipaddress.ip_address().is_unspecified` check with a direct string tuple membership check for well-known unspecified values. This yields a significant speedup in a hotpath, completely eliminating string-to-IP parsing overhead without sacrificing any practical correctness.
