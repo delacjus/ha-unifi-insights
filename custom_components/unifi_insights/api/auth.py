@@ -13,7 +13,7 @@ class ApiKeyType(Enum):
     PROTECT = "protect"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ApiKeyAuth:
     """
     API Key authentication for UniFi APIs.
@@ -34,8 +34,12 @@ class ApiKeyAuth:
         """
         return {"X-API-Key": self.api_key}
 
+    def __repr__(self) -> str:
+        """Return a representation that hides the API key."""
+        return f"ApiKeyAuth(api_key=**REDACTED**, key_type={self.key_type})"
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True, slots=True, repr=False)
 class LocalAuth:
     """
     Local authentication for UniFi Protect (on-premise).
@@ -55,3 +59,7 @@ class LocalAuth:
 
         """
         return {"X-API-Key": self.api_key}
+
+    def __repr__(self) -> str:
+        """Return a representation that hides the API key."""
+        return f"LocalAuth(api_key=**REDACTED**, verify_ssl={self.verify_ssl})"
