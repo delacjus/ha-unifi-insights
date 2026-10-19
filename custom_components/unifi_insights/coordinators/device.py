@@ -1642,7 +1642,7 @@ class UnifiDeviceCoordinator(UnifiBaseCoordinator):
         device_id: str,
         outlet_index: int,
         changes: dict[str, bool],
-        overrides: list[dict[str, Any]] | None = None,
+        overrides: list[dict[str, Any]] | None,
     ) -> None:
         """
         Publish an outlet write as a copy-on-write overlay (ADR-010).

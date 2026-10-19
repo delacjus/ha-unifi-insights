@@ -10,7 +10,7 @@ coordinator's legacy site-name rule.
 from __future__ import annotations
 
 import copy
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -261,7 +261,7 @@ class TestOutletCommand:
         device.async_add_listener(
             lambda: seen.append(device.data["devices"][SITE_ID][PDU_ID])
         )
-        refreshes = client.devices.get_all.await_count
+        device.async_request_refresh = AsyncMock()
 
         result = await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
 
@@ -274,6 +274,7 @@ class TestOutletCommand:
             cycle_enabled=None,
             current_device=before_device,
         )
+        assert len(seen) == 1
         overlay = seen[0]
         assert overlay is not before_device
         assert overlay["outlet_table"] is not before_table
@@ -288,7 +289,7 @@ class TestOutletCommand:
             *before_device["outlet_overrides"],
             {"index": 2, "relay_state": True},
         ]
-        assert client.devices.get_all.await_count == refreshes + 1
+        device.async_request_refresh.assert_awaited_once()
 
     async def test_cycle_write_overlays_cycle_enabled(
         self, seeded_owners: SeededOwners
@@ -310,40 +311,77 @@ class TestOutletCommand:
         assert seen[0]["outlet_overrides"][0]["relay_state"] is True
 
     @pytest.mark.parametrize(
-        ("outlet_table", "device_id"),
+        ("shape", "target", "publishes"),
         [
-            ([{"index": 9}, "junk", {"outlet_idx": "x"}], PDU_ID),
-            ("not-a-list", PDU_ID),
-            ([{"index": 2}], "missing"),
+            (
+                {"outlet_table": [{"index": 9}, "junk", {"outlet_idx": "x"}]},
+                "pdu",
+                True,
+            ),
+            ({"outlet_table": "not-a-list"}, "pdu", True),
+            ({"outlet_table": None}, "pdu", True),
+            ({"outlet_table": [{"index": 99, "relay_state": True}]}, "pdu", True),
+            ({"outlet_table": [{"index": 2}]}, "missing", False),
+            ({}, "unknown-site", False),
+            ({}, "malformed-site", False),
+            ({"outlet_overrides": None, "outlet_table": None}, "pdu", False),
+            (
+                {"outlet_overrides": None, "outlet_table": [{"outletIdx": 2}]},
+                "pdu",
+                True,
+            ),
         ],
     )
-    async def test_unknown_outlet_gets_no_overlay(
-        self, seeded_owners: SeededOwners, outlet_table: Any, device_id: str
+    async def test_unknown_outlet_publishes_overrides_only(
+        self,
+        seeded_owners: SeededOwners,
+        shape: dict[str, Any],
+        target: str,
+        *,
+        publishes: bool,
     ) -> None:
-        """An unknown outlet leaves the outlet table unmodified."""
+        """Publish sent overrides or a matching table; empty targets notify nobody."""
         device = seeded_owners.device
         pdu = device.data["devices"][SITE_ID][PDU_ID]
-        before_overrides = copy.deepcopy(pdu["outlet_overrides"])
-        pdu["outlet_table"] = outlet_table
+        pdu.update(shape)
+        for key in ("outlet_table", "outlet_overrides"):
+            if pdu.get(key) is None:
+                pdu.pop(key, None)
+        before = copy.deepcopy(pdu)
+        site_id = "unknown" if target.endswith("site") else SITE_ID
+        seeded_owners.config.data["legacy_site_names"][site_id] = "default"
+        device_id = "missing" if target == "missing" else PDU_ID
         listener = MagicMock()
         device.async_add_listener(listener)
-        seeded_owners.network_client.devices.get_all.side_effect = UniFiConnectionError(
-            "down"
-        )
+        device.async_request_refresh = AsyncMock()
+        seeded_owners.network_client.devices.set_outlet_state.return_value = True
+        if target == "malformed-site":
 
-        await device.async_set_outlet_state(SITE_ID, device_id, 2, state=True)
+            async def invalidate_site(*args: Any, **kwargs: Any) -> bool:
+                device.data["devices"][site_id] = []
+                return True
+
+            seeded_owners.network_client.devices.set_outlet_state.side_effect = (
+                invalidate_site
+            )
+
+        await device.async_set_outlet_state(site_id, device_id, 2, state=True)
 
         seeded_owners.network_client.devices.set_outlet_state.assert_awaited_once()
-        current_pdu = device.data["devices"][SITE_ID][PDU_ID]
-        assert current_pdu["outlet_table"] == outlet_table
-        if device_id == "missing":
-            assert current_pdu["outlet_overrides"] == before_overrides
+        current = device.data["devices"][SITE_ID][PDU_ID]
+        expected = copy.deepcopy(before)
+        if publishes:
+            listener.assert_called_once()
+            if "outlet_overrides" in before:
+                expected["outlet_overrides"] = [
+                    *before["outlet_overrides"],
+                    {"index": 2, "relay_state": True},
+                ]
+            else:
+                expected["outlet_table"] = [{"outletIdx": 2, "relay_state": True}]
         else:
-            assert current_pdu["outlet_overrides"] is not before_overrides
-            assert current_pdu["outlet_overrides"] == [
-                *before_overrides,
-                {"index": 2, "relay_state": True},
-            ]
+            listener.assert_not_called()
+        assert current == expected
 
     async def test_outlet_index_aliases_match(
         self, seeded_owners: SeededOwners
@@ -438,6 +476,18 @@ def _wire_pdu_controller(
     return endpoint
 
 
+FIRST_WRITE_OVERRIDE = {
+    "cycle_enabled": True,
+    "index": 1,
+    "name": "Main Server",
+    "relay_state": False,
+}
+OUTLET_1_ON = {"index": 1, "relay_state": True}
+OUTLET_1_OFF = {"index": 1, "relay_state": False}
+OUTLET_2_OFF = {"index": 2, "relay_state": False}
+OUTLET_3_ON = {"index": 3, "relay_state": True}
+
+
 class TestSequentialOutletWrites:
     """Sequential PDU outlet writes mirror library read-modify-write semantics."""
 
@@ -453,27 +503,11 @@ class TestSequentialOutletWrites:
         )
 
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        assert device.last_update_success is False
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
 
-        assert controller.puts == [
-            [
-                {
-                    "cycle_enabled": True,
-                    "index": 1,
-                    "name": "Main Server",
-                    "relay_state": False,
-                }
-            ],
-            [
-                {
-                    "cycle_enabled": True,
-                    "index": 1,
-                    "name": "Main Server",
-                    "relay_state": False,
-                },
-                {"index": 2, "relay_state": False},
-            ],
-        ]
+        first = [FIRST_WRITE_OVERRIDE]
+        assert controller.puts == [first, [*first, {"index": 2, "relay_state": False}]]
         assert controller.relay()[1] is False
 
     async def test_three_writes_inside_refresh_cooldown(
@@ -489,34 +523,12 @@ class TestSequentialOutletWrites:
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 3, state=False)
 
+        first = [FIRST_WRITE_OVERRIDE]
+        second = [*first, {"index": 2, "relay_state": False}]
         assert controller.puts == [
-            [
-                {
-                    "cycle_enabled": True,
-                    "index": 1,
-                    "name": "Main Server",
-                    "relay_state": False,
-                }
-            ],
-            [
-                {
-                    "cycle_enabled": True,
-                    "index": 1,
-                    "name": "Main Server",
-                    "relay_state": False,
-                },
-                {"index": 2, "relay_state": False},
-            ],
-            [
-                {
-                    "cycle_enabled": True,
-                    "index": 1,
-                    "name": "Main Server",
-                    "relay_state": False,
-                },
-                {"index": 2, "relay_state": False},
-                {"index": 3, "relay_state": False},
-            ],
+            first,
+            second,
+            [*second, {"index": 3, "relay_state": False}],
         ]
         assert controller.relay() == {1: False, 2: False, 3: False}
 
@@ -529,311 +541,174 @@ class TestSequentialOutletWrites:
         device = seeded_owners.device
         device.async_request_refresh = AsyncMock()
 
-        # Step 1: Change relay state only (cycle_enabled=None preserves True).
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
-        assert controller.puts[0][0]["relay_state"] is False
-        assert controller.puts[0][0]["cycle_enabled"] is True
-
-        # Step 2: Change cycle_enabled to False explicitly.
-        await device.async_set_outlet_state(
-            SITE_ID, PDU_ID, 1, state=False, cycle_enabled=False
-        )
-        assert controller.puts[1][0]["relay_state"] is False
-        assert controller.puts[1][0]["cycle_enabled"] is False
-
-        # Step 3: Change relay state back to True with cycle_enabled=None (keeps False).
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=True)
-        assert controller.puts[2][0]["relay_state"] is True
-        assert controller.puts[2][0]["cycle_enabled"] is False
-
-    async def test_partial_overrides_matching_then_appending(
-        self, seeded_owners: SeededOwners
-    ) -> None:
-        """Write matching existing entry updates it; new outlet appends entry."""
-        controller = _FakePduController()
-        _wire_pdu_controller(seeded_owners, controller)
-        device = seeded_owners.device
-        device.async_request_refresh = AsyncMock()
-
-        # First write matches existing outlet 1
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
-        assert len(controller.puts[0]) == 1
-        assert controller.puts[0][0]["index"] == 1
-        assert controller.puts[0][0]["relay_state"] is False
-
-        # Second write does not match outlet 1, appends outlet 2
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
-        assert len(controller.puts[1]) == 2
-        assert controller.puts[1][0]["index"] == 1
-        assert controller.puts[1][1]["index"] == 2
-        published = device.data["devices"][SITE_ID][PDU_ID]["outlet_overrides"]
-        assert len(published) == 2
-        assert published[0]["index"] == 1
-        assert published[1]["index"] == 2
-
-    async def test_unknown_sentinel_field_survives_in_payload_and_cache(
-        self, seeded_owners: SeededOwners
-    ) -> None:
-        """Unknown fields in override entries survive PUT and published cache."""
-        controller = _FakePduController()
-        _wire_pdu_controller(seeded_owners, controller)
-        device = seeded_owners.device
-        device.async_request_refresh = AsyncMock()
-
-        pdu = device.data["devices"][SITE_ID][PDU_ID]
-        pdu["outlet_overrides"] = [
-            {"index": 1, "relay_state": True, "sentinel_custom_field": "xyz_123"}
-        ]
-
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
-
-        assert controller.puts[0][0]["sentinel_custom_field"] == "xyz_123"
-        cached_overrides = device.data["devices"][SITE_ID][PDU_ID]["outlet_overrides"]
-        assert cached_overrides[0]["sentinel_custom_field"] == "xyz_123"
-
-        # Subsequent write to outlet 2 also keeps the sentinel field in entry 0
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
-        assert controller.puts[1][0]["sentinel_custom_field"] == "xyz_123"
-        cached_overrides2 = device.data["devices"][SITE_ID][PDU_ID]["outlet_overrides"]
-        assert cached_overrides2[0]["sentinel_custom_field"] == "xyz_123"
-
-    async def test_absent_overrides_seeded_from_table_published_matches_sent(
-        self, seeded_owners: SeededOwners
-    ) -> None:
-        """When overrides are absent, seeded table matches sent payload."""
-        controller = _FakePduController()
-        _wire_pdu_controller(seeded_owners, controller)
-        device = seeded_owners.device
-        device.async_request_refresh = AsyncMock()
-
-        pdu = device.data["devices"][SITE_ID][PDU_ID]
-        del pdu["outlet_overrides"]
-
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
-
-        sent_payload = controller.puts[0]
-        published_overrides = device.data["devices"][SITE_ID][PDU_ID][
-            "outlet_overrides"
-        ]
-        assert published_overrides == sent_payload
-        assert len(published_overrides) == 3
-        by_idx = {o["index"]: o for o in published_overrides}
-        assert by_idx[1]["relay_state"] is True
-        assert by_idx[2]["relay_state"] is True
-        assert by_idx[3]["relay_state"] is True
+        for state, cycle, expected_cycle in [
+            (False, None, True),
+            (False, False, False),
+            (True, None, False),
+        ]:
+            await device.async_set_outlet_state(
+                SITE_ID, PDU_ID, 1, state=state, cycle_enabled=cycle
+            )
+            assert controller.puts[-1][0]["relay_state"] is state
+            assert controller.puts[-1][0]["cycle_enabled"] is expected_cycle
 
     async def test_endpoint_failure_does_not_publish_or_leak_into_later_write(
         self, seeded_owners: SeededOwners
     ) -> None:
         """Endpoint failure raises HomeAssistantError, publishes nothing."""
         controller = _FakePduController()
-        client = MagicMock()
-        client._put = AsyncMock(side_effect=UniFiConnectionError("timeout"))
-        client.build_legacy_api_path = lambda site, path: f"/{site}{path}"
-        endpoint = DevicesEndpoint(client)
-        seeded_owners.network_client.devices.set_outlet_state.side_effect = (
-            endpoint.set_outlet_state
-        )
-
+        endpoint = _wire_pdu_controller(seeded_owners, controller)
+        put = endpoint._client._put
+        endpoint._client._put = AsyncMock(side_effect=UniFiConnectionError("timeout"))
         device = seeded_owners.device
         device.async_request_refresh = AsyncMock()
         before_device = copy.deepcopy(device.data["devices"][SITE_ID][PDU_ID])
 
-        with pytest.raises(HomeAssistantError, match=r"^Unable to set outlet 2"):
+        with pytest.raises(HomeAssistantError, match=r"^Unable to set outlet 2") as err:
             await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
 
+        assert err.value.translation_key == "command_failed"
         current_device = device.data["devices"][SITE_ID][PDU_ID]
         assert current_device["outlet_overrides"] == before_device["outlet_overrides"]
         assert current_device["outlet_table"] == before_device["outlet_table"]
 
-        # Restore working endpoint transport
-        client._put = AsyncMock(
-            side_effect=lambda p, json_data: controller.apply(
-                json_data["outlet_overrides"]
-            )
-        )
+        endpoint._client._put = put
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
 
         assert len(controller.puts) == 1
-        # The failed outlet 2 change must NOT be in the PUT payload
         put_indices = [o["index"] for o in controller.puts[0]]
         assert 2 not in put_indices
         assert controller.puts[0][0]["index"] == 1
         assert controller.puts[0][0]["relay_state"] is False
 
+    @pytest.mark.parametrize("seed_from_table", [False, True])
     async def test_copy_on_write_immutability(
-        self, seeded_owners: SeededOwners
+        self, seeded_owners: SeededOwners, *, seed_from_table: bool
     ) -> None:
-        """Old snapshot and entries are unchanged; new objects are created."""
+        """Preserve old snapshots and unknown fields while publishing sent payloads."""
         controller = _FakePduController()
         _wire_pdu_controller(seeded_owners, controller)
         device = seeded_owners.device
         device.async_request_refresh = AsyncMock()
-
         old_device = device.data["devices"][SITE_ID][PDU_ID]
-        old_overrides = old_device["outlet_overrides"]
-        old_entry_0 = old_overrides[0]
-        old_entry_0_copy = dict(old_entry_0)
+        if seed_from_table:
+            del old_device["outlet_overrides"]
+        else:
+            old_device["outlet_overrides"][0]["sentinel_custom_field"] = "xyz_123"
+        old_snapshot = copy.deepcopy(old_device)
+        old_overrides = old_device.get("outlet_overrides")
+        index, state = (2, True) if seed_from_table else (1, False)
 
-        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
-
-        # Old snapshot unchanged
-        assert old_entry_0 == old_entry_0_copy
-        assert old_device["outlet_overrides"] is old_overrides
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, index, state=state)
 
         new_device = device.data["devices"][SITE_ID][PDU_ID]
+        published = new_device["outlet_overrides"]
         assert new_device is not old_device
-        assert new_device["outlet_overrides"] is not old_overrides
-        assert new_device["outlet_overrides"][0] is not old_entry_0
-        assert new_device["outlet_overrides"] is not controller.puts[0]
-        for new_item, put_item in zip(
-            new_device["outlet_overrides"], controller.puts[0], strict=True
-        ):
-            assert new_item is not put_item
+        assert old_device == old_snapshot
+        assert published == controller.puts[0]
+        if seed_from_table:
+            assert len(published) == 3
+            assert all(item["relay_state"] is True for item in published)
+        else:
+            assert old_device["outlet_overrides"] is old_overrides
+            assert published is not old_overrides
+            assert published[0] is not old_overrides[0]
+            assert published[0]["sentinel_custom_field"] == "xyz_123"
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
+            assert controller.puts[1][0]["sentinel_custom_field"] == "xyz_123"
+            assert (
+                device.data["devices"][SITE_ID][PDU_ID]["outlet_overrides"]
+                == controller.puts[1]
+            )
 
-    @pytest.mark.parametrize(
-        "table_fixture",
-        [
-            None,
-            "not-a-list",
-            [{"index": 99, "relay_state": True}],
-        ],
-    )
-    async def test_missing_or_malformed_table_publishes_overrides_alone(
-        self, seeded_owners: SeededOwners, table_fixture: Any
+    async def test_poll_mid_write_publishes_sent_overrides(
+        self, seeded_owners: SeededOwners
     ) -> None:
-        """Overrides published even when table is missing, malformed or unmatched."""
+        """A poll during PUT must not replace the payload used for publication."""
         controller = _FakePduController()
-        _wire_pdu_controller(seeded_owners, controller)
+        endpoint = _wire_pdu_controller(seeded_owners, controller)
         device = seeded_owners.device
         device.async_request_refresh = AsyncMock()
 
-        pdu = device.data["devices"][SITE_ID][PDU_ID]
-        if table_fixture is None:
-            pdu.pop("outlet_table", None)
-        else:
-            pdu["outlet_table"] = table_fixture
+        async def put(path: str, json_data: dict[str, Any]) -> None:
+            controller.apply(json_data["outlet_overrides"])
+            devices = device.data["devices"]
+            pdu = devices[SITE_ID][PDU_ID]
+            polled_pdu = {**pdu, "outlet_overrides": [OUTLET_3_ON]}
+            polled_site = {**devices[SITE_ID], PDU_ID: polled_pdu}
+            device.data = {**device.data, "devices": {**devices, SITE_ID: polled_site}}
 
+        endpoint._client._put = put
         await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
 
-        current_pdu = device.data["devices"][SITE_ID][PDU_ID]
-        assert current_pdu["outlet_overrides"][0]["relay_state"] is False
-        if table_fixture is None:
-            assert "outlet_table" not in current_pdu
-        else:
-            assert current_pdu["outlet_table"] == table_fixture
+        assert (
+            device.data["devices"][SITE_ID][PDU_ID]["outlet_overrides"]
+            == controller.puts[-1]
+        )
 
     @pytest.mark.parametrize(
-        ("device_dict", "outlet_index", "state", "cycle_enabled", "expected"),
+        ("device_dict", "command", "expected"),
         [
-            # non-dict entries dropped in overrides
             (
-                {
-                    "outlet_overrides": [
-                        "junk",
-                        None,
-                        123,
-                        {"index": 1, "relay_state": True},
-                    ]
-                },
-                1,
-                False,
-                None,
-                [{"index": 1, "relay_state": False}],
+                {"outlet_overrides": ["junk", None, 123, OUTLET_1_ON]},
+                (1, False, None),
+                [OUTLET_1_OFF],
             ),
-            # non-dict entries in table dropped when seeding
             (
-                {
-                    "outlet_table": [
-                        "junk",
-                        None,
-                        123,
-                        {"index": 1, "relay_state": True},
-                    ]
-                },
-                1,
-                False,
-                None,
-                [{"index": 1, "relay_state": False}],
+                {"outlet_table": ["junk", None, 123, OUTLET_1_ON]},
+                (1, False, None),
+                [OUTLET_1_OFF],
             ),
-            # unconvertible indexes skipped in table seeding
             (
                 {
                     "outlet_table": [
                         {"index": "bad_index", "relay_state": True},
                         {"index": None, "outlet_idx": "also_bad"},
-                        {"index": 1, "relay_state": True},
+                        OUTLET_1_ON,
                     ]
                 },
-                1,
-                False,
-                None,
-                [{"index": 1, "relay_state": False}],
+                (1, False, None),
+                [OUTLET_1_OFF],
             ),
-            # unconvertible indexes skipped in override matching
             (
                 {
                     "outlet_overrides": [
                         {"index": "invalid", "relay_state": True},
-                        {"index": 1, "relay_state": True},
+                        OUTLET_1_ON,
                     ]
                 },
-                1,
-                False,
-                None,
-                [
-                    {"index": "invalid", "relay_state": True},
-                    {"index": 1, "relay_state": False},
-                ],
+                (1, False, None),
+                [{"index": "invalid", "relay_state": True}, OUTLET_1_OFF],
             ),
-            # outlet_idx fallback in seeding
             (
                 {"outlet_table": [{"outlet_idx": "2", "relay_state": True}]},
-                2,
-                False,
-                None,
-                [{"index": 2, "relay_state": False}],
+                (2, False, None),
+                [OUTLET_2_OFF],
             ),
-            # outlet_idx fallback in override matching
             (
                 {"outlet_overrides": [{"outlet_idx": 2, "relay_state": True}]},
-                2,
-                False,
-                None,
+                (2, False, None),
                 [{"outlet_idx": 2, "relay_state": False}],
             ),
-            # index wins over outlet_idx in seeding
             (
                 {"outlet_table": [{"index": 1, "outlet_idx": 2, "relay_state": True}]},
-                1,
-                False,
-                None,
-                [{"index": 1, "relay_state": False}],
+                (1, False, None),
+                [OUTLET_1_OFF],
             ),
-            # outletIdx alias is NOT recognized (only index and outlet_idx)
             (
                 {"outlet_overrides": [{"outletIdx": 1, "relay_state": True}]},
-                1,
-                False,
-                None,
-                [
-                    {"outletIdx": 1, "relay_state": True},
-                    {"index": 1, "relay_state": False},
-                ],
+                (1, False, None),
+                [{"outletIdx": 1, "relay_state": True}, OUTLET_1_OFF],
             ),
-            # index wins over outlet_idx in override matching
             (
                 {
                     "outlet_overrides": [
                         {"index": 1, "outlet_idx": 2, "relay_state": True}
                     ]
                 },
-                1,
-                False,
-                None,
+                (1, False, None),
                 [{"index": 1, "outlet_idx": 2, "relay_state": False}],
             ),
-            # name and cycle_enabled included only when present in table seeding
             (
                 {
                     "outlet_table": [
@@ -842,16 +717,13 @@ class TestSequentialOutletWrites:
                         {"index": 3},
                     ]
                 },
-                3,
-                True,
-                None,
+                (3, True, None),
                 [
                     {"index": 1, "relay_state": False, "name": "Outlet 1"},
                     {"index": 2, "relay_state": False, "cycle_enabled": True},
-                    {"index": 3, "relay_state": True},
+                    OUTLET_3_ON,
                 ],
             ),
-            # first matching entry updated and breaks
             (
                 {
                     "outlet_overrides": [
@@ -859,121 +731,119 @@ class TestSequentialOutletWrites:
                         {"index": 1, "relay_state": True, "first": False},
                     ]
                 },
-                1,
-                False,
-                None,
+                (1, False, None),
                 [
                     {"index": 1, "relay_state": False, "first": True},
                     {"index": 1, "relay_state": True, "first": False},
                 ],
             ),
-            # cycle_enabled added when not None for appended entry
             (
-                {"outlet_overrides": [{"index": 1, "relay_state": True}]},
-                2,
-                False,
-                True,
+                {"outlet_overrides": [OUTLET_1_ON]},
+                (2, False, True),
                 [
-                    {"index": 1, "relay_state": True},
+                    OUTLET_1_ON,
                     {"index": 2, "relay_state": False, "cycle_enabled": True},
                 ],
             ),
-            # no seed source -> returns None
-            ({}, 1, True, None, None),
-            ({"outlet_overrides": []}, 1, True, None, None),
+            ({}, (1, True, None), None),
+            ({"outlet_overrides": []}, (1, True, None), None),
             (
                 {"outlet_overrides": ["junk"], "outlet_table": ["junk"]},
-                1,
-                True,
-                None,
+                (1, True, None),
                 None,
             ),
-            ({"outlet_table": "not-a-list"}, 1, True, None, None),
-        ],
-    )
-    def test_build_outlet_overrides_branches(
-        self,
-        device_dict: dict[str, Any],
-        outlet_index: int,
-        *,
-        state: bool,
-        cycle_enabled: bool | None,
-        expected: list[dict[str, Any]] | None,
-    ) -> None:
-        """Exercise all branches and ensure input dictionary is not mutated."""
-        input_copy = copy.deepcopy(device_dict)
-        result = _build_outlet_overrides(
-            device_dict,
-            outlet_index,
-            state=state,
-            cycle_enabled=cycle_enabled,
-        )
-        assert result == expected
-        assert device_dict == input_copy
-
-    @pytest.mark.parametrize(
-        "device_shape",
-        [
-            # overrides present with custom field
-            {
-                "outlet_overrides": [
-                    {"index": 1, "relay_state": True, "custom": "field"}
-                ]
-            },
-            # partial overrides
-            {
-                "outlet_overrides": [{"index": 1, "relay_state": True}],
-                "outlet_table": [{"index": 2, "relay_state": False}],
-            },
-            # absent overrides, seed from table
-            {
-                "outlet_table": [
-                    {"index": 1, "relay_state": True},
-                    {"index": 2, "name": "PDU2", "cycle_enabled": False},
-                ]
-            },
-            # overrides with junk
-            {"outlet_overrides": ["junk", None, {"index": 1, "relay_state": False}]},
-            # table with outlet_idx alias
-            {"outlet_table": [{"outlet_idx": "3", "relay_state": True}]},
-            # no seed source (raises UniFiValidationError)
-            {},
-            {"outlet_table": []},
+            ({"outlet_table": "not-a-list"}, (1, True, None), None),
+            (
+                {
+                    "outlet_overrides": [
+                        {"index": 1, "relay_state": True, "custom": "field"}
+                    ]
+                },
+                (1, False, True),
+                [
+                    {
+                        "index": 1,
+                        "relay_state": False,
+                        "custom": "field",
+                        "cycle_enabled": True,
+                    }
+                ],
+            ),
+            (
+                {"outlet_overrides": [OUTLET_1_ON], "outlet_table": [OUTLET_2_OFF]},
+                (1, False, True),
+                [{"index": 1, "relay_state": False, "cycle_enabled": True}],
+            ),
+            (
+                {
+                    "outlet_table": [
+                        OUTLET_1_ON,
+                        {"index": 2, "name": "PDU2", "cycle_enabled": False},
+                    ]
+                },
+                (1, False, True),
+                [
+                    {"index": 1, "relay_state": False, "cycle_enabled": True},
+                    {
+                        "index": 2,
+                        "relay_state": False,
+                        "name": "PDU2",
+                        "cycle_enabled": False,
+                    },
+                ],
+            ),
+            (
+                {"outlet_overrides": ["junk", None, OUTLET_1_OFF]},
+                (1, False, True),
+                [{"index": 1, "relay_state": False, "cycle_enabled": True}],
+            ),
+            (
+                {"outlet_table": [{"outlet_idx": "3", "relay_state": True}]},
+                (1, False, True),
+                [
+                    OUTLET_3_ON,
+                    {"index": 1, "relay_state": False, "cycle_enabled": True},
+                ],
+            ),
+            ({}, (1, False, True), None),
+            ({"outlet_table": []}, (1, False, True), None),
         ],
     )
     async def test_builder_matches_real_endpoint(
-        self, device_shape: dict[str, Any]
+        self,
+        device_dict: dict[str, Any],
+        command: tuple[int, bool, bool | None],
+        expected: list[dict[str, Any]] | None,
     ) -> None:
-        """Builder output equals DevicesEndpoint PUT payload or None on error."""
-        captured: list[list[dict[str, Any]]] = []
-        client = MagicMock()
-        client.build_legacy_api_path = lambda s, p: f"/{s}{p}"
-
-        async def put(path: str, json_data: dict[str, Any]) -> None:
-            captured.append(json_data["outlet_overrides"])
-
-        client._put = put
-        endpoint = DevicesEndpoint(client)
-
-        builder_result = _build_outlet_overrides(
-            device_shape, 1, state=False, cycle_enabled=True
+        """Builder and real endpoint match explicit payloads without mutating input."""
+        outlet_index, state, cycle_enabled = command
+        before = copy.deepcopy(device_dict)
+        assert (
+            _build_outlet_overrides(
+                device_dict, outlet_index, state=state, cycle_enabled=cycle_enabled
+            )
+            == expected
         )
-
-        try:
+        client = MagicMock()
+        client.build_legacy_api_path = lambda site, path: f"/{site}{path}"
+        client._put = AsyncMock()
+        endpoint = DevicesEndpoint(client)
+        with pytest.raises(UniFiValidationError) if expected is None else nullcontext():
             await endpoint.set_outlet_state(
                 "default",
                 "dev1",
-                1,
-                state=False,
-                cycle_enabled=True,
-                current_device=device_shape,
+                outlet_index,
+                state=state,
+                cycle_enabled=cycle_enabled,
+                current_device=device_dict,
             )
-            assert len(captured) == 1
-            endpoint_result = captured[0]
-        except UniFiValidationError:
-            endpoint_result = None
-
-        assert builder_result == endpoint_result
+        if expected is None:
+            client._put.assert_not_awaited()
+        else:
+            client._put.assert_awaited_once_with(
+                "/default/rest/device/dev1", json_data={"outlet_overrides": expected}
+            )
+        assert device_dict == before
 
 
 class TestClientCommands:
