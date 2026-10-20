@@ -8,7 +8,7 @@ applyTo: "custom_components/unifi_insights/alarm_control_panel.py, custom_compon
 
 ## Base Entity Classes
 
-- **`UnifiInsightsEntity`** (`entity.py`) — Network devices; availability via `is_device_online` helper.
+- **`UnifiInsightsEntity`** (`entity.py`) — Network devices; availability via Device coordinator health and `serviceable` / `is_device_serviceable`. `is_device_online` remains the strict connectivity check.
 - **`UnifiProtectEntity`** (`entity.py`) — Protect devices; availability via `state == CONNECTED`.
 - **`UnifiAccessEntity` / `UnifiAccessDoorEntity`** (`access_entity.py`) — UniFi Access doors, readers, and hubs.
 - **`UnifiInnerSpaceEntity`** (`innerspace_entity.py`) — UniFi InnerSpace floor plans and spatial sensors.
