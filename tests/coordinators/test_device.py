@@ -3215,11 +3215,11 @@ class TestUnifiDeviceCoordinator:
             await async_shutdown_owners(owners)
 
     @pytest.mark.asyncio
-    async def test_refresh_device_owned_by_multiple_entries_preserves_other_entry(
+    async def test_refresh_stale_removal_leaves_other_entry_device_intact(
         self, hass: HomeAssistant
     ) -> None:
-        """A device also owned by another config entry keeps that ownership
-        after Network removal."""
+        """Entry isolation: removing a stale Network device leaves a separate
+        device with the same identifier under another config entry intact."""
         owners = build_seeded_owners(hass)
         try:
             entry_id = owners.entry.entry_id
