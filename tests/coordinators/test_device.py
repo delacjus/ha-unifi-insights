@@ -61,6 +61,7 @@ from tests.fixtures.coordinator_clients import (
     _create_mock_protect_client,
 )
 from tests.fixtures.library_responses import (
+    SAMPLE_PDU_DEVICE,
     SAMPLE_PDU_LEGACY_DEVICE,
     SAMPLE_UDM_PRO_OVERVIEW,
     SAMPLE_UDM_PRO_STATS,
@@ -3240,3 +3241,43 @@ async def test_failed_refresh_publishes_nothing(seeded_owners: SeededOwners) -> 
     assert not device.last_update_success
     assert device.data is root_before
     assert root_before["devices"] is devices_before
+
+
+async def test_two_outlet_writes_across_getting_ready_refresh(
+    seeded_owners: SeededOwners,
+) -> None:
+    """A provisioning refresh keeps facts serviceable and supplies the next write."""
+    device = seeded_owners.device
+    endpoint = seeded_owners.network_client.devices
+    refreshed = copy.deepcopy(SAMPLE_PDU_DEVICE)
+    refreshed["state"] = "GETTING_READY"
+    legacy = copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE)
+    legacy["outlet_table"][0]["relay_state"] = False
+    legacy["outlet_overrides"][0]["relay_state"] = False
+    endpoint.get_all.return_value = [refreshed]
+    endpoint.get_legacy_site_devices.return_value = [legacy]
+    endpoint.set_outlet_state.return_value = True
+
+    await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+    await device.async_refresh()
+    current = device.data["devices"][SITE_ID][PDU_ID]
+    facts = seeded_owners.facade.get_device_facts(SITE_ID, PDU_ID)
+    assert current["state"] == "GETTING_READY"
+    assert facts is not None
+    assert facts.serviceable is True
+    assert facts.online_state == "unknown"
+    assert seeded_owners.facade.device_available is True
+
+    await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+
+    assert endpoint.set_outlet_state.await_count == 2
+    first, second = endpoint.set_outlet_state.await_args_list
+    assert first.args == ("default", legacy["_id"], 1)
+    assert first.kwargs["state"] is False
+    assert second.args == ("default", legacy["_id"], 2)
+    assert second.kwargs["state"] is True
+    assert second.kwargs["current_device"] is current
+    assert (
+        second.kwargs["current_device"]["outlet_overrides"]
+        == legacy["outlet_overrides"]
+    )

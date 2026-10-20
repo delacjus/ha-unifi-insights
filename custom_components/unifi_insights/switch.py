@@ -47,7 +47,7 @@ from .entity import (
     async_discover_access_entities,
     console_device_info,
     get_field,
-    is_device_online,
+    is_device_serviceable,
 )
 
 if TYPE_CHECKING:
@@ -1017,7 +1017,7 @@ class UnifiOutletSwitch(
         if not self.coordinator.device_available:
             return False
         device_data = self._get_device_data()
-        if not device_data or not is_device_online(device_data):
+        if not device_data or not is_device_serviceable(device_data):
             return False
         return self._get_outlet_data() is not None
 

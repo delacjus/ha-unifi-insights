@@ -4137,3 +4137,30 @@ def test_outlet_cycle_switch_reports_no_outlet_attributes() -> None:
         "cycle_enabled": True,
     }
     assert cycle.extra_state_attributes is None
+
+
+@pytest.mark.parametrize("description", [OUTLET_RELAY_SWITCH, OUTLET_CYCLE_SWITCH])
+@pytest.mark.parametrize(
+    ("state", "healthy", "expected"),
+    [
+        ("GETTING_READY", True, True),
+        ("GETTING_READY", False, False),
+        ("ONLINE", False, False),
+        ("OFFLINE", True, False),
+        ("UPDATING", True, False),
+        ("ADOPTING", True, False),
+    ],
+)
+def test_outlet_serviceable_availability(
+    description, state: str, *, healthy: bool, expected: bool
+) -> None:
+    """Both outlet controls need fresh Device data and a serviceable device."""
+    coordinator = MagicMock()
+    coordinator.device_available = healthy
+    coordinator.data = {
+        "devices": {"site": {"pdu": {"state": state, "outlet_table": [{"index": 1}]}}}
+    }
+    switch = UnifiOutletSwitch(coordinator, description, "site", "pdu", outlet_index=1)
+    assert switch.available is expected
+    coordinator.data["devices"]["site"]["pdu"]["outlet_table"] = []
+    assert switch.available is False

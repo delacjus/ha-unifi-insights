@@ -1453,3 +1453,31 @@ class TestUnifiInsightsEntityEdgeCases:
         device_info = entity.device_info
         hw_version = device_info.get("hw_version", "")
         assert hw_version == "ra1 (na)"
+
+
+@pytest.mark.parametrize(
+    ("state", "healthy", "expected"),
+    [
+        ("GETTING_READY", True, True),
+        ("GETTING_READY", False, False),
+        ("ONLINE", False, False),
+        ("OFFLINE", True, False),
+        ("UPDATING", True, False),
+        ("ADOPTING", True, False),
+    ],
+)
+def test_network_serviceable_availability(
+    state: str, *, healthy: bool, expected: bool
+) -> None:
+    """Base entities need fresh Device data and a serviceable device."""
+    coordinator = MagicMock()
+    coordinator.device_available = healthy
+    coordinator.network_client.base_url = "https://example.test"
+    coordinator.data = {
+        "devices": {"site": {"pdu": {"state": state, "model": "USP-PDU-Pro"}}},
+        "stats": {},
+    }
+    entity = UnifiInsightsEntity(
+        coordinator, EntityDescription(key="test"), "site", "pdu"
+    )
+    assert entity.available is expected

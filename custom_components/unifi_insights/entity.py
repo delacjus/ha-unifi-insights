@@ -42,6 +42,7 @@ from .data_transforms import (
     device_facts,
     device_kind,
     device_online_state,
+    device_serviceable,
     first_not_none,
     get_field,
     get_site_gateway_id,
@@ -127,6 +128,11 @@ def is_device_online(data: dict[str, Any]) -> bool:
     online. ``CONNECTED`` and ``UP`` are not network device states.
     """
     return device_online_state(data) == "online"
+
+
+def is_device_serviceable(data: dict[str, Any]) -> bool:
+    """Return service eligibility; connectivity remains is_device_online's rule."""
+    return device_serviceable(data)
 
 
 def get_client_type(client: dict[str, Any]) -> str:
@@ -264,7 +270,7 @@ class UnifiInsightsEntity(CoordinatorEntity[UnifiInsightsFacadeCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available."""
+        """Return availability from Device health and service eligibility."""
         # Cached device data can still read "online" long after the
         # coordinator has stopped getting fresh data from the API (see
         # UnifiProtectEntity.available for the incident this mirrors) - gate
@@ -272,7 +278,7 @@ class UnifiInsightsEntity(CoordinatorEntity[UnifiInsightsFacadeCoordinator]):
         if not self.coordinator.device_available:
             return False
         facts = self.device_facts
-        return facts is not None and facts.online_state == "online"
+        return facts is not None and facts.serviceable
 
     @callback
     def _handle_coordinator_update(self) -> None:

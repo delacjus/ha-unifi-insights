@@ -935,3 +935,25 @@ def test_site_health_gateway_uptime_and_client_rule() -> None:
     )
     assert snapshot["gateway"]["uptime_s"] == 3600
     assert snapshot["clients"] == {"total": 4, "wired": 1, "wireless": 1}
+
+
+@pytest.mark.parametrize("publish", [False, True])
+def test_getting_ready_is_still_unknown_on_site_health(*, publish: bool) -> None:
+    """Service eligibility never inflates the dashboard's online counts."""
+    data = _base_data()
+    data["devices"]["site-1"]["gw-1"]["state"] = "GETTING_READY"
+    if publish:
+        data[NETWORK_FACTS_KEY] = {
+            "site-1": build_site_network_facts(
+                data["devices"]["site-1"], data["stats"]["site-1"]
+            )
+        }
+    snapshot = build_site_health_snapshot(
+        data,
+        entry_id="entry",
+        site_id="site-1",
+        ha_device_ids={},
+        devices_available=True,
+    )
+    assert snapshot["devices"]["gateway"] == {"online": 0, "offline": 0, "unknown": 1}
+    assert snapshot["gateway"]["state"] == "unknown"
