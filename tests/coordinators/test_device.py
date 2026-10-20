@@ -22,6 +22,8 @@ from homeassistant.exceptions import (
     HomeAssistantError,
     ServiceValidationError,
 )
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from unifi_official_api import (
     UniFiAuthenticationError,
@@ -2269,7 +2271,7 @@ class TestUnifiDeviceCoordinator:
     async def test_cleanup_stale_devices(
         self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
     ):
-        """Test stale device cleanup."""
+        """A genuinely removed device is removed only after N consecutive polls."""
         # Set up previous device IDs
         coordinator._previous_network_device_ids = {
             "default_device1",
@@ -2287,10 +2289,20 @@ class TestUnifiDeviceCoordinator:
             mock_device.id = "device_entry_id"
             set_mock_device_lookup(mock_registry.return_value, mock_device)
 
+            # Polls 1 and 2: device2 is absent but threshold (3) is not yet reached
             coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert coordinator._device_absence_count.get("default_device2") == 1
 
-            # device2 should be marked for removal
-            mock_registry.return_value.async_update_device.assert_called()
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert coordinator._device_absence_count.get("default_device2") == 2
+
+            # Poll 3: absence threshold reached; device2 is removed
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_called_once()
+            assert "default_device2" not in coordinator._previous_network_device_ids
+            assert coordinator._device_absence_count.get("default_device2") is None
 
     @pytest.mark.asyncio
     async def test_process_site_empty_devices(
@@ -2310,24 +2322,337 @@ class TestUnifiDeviceCoordinator:
     async def test_cleanup_stale_devices_no_registry_match(
         self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
     ):
-        """Test cleanup when stale device is not found in registry."""
-        # Set up previous device IDs
-        coordinator._previous_network_device_ids = {"default_stale_device"}
+        """Cleanup handles missing registry device gracefully after N polls."""
+        coordinator._previous_network_device_ids = {
+            "default_device1",
+            "default_stale_device",
+        }
+        coordinator.data["devices"] = {"default": {"device1": {"id": "device1"}}}
 
-        # Current devices are empty
-        coordinator.data["devices"] = {"default": {}}
-
-        # Mock device registry to return None for the device lookup
         with patch(
             "custom_components.unifi_insights.coordinators.base.dr.async_get"
         ) as mock_registry:
             set_mock_device_lookup(mock_registry.return_value, None)
 
-            # Should not raise even when device not in registry
-            coordinator._cleanup_stale_devices()
+            # Run 3 polls to hit the absence threshold
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
 
             # async_update_device should not be called since device wasn't found
             mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_v1_to_legacy_flip_removes_nothing(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """A flip from v1 to legacy fallback removes no devices."""
+        coordinator._previous_network_device_ids = {"default_v1_uuid"}
+        coordinator._v1_device_ids_by_mac[("default", "aa:bb:cc:dd:ee:01")] = "v1_uuid"
+        coordinator._legacy_fallback_sites.add("default")
+
+        # Current device on fallback retains resolved v1 ID
+        coordinator.data["devices"] = {
+            "default": {
+                "v1_uuid": {
+                    "id": "v1_uuid",
+                    "_id": "legacy_obj_id",
+                    "mac": "aa:bb:cc:dd:ee:01",
+                }
+            }
+        }
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "device_entry_id"
+            set_mock_device_lookup(mock_registry.return_value, mock_device)
+
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "default_v1_uuid" in coordinator._previous_network_device_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_legacy_to_v1_flip_removes_nothing(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """A flip from legacy fallback back to v1 removes no devices."""
+        coordinator._previous_network_device_ids = {"default_v1_uuid"}
+        coordinator._legacy_fallback_sites.discard("default")
+
+        # Current device served by v1
+        coordinator.data["devices"] = {
+            "default": {
+                "v1_uuid": {
+                    "id": "v1_uuid",
+                    "mac": "aa:bb:cc:dd:ee:01",
+                }
+            }
+        }
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "device_entry_id"
+            set_mock_device_lookup(mock_registry.return_value, mock_device)
+
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "default_v1_uuid" in coordinator._previous_network_device_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_empty_site_and_failed_fetch_polls_remove_nothing(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """Empty site response and missing site data remove no devices."""
+        coordinator._previous_network_device_ids = {
+            "default_dev1",
+            "default_dev2",
+        }
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "device_entry_id"
+            set_mock_device_lookup(mock_registry.return_value, mock_device)
+
+            # 1. Empty site poll
+            coordinator.data["devices"] = {"default": {}}
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "default_dev1" in coordinator._previous_network_device_ids
+            assert "default_dev2" in coordinator._previous_network_device_ids
+
+            # 2. Entirely empty devices dict (failed fetch)
+            coordinator.data["devices"] = {}
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "default_dev1" in coordinator._previous_network_device_ids
+            assert "default_dev2" in coordinator._previous_network_device_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_same_mac_different_id_removes_nothing(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """A device appearing with a new ID but the same MAC is not removed."""
+        coordinator._previous_network_device_ids = {"default_old_id"}
+        coordinator._device_macs = {"default_old_id": "aa:bb:cc:dd:ee:01"}
+
+        # Current device has a different ID but same MAC
+        coordinator.data["devices"] = {
+            "default": {
+                "new_id": {
+                    "id": "new_id",
+                    "mac": "aa:bb:cc:dd:ee:01",
+                }
+            }
+        }
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "device_entry_id"
+            set_mock_device_lookup(mock_registry.return_value, mock_device)
+
+            for _ in range(3):
+                coordinator._cleanup_stale_devices()
+
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "default_old_id" in coordinator._previous_network_device_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_device_reappears_resets_absence_count(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """A missing device that reappears before threshold resets absence count."""
+        coordinator._previous_network_device_ids = {
+            "default_dev1",
+            "default_dev2",
+        }
+        coordinator.data["devices"] = {"default": {"dev1": {"id": "dev1"}}}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            mock_device = MagicMock()
+            mock_device.id = "device_entry_id"
+            set_mock_device_lookup(mock_registry.return_value, mock_device)
+
+            # Polls 1 and 2: dev2 is missing
+            coordinator._cleanup_stale_devices()
+            assert coordinator._device_absence_count.get("default_dev2") == 1
+            coordinator._cleanup_stale_devices()
+            assert coordinator._device_absence_count.get("default_dev2") == 2
+
+            # Poll 3: dev2 reappears!
+            coordinator.data["devices"] = {
+                "default": {
+                    "dev1": {"id": "dev1"},
+                    "dev2": {"id": "dev2"},
+                }
+            }
+            coordinator._cleanup_stale_devices()
+            assert coordinator._device_absence_count.get("default_dev2") is None
+            mock_registry.return_value.async_update_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_legacy_device_to_v1_dict_resolves_v1_id(
+        self,
+        hass: HomeAssistant,
+        coordinator: UnifiInsightsDeviceCoordinator,
+        mock_config_entry: MockConfigEntry,
+    ):
+        """Legacy device resolves to known v1 ID from memory and registry."""
+        legacy = {
+            "_id": "64legacy123456789012345678",
+            "mac": "aa:bb:cc:dd:ee:01",
+            "name": "Switch",
+        }
+
+        # 1. From in-memory map
+        coordinator._v1_device_ids_by_mac[("default", "aa:bb:cc:dd:ee:01")] = (
+            "v1-mem-id"
+        )
+        mapped = coordinator._legacy_device_to_v1_dict(
+            legacy, coordinator=coordinator, site_id="default"
+        )
+        assert mapped["id"] == "v1-mem-id"
+        assert mapped["_id"] == "64legacy123456789012345678"
+
+        # 2. From device registry
+        mock_config_entry.add_to_hass(hass)
+        dev_reg = dr.async_get(hass)
+        dev_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={(DOMAIN, "default_v1-reg-id")},
+            connections={(CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:02")},
+        )
+        legacy2 = {
+            "_id": "64legacy999999999999999999",
+            "mac": "aa:bb:cc:dd:ee:02",
+        }
+        mapped2 = coordinator._legacy_device_to_v1_dict(
+            legacy2, coordinator=coordinator, site_id="default"
+        )
+        assert mapped2["id"] == "v1-reg-id"
+        assert mapped2["_id"] == "64legacy999999999999999999"
+
+        # 3. Without coordinator or known ID: falls back to _id
+        legacy3 = {
+            "_id": "64legacy333333333333333333",
+            "mac": "aa:bb:cc:dd:ee:03",
+        }
+        mapped3 = UnifiInsightsDeviceCoordinator._legacy_device_to_v1_dict(legacy3)
+        assert mapped3["id"] == "64legacy333333333333333333"
+
+    def test_canonical_mac_edge_cases(self) -> None:
+        """Test _canonical_mac handles None, empty, non-12-char strings."""
+        assert UnifiInsightsDeviceCoordinator._canonical_mac(None) is None
+        assert UnifiInsightsDeviceCoordinator._canonical_mac("") is None
+        assert UnifiInsightsDeviceCoordinator._canonical_mac("invalid") == "invalid"
+        assert (
+            UnifiInsightsDeviceCoordinator._canonical_mac("AA:BB:CC:DD:EE:FF")
+            == "aabbccddeeff"
+        )
+
+    def test_find_v1_device_id_registry_edge_cases(
+        self, coordinator: UnifiInsightsDeviceCoordinator
+    ) -> None:
+        """Test registry lookup with missing hass, config entry, or bad mac."""
+        coord_no_hass = copy.copy(coordinator)
+        coord_no_hass.hass = None
+        assert (
+            coord_no_hass._find_v1_device_id_from_registry(
+                "default", "aa:bb:cc:dd:ee:01"
+            )
+            is None
+        )
+        assert coordinator._find_v1_device_id_from_registry("default", "") is None
+
+        # Registry raising exception handled gracefully
+        with patch(
+            "custom_components.unifi_insights.coordinators.device.dr.async_get",
+            side_effect=RuntimeError,
+        ):
+            assert (
+                coordinator._find_v1_device_id_from_registry(
+                    "default", "aa:bb:cc:dd:ee:01"
+                )
+                is None
+            )
+
+    def test_resolve_legacy_device_id_edge_cases(
+        self, coordinator: UnifiInsightsDeviceCoordinator
+    ) -> None:
+        """Test _resolve_legacy_device_id handles missing site_id or mac."""
+        assert (
+            coordinator._resolve_legacy_device_id(None, {"mac": "aa:bb:cc:dd:ee:01"})
+            is None
+        )
+        assert coordinator._resolve_legacy_device_id("default", {}) is None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_selected_site_missing_from_devices(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
+    ) -> None:
+        """Cleanup skips selected site when its devices entry is missing."""
+        coordinator.config_coordinator.data["sites"] = {"site_a": {"id": "site_a"}}
+        coordinator._previous_network_device_ids = {"site_a_dev1"}
+        coordinator.data["devices"] = {}
+
+        with patch(
+            "custom_components.unifi_insights.coordinators.base.dr.async_get"
+        ) as mock_registry:
+            set_mock_device_lookup(mock_registry.return_value, None)
+            coordinator._cleanup_stale_devices()
+            mock_registry.return_value.async_update_device.assert_not_called()
+            assert "site_a_dev1" in coordinator._previous_network_device_ids
+
+    @pytest.mark.asyncio
+    async def test_pdu_outlet_command_sends_legacy_id_with_v1_identity(
+        self, coordinator: UnifiInsightsDeviceCoordinator
+    ):
+        """PDU outlet command resolves legacy _id from v1-keyed device data."""
+        coordinator.data["devices"] = {
+            "default": {
+                "pdu-v1-uuid": {
+                    "id": "pdu-v1-uuid",
+                    "_id": "pdu-legacy-object-id",
+                    "outlet_table": [
+                        {"index": 1, "relay_state": True},
+                    ],
+                    "outlet_overrides": [
+                        {"outlet_idx": 1, "relay_state": True},
+                    ],
+                }
+            }
+        }
+        coordinator.network_client.devices.set_outlet_state = AsyncMock(
+            return_value=True
+        )
+        coordinator.async_request_refresh = AsyncMock()
+
+        result = await coordinator.async_set_outlet_state(
+            "default", "pdu-v1-uuid", 1, state=False
+        )
+        assert result is True
+
+        coordinator.network_client.devices.set_outlet_state.assert_awaited_once()
+        call_args = coordinator.network_client.devices.set_outlet_state.await_args
+        assert call_args.args[1] == "pdu-legacy-object-id"
+        assert call_args.args[2] == 1
+        assert call_args.kwargs["state"] is False
 
     def test_get_device_non_dict_value(
         self, coordinator: UnifiInsightsDeviceCoordinator
