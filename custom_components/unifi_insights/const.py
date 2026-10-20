@@ -186,10 +186,11 @@ ISP_WAN_NUMBERS: Final = (
 # Real-time updates via WebSocket when available
 SCAN_INTERVAL_PROTECT = timedelta(seconds=30)
 
-# How many polls in a row a device may be absent before it is removed from
-# the device registry. Removal cannot be undone (areas, customizations and
-# automations keyed on the device go with it), while one absence is
-# ambiguous: a partial answer or a record the library skipped looks the same.
+# Consecutive missing polls threshold for stale device registry removal.
+# For Network, a device is removed on the 3rd consecutive eligible poll in which
+# it is absent. Protect keeps a missing device for 3 polls and removes it on the 4th.
+# Removal cannot be undone (areas, customizations and automations keyed on the
+# device go with it), while a single absence is ambiguous.
 # Three polls is about 90 seconds.
 MAX_CONSECUTIVE_MISSING_POLLS: Final = 3
 

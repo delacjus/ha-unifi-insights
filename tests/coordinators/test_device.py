@@ -2377,7 +2377,7 @@ class TestUnifiDeviceCoordinator:
         coordinator._site_tracked_devices = {
             "default": {
                 "device1": "aa:bb:cc:dd:ee:01",
-                "stale_device": None,
+                "stale_device": "aa:bb:cc:dd:ee:99",
             }
         }
         coordinator.data["devices"] = {
@@ -2427,9 +2427,12 @@ class TestUnifiDeviceCoordinator:
             }
         }
 
-        for _ in range(3):
+        # Alternating sources on each poll past the 3-poll threshold (6 polls)
+        # to prove continuous flips prevent removal indefinitely.
+        for i in range(6):
+            source = "legacy" if i % 2 == 0 else "v1"
             coordinator._cleanup_stale_devices(
-                site_sources={"default": "legacy"},
+                site_sources={"default": source},
                 site_device_macs={"default": {"other_dev": "aa:bb:cc:dd:ee:01"}},
             )
 
@@ -2469,9 +2472,12 @@ class TestUnifiDeviceCoordinator:
             }
         }
 
-        for _ in range(3):
+        # Alternating sources on each poll past the 3-poll threshold (6 polls)
+        # to prove continuous flips prevent removal indefinitely.
+        for i in range(6):
+            source = "v1" if i % 2 == 0 else "legacy"
             coordinator._cleanup_stale_devices(
-                site_sources={"default": "v1"},
+                site_sources={"default": source},
                 site_device_macs={"default": {"other_dev": "aa:bb:cc:dd:ee:01"}},
             )
 
@@ -2481,7 +2487,7 @@ class TestUnifiDeviceCoordinator:
         assert "old_dev" in coordinator._site_tracked_devices.get("default", {})
 
     @pytest.mark.asyncio
-    async def test_cleanup_empty_site_and_failed_fetch_polls_remove_nothing(
+    async def test_cleanup_empty_site_polls_remove_nothing(
         self, hass: HomeAssistant, coordinator: UnifiInsightsDeviceCoordinator
     ):
         """Empty site response and missing site data remove no devices."""
@@ -2506,7 +2512,7 @@ class TestUnifiDeviceCoordinator:
             assert "dev1" in coordinator._site_tracked_devices.get("default", {})
             assert "dev2" in coordinator._site_tracked_devices.get("default", {})
 
-            # 2. Entirely empty devices dict (failed fetch)
+            # 2. Empty devices dictionary (site omitted from data)
             coordinator.data["devices"] = {}
             for _ in range(3):
                 coordinator._cleanup_stale_devices(
@@ -2910,6 +2916,59 @@ class TestUnifiDeviceCoordinator:
             )
             assert check_dev is not None
             assert entry_id in device_config_entry_ids(check_dev)
+        finally:
+            await async_shutdown_owners(owners)
+
+    @pytest.mark.asyncio
+    async def test_refresh_restart_during_fallback_flapping_v1_retains_v1_keys(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Restart in fallback -> v1 (ineligible, source change) -> fallback:
+        fallback poll keys devices by the v1 ID without legacy-key churn."""
+        owners = build_seeded_owners(hass)
+        try:
+            mac = SAMPLE_PDU_DEVICE["mac"]
+            v1_id = SAMPLE_PDU_DEVICE["id"]
+            legacy_id = SAMPLE_PDU_LEGACY_DEVICE["_id"]
+
+            # Poll 1: restart while in fallback (v1 down with 503)
+            # No aliases committed yet, so the device is keyed by its legacy ID.
+            owners.network_client.devices.get_all.side_effect = UniFiResponseError(
+                "down", status_code=503
+            )
+            owners.network_client.devices.get_legacy_site_devices.return_value = [
+                copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE)
+            ]
+            await owners.config.async_refresh()
+            await owners.device.async_refresh()
+
+            assert legacy_id in owners.device.data["devices"][SITE_ID]
+            assert owners.device._site_sources[SITE_ID] == "legacy"
+            assert owners.device._site_aliases.get(SITE_ID) == {}
+
+            # Poll 2: v1 responds (source changed legacy -> v1: ineligible for cleanup,
+            # but aliases must be merged on every committed v1 poll).
+            owners.network_client.devices.get_all.side_effect = None
+            owners.network_client.devices.get_all.return_value = [
+                copy.deepcopy(SAMPLE_PDU_DEVICE)
+            ]
+            await owners.device.async_refresh()
+
+            assert v1_id in owners.device.data["devices"][SITE_ID]
+            assert owners.device._site_sources[SITE_ID] == "v1"
+            assert owners.device._site_aliases.get(SITE_ID, {}).get(mac) == v1_id
+
+            # Poll 3: v1 drops again to fallback.
+            # Because the v1 alias was recorded in poll 2, fallback must reuse
+            # the v1 ID rather than churning back to the legacy ID.
+            owners.network_client.devices.get_all.side_effect = UniFiResponseError(
+                "down", status_code=503
+            )
+            await owners.device.async_refresh()
+
+            assert v1_id in owners.device.data["devices"][SITE_ID]
+            assert legacy_id not in owners.device.data["devices"][SITE_ID]
+            assert owners.device._site_sources[SITE_ID] == "legacy"
         finally:
             await async_shutdown_owners(owners)
 
