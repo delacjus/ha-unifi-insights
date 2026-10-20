@@ -186,7 +186,7 @@ Flows: user setup, reauth, reconfigure, options. There is no network discovery s
 
 ### Device model
 
-One device per physical UniFi device, identified by `(DOMAIN, mac)` or `(DOMAIN, protect_id)`, with the console as the parent via `via_device_id`. Logical sites, WiFi networks, and Mobility workspaces are devices scoped to the owning config entry. Stale devices are removed when they disappear from the coordinator snapshot (`stale-devices`), with Network removing on the 3rd consecutive eligible poll in which a device is absent (adding source-aware eligibility and MAC guard protection) and Protect removing on the 4th, while InnerSpace removes immediately, and `async_remove_config_entry_device` lets users delete the rest.
+One device per physical UniFi device, with the console as the parent via `via_device_id`. Network devices are identified by `(DOMAIN, "<site_id>_<device_id>")`, where `device_id` is the v1 ID (reused during legacy fallback) or, when no v1 ID is known, the legacy `_id` or MAC. Protect devices reuse a matching Network device's identifiers or use their own Protect identifiers. Logical sites, WiFi networks, and Mobility workspaces are devices scoped to the owning config entry. Stale devices are removed when they disappear from the coordinator snapshot (`stale-devices`), with Network removing on the 3rd consecutive eligible poll in which a device is absent (adding source-aware eligibility and MAC guard protection) and Protect removing on the 4th, while InnerSpace removes immediately, and `async_remove_config_entry_device` lets users delete the rest.
 
 ### Service actions
 
