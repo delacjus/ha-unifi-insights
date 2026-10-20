@@ -1593,36 +1593,44 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         fields and the complete ``outlet_overrides`` array that was sent are
         published as a copy-on-write overlay and a deferred refresh is
         requested.
+
+        The write holds the coordinator's refresh lock from reading the cached
+        record to publishing (#371 review). A poll already in flight finishes
+        first, so it cannot replace the published array with its older one,
+        and two overlapping outlet commands run one after the other, each
+        built from the array the previous one sent.
         """
         site_name = await self.config_coordinator.async_resolve_legacy_site_name(
             site_id, verified_only=False
         )
-        device_data = self.get_device(site_id, device_id) or {}
-        sent = _build_outlet_overrides(
-            device_data,
-            outlet_index,
-            state=state,
-            cycle_enabled=cycle_enabled,
-        )
-        result = await async_execute_command(
-            CommandFailure(
-                translation_key="command_failed",
-                message=(
-                    f"Unable to set outlet {outlet_index} state on device {device_id}"
+        async with self._debounced_refresh.async_lock():
+            device_data = self.get_device(site_id, device_id) or {}
+            sent = _build_outlet_overrides(
+                device_data,
+                outlet_index,
+                state=state,
+                cycle_enabled=cycle_enabled,
+            )
+            result = await async_execute_command(
+                CommandFailure(
+                    translation_key="command_failed",
+                    message=(
+                        f"Unable to set outlet {outlet_index} state "
+                        f"on device {device_id}"
+                    ),
                 ),
-            ),
-            self.network_client.devices.set_outlet_state,
-            site_name,
-            device_data.get("_id") or device_id,
-            outlet_index,
-            state=state,
-            cycle_enabled=cycle_enabled,
-            current_device=device_data,
-        )
-        changes: dict[str, bool] = {"relay_state": state}
-        if cycle_enabled is not None:
-            changes["cycle_enabled"] = cycle_enabled
-        self._publish_outlet(site_id, device_id, outlet_index, changes, sent)
+                self.network_client.devices.set_outlet_state,
+                site_name,
+                device_data.get("_id") or device_id,
+                outlet_index,
+                state=state,
+                cycle_enabled=cycle_enabled,
+                current_device=device_data,
+            )
+            changes: dict[str, bool] = {"relay_state": state}
+            if cycle_enabled is not None:
+                changes["cycle_enabled"] = cycle_enabled
+            self._publish_outlet(site_id, device_id, outlet_index, changes, sent)
         await self.async_request_refresh()
         return result
 
@@ -1654,9 +1662,11 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         replaced. The device's ``outlet_overrides`` becomes a new list of the
         sent entries, and when the written outlet is in ``outlet_table`` that
         list and the outlet are replaced too; the other outlets stay shared.
-        Listeners are notified without ``async_set_updated_data()``. A poll
-        that started before the write may briefly restore the old value of
-        either field until the next refresh.
+        Listeners are notified without ``async_set_updated_data()``. The
+        caller holds the refresh lock, so no poll that started before the
+        write can finish after this overlay. A poll that starts after it can
+        still read the controller's older values for a few seconds while the
+        PDU applies the change; the next refresh corrects them.
         """
         devices = self.data.get("devices", {})
         site_devices = devices.get(site_id)

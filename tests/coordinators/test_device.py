@@ -9,6 +9,7 @@ coordinator's legacy site-name rule.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 from contextlib import nullcontext, suppress
@@ -526,6 +527,85 @@ OUTLET_3_ON = {"index": 3, "relay_state": True}
 
 class TestSequentialOutletWrites:
     """Sequential PDU outlet writes mirror library read-modify-write semantics."""
+
+    async def test_poll_in_flight_cannot_overwrite_a_write(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A write waits for an in-flight poll, so its stale array is not kept."""
+        controller = _FakePduController()
+        _wire_pdu_controller(seeded_owners, controller)
+        device = seeded_owners.device
+        device.async_request_refresh = AsyncMock()
+        devices = seeded_owners.network_client.devices
+        stale = copy.deepcopy(controller.device)
+        polling = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_read(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+            polling.set()
+            await release.wait()
+            return [copy.deepcopy(stale)]
+
+        devices.get_legacy_site_devices.side_effect = slow_read
+        poll = asyncio.create_task(device.async_refresh())
+        await polling.wait()
+        write = asyncio.create_task(
+            device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        )
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert controller.puts == []
+
+        release.set()
+        await poll
+        await write
+        devices.get_legacy_site_devices.side_effect = lambda *a, **k: [
+            copy.deepcopy(controller.device)
+        ]
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
+
+        assert controller.puts[-1][:1] == [FIRST_WRITE_OVERRIDE]
+        assert controller.relay()[1] is False
+        assert controller.relay()[2] is False
+
+    async def test_overlapping_writes_run_one_after_the_other(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A second command waits and is built from the first command's array."""
+        controller = _FakePduController()
+        endpoint = _wire_pdu_controller(seeded_owners, controller)
+        device = seeded_owners.device
+        device.async_request_refresh = AsyncMock()
+        sending = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_put(path: str, json_data: dict[str, Any]) -> None:
+            sending.set()
+            await release.wait()
+            controller.apply(json_data["outlet_overrides"])
+
+        endpoint._client._put = slow_put
+        first = asyncio.create_task(
+            device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        )
+        await sending.wait()
+        second = asyncio.create_task(
+            device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
+        )
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert seeded_owners.network_client.devices.set_outlet_state.await_count == 1
+
+        release.set()
+        await first
+        await second
+
+        written = [FIRST_WRITE_OVERRIDE]
+        assert controller.puts == [
+            written,
+            [*written, {"index": 2, "relay_state": False}],
+        ]
+        assert controller.relay()[1] is False
 
     async def test_two_writes_when_refresh_after_first_write_fails(
         self, seeded_owners: SeededOwners
