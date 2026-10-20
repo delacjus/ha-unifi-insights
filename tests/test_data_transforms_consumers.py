@@ -759,3 +759,15 @@ async def test_transient_connectivity_is_unknown(
     assert state.state == "unknown"
     coordinator.device_available = False
     assert sensor.available is False
+
+
+@pytest.mark.parametrize("key", ["device_status", "wan_status"])
+@pytest.mark.parametrize(("state", "expected"), [("ONLINE", True), ("OFFLINE", False)])
+def test_connectivity_follows_known_online_state(
+    hass: HomeAssistant, key: str, state: str, *, expected: bool
+) -> None:
+    """Status/WAN report on for ONLINE and off for OFFLINE, as before #372."""
+    coordinator = _coordinator(hass, {"sw1": _switch(state=state)}, publish=True)
+    description = next(d for d in BINARY_SENSOR_TYPES if d.key == key)
+    sensor = UnifiInsightsBinarySensor(coordinator, description, SITE, "sw1")
+    assert sensor.is_on is expected
