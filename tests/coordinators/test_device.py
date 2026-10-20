@@ -2355,6 +2355,54 @@ class TestUnifiDeviceCoordinator:
         )
 
     @pytest.mark.asyncio
+    async def test_cleanup_stale_devices_prunes_disappeared_site_state(
+        self, coordinator: UnifiInsightsDeviceCoordinator
+    ) -> None:
+        """Drop a disappeared site's state while continuing active-site tracking."""
+        coordinator._site_sources = {"default": "v1", "gone": "legacy"}
+        coordinator._site_aliases = {
+            "default": {
+                "aa:bb:cc:dd:ee:01": "device1",
+                "aa:bb:cc:dd:ee:02": "device2",
+            },
+            "gone": {"aa:bb:cc:dd:ee:99": "gone-device"},
+        }
+        coordinator._site_tracked_devices = {
+            "default": {
+                "device1": "aa:bb:cc:dd:ee:01",
+                "device2": "aa:bb:cc:dd:ee:02",
+            },
+            "gone": {"gone-device": "aa:bb:cc:dd:ee:99"},
+        }
+        coordinator._site_absence_counts = {
+            "default": {"device1": 1, "device2": 1},
+            "gone": {"gone-device": 2},
+        }
+        coordinator.data["devices"] = {
+            "default": {"device1": {"id": "device1", "mac": "aa:bb:cc:dd:ee:01"}}
+        }
+
+        coordinator._cleanup_stale_devices(
+            site_sources={"default": "v1"},
+            site_device_macs={"default": {"device1": "aa:bb:cc:dd:ee:01"}},
+        )
+
+        assert coordinator._site_sources == {"default": "v1"}
+        assert coordinator._site_aliases == {
+            "default": {
+                "aa:bb:cc:dd:ee:01": "device1",
+                "aa:bb:cc:dd:ee:02": "device2",
+            }
+        }
+        assert coordinator._site_tracked_devices == {
+            "default": {
+                "device1": "aa:bb:cc:dd:ee:01",
+                "device2": "aa:bb:cc:dd:ee:02",
+            }
+        }
+        assert coordinator._site_absence_counts == {"default": {"device2": 2}}
+
+    @pytest.mark.asyncio
     async def test_process_site_empty_devices(
         self, coordinator: UnifiInsightsDeviceCoordinator
     ):
