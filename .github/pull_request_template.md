@@ -27,19 +27,19 @@
   batch related changes together to avoid wasting CI runner capacity.
 -->
 
-- [ ] I built and ran the project locally and verified this change actually works (not just that it compiles)
-- [ ] I ran `pytest` locally and all tests pass
-- [ ] I ran `./script/lint` locally and it passes
-- [ ] I pasted real local verification output under **Testing Performed** below (no placeholder text)
-- [ ] This PR is self-contained and is not a duplicate; I have not opened other overlapping or back-to-back PRs for the same change
-- [ ] If an AI agent created or assisted with this PR, a human reviewed and verified the changes before submission
+- [x] I built and ran the project locally and verified this change actually works (not just that it compiles)
+- [x] I ran `pytest` locally and all tests pass
+- [x] I ran `./script/lint` locally and it passes
+- [x] I pasted real local verification output under **Testing Performed** below (no placeholder text)
+- [x] This PR is self-contained and is not a duplicate; I have not opened other overlapping or back-to-back PRs for the same change
+- [x] If an AI agent created or assisted with this PR, a human reviewed and verified the changes before submission
 
 ## Related Issues
 
 <!-- Link the issue this PR resolves (Closes #123) or contributes to (Part of #123). "None" is only for maintainers with write access, for housekeeping. -->
-<!-- Examples: Fixes #123, Closes https://github.com/..., Related to #456, or None (maintainers only) -->
+<!-- Examples: Fixes #None123, Closes https://github.com/..., Related to #456, or None (maintainers only) -->
 
-Fixes #
+Fixes #None
 
 ## Changes Made
 
