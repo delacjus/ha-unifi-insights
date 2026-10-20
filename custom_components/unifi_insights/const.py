@@ -186,6 +186,14 @@ ISP_WAN_NUMBERS: Final = (
 # Real-time updates via WebSocket when available
 SCAN_INTERVAL_PROTECT = timedelta(seconds=30)
 
+# How many polls in a row a device may be absent before it is removed from
+# the device registry. Removal cannot be undone (areas, customizations and
+# automations keyed on the device go with it), while one absence is
+# ambiguous: a partial answer or a record the library skipped looks the same.
+# Three polls is about 90 seconds.
+MAX_CONSECUTIVE_MISSING_POLLS: Final = 3
+
+
 UNIFI_API_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
 
 

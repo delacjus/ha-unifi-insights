@@ -56,6 +56,7 @@ from custom_components.unifi_insights.const import (
     DEVICE_TYPE_VIEWER,
     DEVICE_TYPE_VIEWPORT,
     EVENT_TYPE_ALARM_HUB_DEVICE_TAMPER,
+    MAX_CONSECUTIVE_MISSING_POLLS,
     MODEL_KEY_FOB,
     MODEL_KEY_LINKSTATION,
     SCAN_INTERVAL_PROTECT,
@@ -126,13 +127,6 @@ MAX_DOOR_STATE_PRESERVE_POLLS: Final = 3
 # cache. Resetting the counter instead let the cycle restart, flipping a
 # contact once every eleven polls.
 MAX_WS_RECENCY_PRESERVE_POLLS: Final = 10
-
-# How many polls in a row a device may be absent before it is removed from
-# the device registry. Removal cannot be undone (areas, customizations and
-# automations keyed on the device go with it), while one absence is
-# ambiguous: a partial answer or a record the library skipped looks the same.
-# Three polls is about 90 seconds.
-MAX_CONSECUTIVE_MISSING_POLLS: Final = 3
 
 # A stopped siren is only guarded against a reading that was already in
 # flight when it was stopped. A request does not outlive a poll interval or

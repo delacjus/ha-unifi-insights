@@ -68,7 +68,7 @@ await coordinator.async_config_entry_first_refresh()
 ## Dynamic & Stale Device Cleanup (HA 2026.8–2026.10+)
 
 - **Dynamic devices (`dynamic-devices`):** Automatically register new devices discovered on subsequent coordinator refreshes.
-- **Stale devices (`stale-devices`):** Remove stale devices from the Home Assistant device registry when they disappear from the controller.
+- **Stale devices (`stale-devices`):** Remove stale devices from the Home Assistant device registry when they disappear from the controller. The Network device and Protect coordinators enforce a grace period (`MAX_CONSECUTIVE_MISSING_POLLS = 3`) before removing devices via `_remove_stale_device` (InnerSpace removes immediately). The Network device coordinator additionally requires source-aware eligibility (the site must have the same polling source as its previous snapshot and not drop from non-empty to zero devices) and a hardware MAC presence guard to protect device identity across v1 and legacy endpoint fallbacks.
 - **HA 2026.8–2026.10 Device Registry rules:**
   - Use `dr.async_entries_for_config_entry(dev_reg, entry.entry_id)` or `dev_reg.async_get_device_by_identifier(entry.entry_id, (DOMAIN, device_id))`.
   - Use `device.config_entry_id` (single config entry per device) — never access deprecated `device.config_entries`, `device.config_entries_subentries`, or `device.primary_config_entry`.

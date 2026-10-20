@@ -84,7 +84,7 @@ Each config entry owns a set of `DataUpdateCoordinator` subclasses, one per data
 | `UnifiInsightsCarrierFabricCoordinator` | `coordinators/carrier_fabric.py` | 5 min            | Carrier Fabric organizations (standalone entry)                                                                                 |
 | `UnifiInsightsFacadeCoordinator`        | `coordinators/facade.py`         | push only        | Unified read view over the coordinators above                                                                                   |
 
-All coordinators inherit `UnifiInsightsBaseCoordinator` (`coordinators/base.py`) for shared error mapping: authentication failures raise `ConfigEntryAuthFailed` (triggers reauth) and connection or server failures raise `UpdateFailed` (retry next interval). The device, Protect and InnerSpace coordinators detach registry devices the console no longer reports through the base class's `_remove_stale_device`; each keeps its own rule for when a device counts as stale (Protect waits `MAX_CONSECUTIVE_MISSING_POLLS` polls).
+All coordinators inherit `UnifiInsightsBaseCoordinator` (`coordinators/base.py`) for shared error mapping: authentication failures raise `ConfigEntryAuthFailed` (triggers reauth) and connection or server failures raise `UpdateFailed` (retry next interval). The device, Protect and InnerSpace coordinators detach registry devices the console no longer reports through the base class's `_remove_stale_device`; each keeps its own rule for when a device counts as stale. The device coordinator enforces source-aware eligibility (a site is only eligible for cleanup on consecutive polls from the same API source, preventing v1/legacy flip purges and empty-snapshot drops), a MAC presence guard (an identifier is not stale if its normalized hardware MAC is present on the site), and a grace period of `MAX_CONSECUTIVE_MISSING_POLLS` (3) missing polls before removal. Known v1 IDs are reused during legacy fallback to keep device identities stable across endpoint outages. Protect similarly waits `MAX_CONSECUTIVE_MISSING_POLLS` polls, while InnerSpace removes immediately.
 
 The facade coordinator has no update interval. It subscribes to the specialized coordinators, aggregates their snapshots into one `data` mapping, and fans out a single listener notification. Entities and services read from the facade so they do not need to know which coordinator owns a field.
 
@@ -186,7 +186,7 @@ Flows: user setup, reauth, reconfigure, options. There is no network discovery s
 
 ### Device model
 
-One device per physical UniFi device, identified by `(DOMAIN, mac)` or `(DOMAIN, protect_id)`, with the console as the parent via `via_device_id`. Logical sites, WiFi networks, and Mobility workspaces are devices scoped to the owning config entry. Stale devices are removed when they disappear from the coordinator snapshot (`stale-devices`), and `async_remove_config_entry_device` lets users delete the rest.
+One device per physical UniFi device, identified by `(DOMAIN, mac)` or `(DOMAIN, protect_id)`, with the console as the parent via `via_device_id`. Logical sites, WiFi networks, and Mobility workspaces are devices scoped to the owning config entry. Stale devices are removed when they disappear from the coordinator snapshot (`stale-devices`), with a 3-poll grace period on Network and Protect (Network adding source-aware eligibility and MAC guard protection) while InnerSpace removes immediately, and `async_remove_config_entry_device` lets users delete the rest.
 
 ### Service actions
 
