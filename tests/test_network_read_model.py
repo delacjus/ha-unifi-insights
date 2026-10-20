@@ -37,10 +37,12 @@ from custom_components.unifi_insights.data_transforms import (
     device_facts,
     device_kind,
     device_online_state,
+    device_serviceable,
     first_not_none,
     get_field,
     normalize_mac,
     port_index,
+    site_device_facts,
     site_network_facts,
     uplink_rate_bps,
 )
@@ -795,3 +797,43 @@ def test_accessor_falls_back_to_the_builder(caplog: pytest.LogCaptureFixture) ->
     no_stats = site_network_facts({"devices": _raw_data()["devices"]}, "site")
     assert no_stats is not None
     assert no_stats.devices["udm"].cpu_pct is None
+
+
+@pytest.mark.parametrize("field", ["state", "status"])
+@pytest.mark.parametrize("state", [state for state, _ in NETWORK_DEVICE_STATES])
+@pytest.mark.parametrize("as_enum", [False, True])
+def test_serviceable_state_matrix(field: str, state: str, *, as_enum: bool) -> None:
+    """Only online and GETTING_READY remain eligible through either alias/enum."""
+    raw = Enum("RawState", {"VALUE": state}).VALUE if as_enum else state
+    record = {field: raw}
+    expected = state in {"ONLINE", "GETTING_READY"}
+    assert device_serviceable(record) is expected
+    published = build_site_network_facts({"device": record}, {})
+    facts = published.devices["device"]
+    assert facts.serviceable is expected
+    assert facts.online_state == dict(NETWORK_DEVICE_STATES)[state]
+    assert site_device_facts(published, "device", record) is facts
+    assert site_device_facts(None, "device", record).serviceable is expected
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"state": " getting_ready ", "status": "OFFLINE"}, True),
+        ({"state": " offline ", "status": "GETTING_READY"}, False),
+        ({"state": None, "status": " getting_ready "}, True),
+        ({"state": " online "}, True),
+        ({"state": "", "status": "ONLINE"}, False),
+        ({"state": 1, "status": "GETTING_READY"}, False),
+        ({"state": [], "status": "ONLINE"}, False),
+        ({"state": {"value": "GETTING_READY"}}, False),
+        ({"state": "nonsense", "status": "ONLINE"}, False),
+        ({"state": False}, False),
+        ({"state": None}, False),
+        ({}, False),
+    ],
+)
+def test_serviceable_normalization(record: dict[str, Any], *, expected: bool) -> None:
+    """Invalid non-None state masks status; normalization preserves precedence."""
+    assert device_serviceable(record) is expected
+    assert entity.is_device_serviceable(record) is expected

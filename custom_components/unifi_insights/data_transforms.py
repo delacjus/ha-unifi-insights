@@ -185,6 +185,10 @@ _ONLINE_STATE_BY_DEVICE_STATE: Final[dict[str, OnlineState]] = dict(
     NETWORK_DEVICE_STATES
 )
 
+# Only GETTING_READY is a reachable managed device applying configuration.
+# UPDATING may reboot; ADOPTING, PENDING_ADOPTION and DELETING are not managed.
+TRANSIENT_SERVICEABLE_STATES: Final = frozenset({"GETTING_READY"})
+
 _GATEWAY_LEGACY_TYPES: Final = frozenset({"udm", "uxg", "ugw", "udr", "ucg"})
 
 # Stats keys for the system metrics. The v1 statistics endpoint uses the
@@ -224,10 +228,23 @@ def device_online_state(device: Mapping[str, Any]) -> OnlineState:
     surrounding whitespace, then maps the value through
     ``NETWORK_DEVICE_STATES``. Anything not listed there reads as unknown.
     """
+    return _ONLINE_STATE_BY_DEVICE_STATE.get(
+        _normalized_device_state(device), "unknown"
+    )
+
+
+def _normalized_device_state(device: Mapping[str, Any]) -> str:
+    """Normalize state, falling back to status only when state is None."""
     raw = _enum_value(get_field(device, "state", "status"))
-    if not isinstance(raw, str):
-        return "unknown"
-    return _ONLINE_STATE_BY_DEVICE_STATE.get(raw.strip().upper(), "unknown")
+    return raw.strip().upper() if isinstance(raw, str) else ""
+
+
+def device_serviceable(device: Mapping[str, Any]) -> bool:
+    """Return service eligibility, including configuration in GETTING_READY."""
+    return (
+        device_online_state(device) == "online"
+        or _normalized_device_state(device) in TRANSIENT_SERVICEABLE_STATES
+    )
 
 
 def _has_feature(features: Any, *names: str) -> bool:
@@ -382,6 +399,10 @@ class NetworkDeviceFacts:
     """
     What the integration has decided about one network device.
 
+    ``online_state`` is strict connectivity; ``serviceable`` also permits
+    GETTING_READY while a managed device applies configuration. Coordinator
+    health must still gate entity availability.
+
     ``ports`` keeps source order; when two records share an index the first
     one wins both lookups. Ports need legacy data: the v1 device overview
     carries no port records, so ``ports`` is empty when the legacy fetch
@@ -405,6 +426,7 @@ class NetworkDeviceFacts:
     device_id: str
     mac: str | None
     online_state: OnlineState
+    serviceable: bool
     kind: NetworkDeviceKind
     is_site_gateway: bool
     ports: tuple[NetworkPortFacts, ...]
@@ -507,6 +529,7 @@ def _device_facts(
         device_id=device_id,
         mac=normalize_mac(get_field(device, "macAddress", "mac")),
         online_state=device_online_state(device),
+        serviceable=device_serviceable(device),
         kind=kind,
         is_site_gateway=is_site_gateway,
         ports=device_ports(device),
@@ -797,6 +820,7 @@ __all__ = [
     "MEMORY_STAT_KEYS",
     "NETWORK_DEVICE_STATES",
     "NETWORK_FACTS_KEY",
+    "TRANSIENT_SERVICEABLE_STATES",
     "UPTIME_STAT_KEYS",
     "ClientConnectionType",
     "NetworkDeviceFacts",
@@ -815,6 +839,7 @@ __all__ = [
     "device_kind",
     "device_online_state",
     "device_ports",
+    "device_serviceable",
     "first_not_none",
     "get_field",
     "get_site_gateway_id",

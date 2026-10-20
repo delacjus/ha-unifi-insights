@@ -3750,6 +3750,7 @@ class TestUnifiOutletSensor:
         """Create mock coordinator with PDU device data."""
         coordinator = MagicMock()
         coordinator.available = True
+        coordinator.device_available = True
         coordinator.last_update_success = True
         coordinator.protect_client = None
         coordinator.data = {
@@ -3914,6 +3915,35 @@ class TestUnifiOutletSensor:
         )
         assert sensor.available is False
         assert sensor.native_value is None
+
+    @pytest.mark.parametrize("description", OUTLET_SENSOR_TYPES)
+    @pytest.mark.parametrize(
+        ("state", "healthy", "expected"),
+        [
+            ("GETTING_READY", True, True),
+            ("GETTING_READY", False, False),
+            ("ONLINE", False, False),
+            ("OFFLINE", True, False),
+            ("UPDATING", True, False),
+            ("ADOPTING", True, False),
+        ],
+    )
+    def test_outlet_serviceable_availability(
+        self,
+        mock_coordinator,
+        description,
+        state: str,
+        *,
+        healthy: bool,
+        expected: bool,
+    ) -> None:
+        """Electrical readings survive provisioning only while Device data is fresh."""
+        mock_coordinator.device_available = healthy
+        mock_coordinator.data["devices"]["site1"]["pdu1"]["state"] = state
+        sensor = UnifiOutletSensor(
+            mock_coordinator, description, "site1", "pdu1", outlet_index=1
+        )
+        assert sensor.available is expected
 
     def test_outlet_has_metering_helper(self) -> None:
         """Test _outlet_has_metering helper detects caps bitmask and values."""

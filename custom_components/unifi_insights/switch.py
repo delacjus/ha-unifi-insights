@@ -43,7 +43,7 @@ from .data_transforms import get_site_gateway_id
 from .entity import (
     UnifiProtectEntity,
     get_field,
-    is_device_online,
+    is_device_serviceable,
 )
 from .network_rule_switch import discover_network_rule_switches
 
@@ -1429,7 +1429,7 @@ class UnifiOutletSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], SwitchEntit
         if not self.coordinator.device_available:
             return False
         device_data = self._get_device_data()
-        if not device_data or not is_device_online(device_data):
+        if not device_data or not is_device_serviceable(device_data):
             return False
         return self._get_outlet_data() is not None
 
@@ -1564,7 +1564,7 @@ class UnifiOutletCycleSwitch(CoordinatorEntity["UnifiFacadeCoordinator"], Switch
         if not self.coordinator.device_available:
             return False
         device_data = self._get_device_data()
-        if not device_data or not is_device_online(device_data):
+        if not device_data or not is_device_serviceable(device_data):
             return False
         return self._get_outlet_data() is not None
 

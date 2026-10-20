@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.setup import async_setup_component
 from unifi_official_api.network.models.client import ClientType
 
 from custom_components.unifi_insights import data_transforms
@@ -251,7 +252,7 @@ async def test_availability_and_status_read_published_facts(
     coordinator.data["devices"][SITE]["sw1"]["state"] = "CONNECTED"
     coordinator.data.pop(NETWORK_FACTS_KEY)
     assert entity.available is False
-    assert entity.is_on is False
+    assert entity.is_on is None
 
     coordinator.data["devices"][SITE] = {}
     assert entity.device_facts is None
@@ -735,3 +736,26 @@ async def test_base_tracker_and_wake_unique_ids(hass: HomeAssistant) -> None:
     assert wake.unique_id == "unifi_insights_aa:bb:cc:00:00:02_wake"
     # A decorated, unrecognised type is not a wired client any more.
     assert _wired_client_mac({**client, "type": "WIRED_GUEST"}) is None
+
+
+@pytest.mark.parametrize("key", ["device_status", "wan_status"])
+@pytest.mark.parametrize("publish", [False, True])
+async def test_transient_connectivity_is_unknown(
+    hass: HomeAssistant, key: str, *, publish: bool
+) -> None:
+    """Status/WAN stay available but never assert offline during provisioning."""
+    coordinator = _coordinator(
+        hass, {"sw1": _switch(state="GETTING_READY")}, publish=publish
+    )
+    description = next(d for d in BINARY_SENSOR_TYPES if d.key == key)
+    sensor = UnifiInsightsBinarySensor(coordinator, description, SITE, "sw1")
+    assert sensor.available is True
+    assert sensor.is_on is None
+    assert await async_setup_component(hass, "binary_sensor", {})
+    sensor.entity_id = f"binary_sensor.{key}"
+    await hass.data["binary_sensor"].async_add_entities([sensor])
+    state = hass.states.get(sensor.entity_id)
+    assert state is not None
+    assert state.state == "unknown"
+    coordinator.device_available = False
+    assert sensor.available is False

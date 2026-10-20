@@ -4083,3 +4083,30 @@ def test_outlet_lookup_skips_outlets_without_an_index(
     switch = switch_cls(coordinator, "site1", "pdu1", 2)
 
     assert switch._get_outlet_data() == {"outlet_idx": 2, "name": "Second"}
+
+
+@pytest.mark.parametrize("switch_class", [UnifiOutletSwitch, UnifiOutletCycleSwitch])
+@pytest.mark.parametrize(
+    ("state", "healthy", "expected"),
+    [
+        ("GETTING_READY", True, True),
+        ("GETTING_READY", False, False),
+        ("ONLINE", False, False),
+        ("OFFLINE", True, False),
+        ("UPDATING", True, False),
+        ("ADOPTING", True, False),
+    ],
+)
+def test_outlet_serviceable_availability(
+    switch_class, state: str, *, healthy: bool, expected: bool
+) -> None:
+    """Both outlet controls need fresh Device data and a serviceable device."""
+    coordinator = MagicMock()
+    coordinator.device_available = healthy
+    coordinator.data = {
+        "devices": {"site": {"pdu": {"state": state, "outlet_table": [{"index": 1}]}}}
+    }
+    switch = switch_class(coordinator, "site", "pdu", 1)
+    assert switch.available is expected
+    coordinator.data["devices"]["site"]["pdu"]["outlet_table"] = []
+    assert switch.available is False
