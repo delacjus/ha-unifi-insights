@@ -38,12 +38,16 @@ _KEY_BYTES: Final = 32
 _KEY_RE: Final = re.compile(rf"[0-9a-f]{{{_KEY_BYTES * 2}}}")
 
 
-@dataclass
+@dataclass(repr=False)
 class _NodeKeys:
     """Loaded keys (entry_id -> hex) and the store that persists them."""
 
     store: Store[dict[str, Any]]
     keys: dict[str, str]
+
+    def __repr__(self) -> str:
+        """Return a string representation redacting the secret keys."""
+        return f"_NodeKeys(store={self.store!r}, keys=<redacted>)"
 
     def data(self) -> dict[str, Any]:
         """Return the payload to persist."""
