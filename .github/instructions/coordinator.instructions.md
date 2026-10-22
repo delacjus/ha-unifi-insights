@@ -30,6 +30,7 @@ This integration uses a multi-coordinator architecture under `custom_components/
 - Run the API call through `async_execute_command(CommandFailure(...), action, *args)` from `coordinators/base.py` so every failure is a translated `HomeAssistantError`. Access (`_command_error`) and Carrier Fabric (conflict retry and typed errors) keep their own error handling, as ADR-010 records. Pass placeholders that are safe identifiers only.
 - After success, publish the written fields as a copy-on-write overlay: replace the data root and every container on the changed path (lists included), then call `async_update_listeners()`. Never mutate a shared record and never call `async_set_updated_data()` for an overlay.
 - Apply the reconciliation policy in ADR-010's ownership table. A failed refresh after a successful write is logged (check `last_update_success`) and never fails the write.
+- Do not add generation tracking or pending-write guards. The one exception is the Device coordinator's outlet pending-write guard (`reconcile_pending_outlet_writes`, #376), which ADR-010 records: keep it limited to `relay_state` and `cycle_enabled`, released on confirmation, after `OUTLET_WRITE_GUARD_SECONDS` or when the device or site is gone.
 - Resolve classic site names only through `UnifiInsightsConfigCoordinator.resolve_legacy_site_name` / `async_resolve_legacy_site_name`; never guess `"default"`.
 - Test each command once in `tests/coordinators/test_<owner>.py` against `seeded_owners` (`tests/fixtures/command_owners.py`), which autospecs the real `unifi_official_api` client.
 

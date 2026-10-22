@@ -283,6 +283,30 @@ def _seed_outlet_overrides(device: Mapping[str, Any]) -> list[dict[str, Any]]:
     return overrides
 
 
+def _override_index(entry: Mapping[str, Any]) -> int | None:
+    """Return an ``outlet_overrides`` entry's outlet index, as the library reads it."""
+    idx = entry.get("index")
+    if idx is None:
+        idx = entry.get("outlet_idx")
+    try:
+        return int(idx)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return None
+
+
+def _is_table_outlet(outlet: Any, outlet_index: int) -> bool:
+    """Return True if an ``outlet_table`` entry is the given outlet."""
+    if not isinstance(outlet, dict):
+        return False
+    idx = outlet.get("index")
+    if idx is None:
+        idx = outlet.get("outlet_idx") or outlet.get("outletIdx")
+    try:
+        return idx is not None and int(idx) == outlet_index
+    except TypeError, ValueError:
+        return False
+
+
 def _build_outlet_overrides(
     device: Mapping[str, Any],
     outlet_index: int,
@@ -315,15 +339,7 @@ def _build_outlet_overrides(
 
     found = False
     for override in outlet_overrides:
-        idx = override.get("index")
-        if idx is None:
-            idx = override.get("outlet_idx")
-        try:
-            idx_int = int(idx)  # type: ignore[arg-type]
-        except TypeError, ValueError:
-            continue
-
-        if idx_int == outlet_index:
+        if _override_index(override) == outlet_index:
             override["relay_state"] = state
             if cycle_enabled is not None:
                 override["cycle_enabled"] = cycle_enabled
@@ -340,6 +356,147 @@ def _build_outlet_overrides(
         outlet_overrides.append(new_override)
 
     return outlet_overrides
+
+
+# How long a successful outlet write is held over polls that still report the
+# controller's older outlet values while the PDU applies it (#376). The lag
+# seen on live hardware is 3 to 15 s. After this the poll wins, so a write the
+# controller rejected or never applied does not stick.
+OUTLET_WRITE_GUARD_SECONDS: Final = 60.0
+
+
+class PendingOutletWrite(NamedTuple):
+    """A successful outlet write the controller has not reported back (#376)."""
+
+    # The written fields ("relay_state" or "cycle_enabled") and their values.
+    fields: Mapping[str, bool]
+    # The outlet's entry in the outlet_overrides array that was sent, if any.
+    override: Mapping[str, Any] | None
+    # time.monotonic() of the last write to the outlet.
+    written_at: float
+
+
+# A pending write's site ID, device ID and outlet index.
+type PendingOutletKey = tuple[str, str, int]
+
+
+def _hold_outlet_write(
+    device: dict[str, Any], outlet_index: int, write: PendingOutletWrite
+) -> tuple[dict[str, Any], dict[str, bool]]:
+    """
+    Return the device with the write's unconfirmed fields, and those fields.
+
+    A field is confirmed when every polled array that has the outlet reports
+    the written value. A non-empty ``outlet_overrides`` without the outlet
+    does not confirm it: the next write is built from that array, so the
+    sent entry is appended. Patched arrays and entries are new copies.
+    """
+    raw_overrides = device.get("outlet_overrides")
+    overrides: list[Any] | None = (
+        raw_overrides
+        if isinstance(raw_overrides, list)
+        and any(isinstance(entry, dict) for entry in raw_overrides)
+        else None
+    )
+    override_pos = (
+        next(
+            (
+                i
+                for i, entry in enumerate(overrides)
+                if isinstance(entry, dict) and _override_index(entry) == outlet_index
+            ),
+            None,
+        )
+        if overrides is not None
+        else None
+    )
+    raw_table = device.get("outlet_table")
+    table: list[Any] = raw_table if isinstance(raw_table, list) else []
+    table_pos = next(
+        (i for i, o in enumerate(table) if _is_table_outlet(o, outlet_index)),
+        None,
+    )
+
+    held: dict[str, bool] = {}
+    for field, value in write.fields.items():
+        reported: list[Any] = []
+        if overrides is not None:
+            reported.append(
+                overrides[override_pos].get(field) if override_pos is not None else None
+            )
+        if table_pos is not None and field in table[table_pos]:
+            reported.append(table[table_pos][field])
+        if any(polled != value for polled in reported):
+            held[field] = value
+    if not held:
+        return device, held
+
+    updated = dict(device)
+    if overrides is not None:
+        patched_overrides = list(overrides)
+        if override_pos is not None:
+            patched_overrides[override_pos] = {**overrides[override_pos], **held}
+        else:
+            patched_overrides.append(
+                {**(write.override or {"index": outlet_index}), **held}
+            )
+        updated["outlet_overrides"] = patched_overrides
+    if table_pos is not None:
+        patched_table = list(table)
+        patched_table[table_pos] = {**table[table_pos], **held}
+        updated["outlet_table"] = patched_table
+    return updated, held
+
+
+def reconcile_pending_outlet_writes(
+    site_id: str,
+    devices: dict[str, Any],
+    pending: Mapping[PendingOutletKey, PendingOutletWrite],
+    now: float,
+) -> tuple[dict[str, Any], dict[PendingOutletKey, PendingOutletWrite]]:
+    """
+    Keep a site's pending outlet writes over its polled devices (#376).
+
+    For a few seconds after an outlet write the controller still reports the
+    older ``outlet_overrides`` and ``outlet_table`` values while the PDU
+    applies it. A poll in that window would replace the published, sent
+    array, and the next outlet command, built from it, would switch the
+    earlier outlet back. Until the controller reports a written field, the
+    field is patched into copies of the polled entries; every other polled
+    field is kept. A pending write is released once confirmed, once
+    ``OUTLET_WRITE_GUARD_SECONDS`` have passed since the last write to the
+    outlet, or when its device is gone from the poll.
+
+    Pure: the polled maps are never mutated. Returns the devices (the given
+    map when nothing is patched) and the site's writes still pending.
+    """
+    result = devices
+    kept: dict[PendingOutletKey, PendingOutletWrite] = {}
+    for key, write in pending.items():
+        write_site_id, device_id, outlet_index = key
+        if write_site_id != site_id:
+            continue
+        device = result.get(device_id)
+        if not isinstance(device, dict):
+            continue
+        updated, held = _hold_outlet_write(device, outlet_index, write)
+        if not held:
+            continue
+        if now - write.written_at >= OUTLET_WRITE_GUARD_SECONDS:
+            _LOGGER.debug(
+                "Device coordinator: Outlet %s of device %s still reports old %s "
+                "%.0f s after the write; using the polled values",
+                outlet_index,
+                device_id,
+                sorted(held),
+                OUTLET_WRITE_GUARD_SECONDS,
+            )
+            continue
+        if result is devices:
+            result = dict(devices)
+        result[device_id] = updated
+        kept[key] = write._replace(fields=held)
+    return result, kept
 
 
 # How many consecutive polls a device's last good statistics are reused for
@@ -400,6 +557,9 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         self._vpn_connection_failures: dict[str, int] = {}
         # Consecutive polls each site's legacy device call has failed for.
         self._legacy_wan_failures: dict[str, int] = {}
+        # Successful outlet writes the controller has not reported back yet
+        # (#376), committed at snapshot publication.
+        self._pending_outlet_writes: dict[PendingOutletKey, PendingOutletWrite] = {}
         self.data: dict[str, Any] = {
             "devices": {},
             "clients": {},
@@ -1344,6 +1504,7 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
                     "Device coordinator: No sites available from config coordinator"
                 )
                 self._available = True
+                self._pending_outlet_writes = {}
                 self.data = {
                     **self.data,
                     **sections,
@@ -1423,16 +1584,24 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             site_sources: dict[str, str] = {}
             site_device_macs: dict[str, dict[str, str]] = {}
             site_legacy_macs: dict[str, LegacyMacs] = {}
+            # Pending outlet writes of sites and devices no longer polled are
+            # dropped here; a failed refresh never gets this far.
+            pending_outlet_writes: dict[PendingOutletKey, PendingOutletWrite] = {}
+            now = time.monotonic()
 
             # Put the results into the local section maps
             for site_id, (
-                devices_dict,
+                polled_devices,
                 stats_dict,
                 clients_dict,
                 source,
                 dev_macs,
                 legacy_macs,
             ), vpn in zip(site_ids, site_results, vpn_results, strict=True):
+                devices_dict, held_writes = reconcile_pending_outlet_writes(
+                    site_id, polled_devices, self._pending_outlet_writes, now
+                )
+                pending_outlet_writes.update(held_writes)
                 sections["devices"][site_id] = devices_dict
                 sections["stats"][site_id] = stats_dict
                 sections["clients"][site_id] = clients_dict
@@ -1480,6 +1649,7 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             }
 
             self._available = True
+            self._pending_outlet_writes = pending_outlet_writes
             # Publish once, after the last await, as a new root: a snapshot
             # taken during the refresh keeps the previous maps unchanged.
             self.data = {
@@ -1836,7 +2006,10 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         carries its current ``outlet_overrides``. After success the written
         fields and the complete ``outlet_overrides`` array that was sent are
         published as a copy-on-write overlay and a deferred refresh is
-        requested.
+        requested. The intended field (``cycle_enabled`` for a cycle write,
+        whose ``state`` only repeats the cached relay state, otherwise
+        ``relay_state``) is recorded as pending, so polls that still report
+        the controller's older value keep the written one (#376).
 
         The write holds the coordinator's refresh lock from reading the cached
         record to publishing (#371 review). A poll already in flight finishes
@@ -1875,21 +2048,37 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             if cycle_enabled is not None:
                 changes["cycle_enabled"] = cycle_enabled
             self._publish_outlet(site_id, device_id, outlet_index, changes, sent)
+            self._record_outlet_write(
+                (site_id, device_id, outlet_index),
+                {"relay_state": state}
+                if cycle_enabled is None
+                else {"cycle_enabled": cycle_enabled},
+                sent,
+            )
         await self.async_request_refresh()
         return result
 
-    @staticmethod
-    def _is_outlet(outlet: Any, outlet_index: int) -> bool:
-        """Return True if an ``outlet_table`` entry is the given outlet."""
-        if not isinstance(outlet, dict):
-            return False
-        idx = outlet.get("index")
-        if idx is None:
-            idx = outlet.get("outlet_idx") or outlet.get("outletIdx")
-        try:
-            return idx is not None and int(idx) == outlet_index
-        except TypeError, ValueError:
-            return False
+    def _record_outlet_write(
+        self,
+        key: PendingOutletKey,
+        written: dict[str, bool],
+        sent: list[dict[str, Any]] | None,
+    ) -> None:
+        """Record a successful outlet write as pending, keeping earlier fields."""
+        previous = self._pending_outlet_writes.get(key)
+        outlet_index = key[2]
+        self._pending_outlet_writes[key] = PendingOutletWrite(
+            fields={**previous.fields, **written} if previous else written,
+            override=next(
+                (
+                    dict(entry)
+                    for entry in sent or ()
+                    if _override_index(entry) == outlet_index
+                ),
+                None,
+            ),
+            written_at=time.monotonic(),
+        )
 
     def _publish_outlet(
         self,
@@ -1910,7 +2099,8 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         caller holds the refresh lock, so no poll that started before the
         write can finish after this overlay. A poll that starts after it can
         still read the controller's older values for a few seconds while the
-        PDU applies the change; the next refresh corrects them.
+        PDU applies the change; ``reconcile_pending_outlet_writes`` keeps the
+        written fields over those polls (#376).
         """
         devices = self.data.get("devices", {})
         site_devices = devices.get(site_id)
@@ -1930,7 +2120,7 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         outlets = device.get("outlet_table")
         if isinstance(outlets, list):
             position = next(
-                (i for i, o in enumerate(outlets) if self._is_outlet(o, outlet_index)),
+                (i for i, o in enumerate(outlets) if _is_table_outlet(o, outlet_index)),
                 None,
             )
             if position is not None:

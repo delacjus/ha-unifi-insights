@@ -13,7 +13,7 @@ import asyncio
 import copy
 import logging
 from contextlib import nullcontext, suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,11 +48,14 @@ from custom_components.unifi_insights.coordinators.config import (
 )
 from custom_components.unifi_insights.coordinators.device import (
     MAX_STATS_REUSE_POLLS,
+    OUTLET_WRITE_GUARD_SECONDS,
+    PendingOutletWrite,
     UnifiInsightsDeviceCoordinator,
     _build_outlet_overrides,
     get_device_port,
     port_can_be_power_cycled,
     power_cyclable_ports,
+    reconcile_pending_outlet_writes,
     require_power_cyclable_port,
 )
 from custom_components.unifi_insights.data_transforms import (
@@ -974,6 +977,348 @@ class TestSequentialOutletWrites:
                 "/default/rest/device/dev1", json_data={"outlet_overrides": expected}
             )
         assert device_dict == before
+
+
+DEVICE_MONOTONIC = "custom_components.unifi_insights.coordinators.device.time.monotonic"
+
+
+def _pdu(owners: SeededOwners) -> dict[str, Any]:
+    """Return the PDU record the device owner published."""
+    return owners.device.data["devices"][SITE_ID][PDU_ID]
+
+
+def _serve(
+    owners: SeededOwners, legacy: dict[str, Any], *, state: str = "ONLINE"
+) -> None:
+    """Make the next polls return this classic PDU record and v1 state."""
+    v1 = copy.deepcopy(SAMPLE_PDU_DEVICE)
+    v1["state"] = state
+    owners.network_client.devices.get_all.return_value = [v1]
+    owners.network_client.devices.get_legacy_site_devices.return_value = [legacy]
+
+
+def _outlet(owners: SeededOwners, index: int, field: str) -> tuple[Any, Any]:
+    """Return an outlet field from (``outlet_overrides``, ``outlet_table``)."""
+    pdu = _pdu(owners)
+    override = next(
+        (o for o in pdu.get("outlet_overrides", []) if o.get("index") == index), {}
+    )
+    outlet = next(o for o in pdu["outlet_table"] if o["index"] == index)
+    return override.get(field), outlet.get(field)
+
+
+class TestPendingOutletWrites:
+    """A poll that still reports older outlet values keeps the write (#376)."""
+
+    @pytest.fixture(autouse=True)
+    def _manual_refresh(self, seeded_owners: SeededOwners) -> None:
+        """Run polls only when a test asks, and let outlet writes succeed."""
+        seeded_owners.device.async_request_refresh = AsyncMock()
+        seeded_owners.network_client.devices.set_outlet_state.return_value = True
+
+    @pytest.mark.parametrize(
+        ("index", "state", "overrides"),
+        [
+            (1, False, [FIRST_WRITE_OVERRIDE]),
+            (
+                2,
+                True,
+                [
+                    *SAMPLE_PDU_LEGACY_DEVICE["outlet_overrides"],
+                    {"index": 2, "relay_state": True},
+                ],
+            ),
+        ],
+    )
+    async def test_stale_poll_keeps_written_entries(
+        self,
+        seeded_owners: SeededOwners,
+        index: int,
+        *,
+        state: bool,
+        overrides: list[dict[str, Any]],
+    ) -> None:
+        """Both arrays keep the write; every other polled field updates."""
+        device = seeded_owners.device
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, index, state=state)
+        stale = copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE)
+        stale["outlet_table"][0]["outlet_current"] = "2.50"
+        stale["outlet_table"][2]["relay_state"] = False
+        stale["outlet_ac_power_consumption"] = "300.00"
+        polled = copy.deepcopy(stale)
+        _serve(seeded_owners, stale, state="GETTING_READY")
+        before = device.data
+        before_pdu = copy.deepcopy(_pdu(seeded_owners))
+
+        await device.async_refresh()
+
+        pdu = _pdu(seeded_owners)
+        assert pdu["outlet_overrides"] == overrides
+        assert _outlet(seeded_owners, index, "relay_state")[1] is state
+        assert pdu["state"] == "GETTING_READY"
+        assert pdu["outlet_table"][0]["outlet_current"] == 2.5
+        assert _outlet(seeded_owners, 3, "relay_state")[1] is False
+        assert pdu["outlet_ac_power_consumption"] == 300.0
+        assert stale == polled
+        assert before["devices"][SITE_ID][PDU_ID] == before_pdu
+
+    async def test_released_once_every_array_agrees(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """One array agreeing is not enough; both agreeing releases the write."""
+        device = seeded_owners.device
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+
+        table_only = copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE)
+        table_only["outlet_table"][0]["relay_state"] = False
+        _serve(seeded_owners, table_only)
+        await device.async_refresh()
+        assert _outlet(seeded_owners, 1, "relay_state") == (False, False)
+
+        agreed = copy.deepcopy(table_only)
+        agreed["outlet_overrides"][0]["relay_state"] = False
+        _serve(seeded_owners, agreed)
+        await device.async_refresh()
+        assert _outlet(seeded_owners, 1, "relay_state") == (False, False)
+
+        # Switched back on elsewhere: the poll wins once the write is released.
+        _serve(seeded_owners, copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE))
+        await device.async_refresh()
+        assert _outlet(seeded_owners, 1, "relay_state") == (True, True)
+
+    @pytest.mark.parametrize(
+        ("elapsed", "held"),
+        [
+            (OUTLET_WRITE_GUARD_SECONDS - 0.1, True),
+            (OUTLET_WRITE_GUARD_SECONDS, False),
+        ],
+    )
+    async def test_released_after_the_timeout(
+        self,
+        seeded_owners: SeededOwners,
+        caplog: pytest.LogCaptureFixture,
+        elapsed: float,
+        *,
+        held: bool,
+    ) -> None:
+        """A write the controller never reports gives way to the poll."""
+        device = seeded_owners.device
+        with patch(DEVICE_MONOTONIC, return_value=1000.0):
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+
+        with (
+            patch(DEVICE_MONOTONIC, return_value=1000.0 + elapsed),
+            caplog.at_level(logging.DEBUG),
+        ):
+            await device.async_refresh()
+
+        assert _outlet(seeded_owners, 1, "relay_state") == (
+            (False, False) if held else (True, True)
+        )
+        assert ("still reports old ['relay_state']" in caplog.text) is not held
+
+    async def test_second_write_in_the_lag_window_keeps_the_first(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """The next PUT carries the earlier outlet as written, not as polled."""
+        controller = _FakePduController()
+        _wire_pdu_controller(seeded_owners, controller)
+        stale = copy.deepcopy(controller.device)
+        seeded_owners.network_client.devices.get_legacy_site_devices.side_effect = (
+            lambda *a, **k: [copy.deepcopy(stale)]
+        )
+        device = seeded_owners.device
+
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        await device.async_refresh()
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=False)
+
+        assert controller.puts[-1] == [FIRST_WRITE_OVERRIDE, OUTLET_2_OFF]
+        assert controller.relay() == {1: False, 2: False, 3: True}
+
+    async def test_failed_write_records_nothing(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A refused write leaves the next poll's values as they are."""
+        device = seeded_owners.device
+        devices = seeded_owners.network_client.devices
+        devices.set_outlet_state.side_effect = UniFiConnectionError("down")
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        await device.async_refresh()
+
+        assert _outlet(seeded_owners, 1, "relay_state") == (True, True)
+
+    @pytest.mark.parametrize("gone", ["device", "site"])
+    async def test_removed_device_or_site_releases_the_write(
+        self, seeded_owners: SeededOwners, gone: str
+    ) -> None:
+        """A PDU that comes back shows what the controller reports."""
+        device = seeded_owners.device
+        devices = seeded_owners.network_client.devices
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+
+        if gone == "device":
+            devices.get_all.return_value = []
+            devices.get_legacy_site_devices.return_value = []
+            await device.async_refresh()
+            assert PDU_ID not in device.data["devices"][SITE_ID]
+            _serve(seeded_owners, copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE))
+        else:
+            with patch.object(seeded_owners.config, "get_site_ids", return_value=[]):
+                await device.async_refresh()
+            assert SITE_ID not in device.data["devices"]
+        await device.async_refresh()
+
+        assert _outlet(seeded_owners, 1, "relay_state") == (True, True)
+
+    async def test_failed_refresh_keeps_the_write_pending(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A failed poll neither publishes nor releases the pending write."""
+        device = seeded_owners.device
+        devices = seeded_owners.network_client.devices
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        devices.get_all.side_effect = UniFiConnectionError("down")
+        await device.async_refresh()
+        assert device.last_update_success is False
+
+        devices.get_all.side_effect = None
+        await device.async_refresh()
+
+        assert device.last_update_success is True
+        assert _outlet(seeded_owners, 1, "relay_state") == (False, False)
+
+    async def test_cycle_write_after_a_relay_write_holds_both(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """The cycle switch echoes the held relay, and both fields stay held."""
+        controller = _FakePduController()
+        _wire_pdu_controller(seeded_owners, controller)
+        stale = copy.deepcopy(controller.device)
+        seeded_owners.network_client.devices.get_legacy_site_devices.side_effect = (
+            lambda *a, **k: [copy.deepcopy(stale)]
+        )
+        device = seeded_owners.device
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=False)
+        await device.async_refresh()
+
+        relay = _outlet(seeded_owners, 1, "relay_state")[1]
+        await device.async_set_outlet_state(
+            SITE_ID, PDU_ID, 1, state=relay, cycle_enabled=False
+        )
+        await device.async_refresh()
+
+        assert controller.puts[-1] == [{**FIRST_WRITE_OVERRIDE, "cycle_enabled": False}]
+        assert _outlet(seeded_owners, 1, "relay_state") == (False, False)
+        assert _outlet(seeded_owners, 1, "cycle_enabled") == (False, False)
+
+    async def test_cycle_write_does_not_hold_the_relay_echo(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A cycle write holds cycle_enabled; the polled relay still updates."""
+        device = seeded_owners.device
+        await device.async_set_outlet_state(
+            SITE_ID, PDU_ID, 1, state=True, cycle_enabled=False
+        )
+        relay_off = copy.deepcopy(SAMPLE_PDU_LEGACY_DEVICE)
+        relay_off["outlet_table"][0]["relay_state"] = False
+        relay_off["outlet_overrides"][0]["relay_state"] = False
+        _serve(seeded_owners, relay_off)
+
+        await device.async_refresh()
+
+        assert _outlet(seeded_owners, 1, "relay_state") == (False, False)
+        assert _outlet(seeded_owners, 1, "cycle_enabled") == (False, False)
+
+
+RELAY_ON: Final = PendingOutletWrite({"relay_state": True}, None, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (
+            {"outlet_table": [{"index": 1, "relay_state": False}]},
+            {"outlet_table": [{"index": 1, "relay_state": True}]},
+        ),
+        (
+            {
+                "outlet_overrides": "not-a-list",
+                "outlet_table": [{"index": 1, "relay_state": False}],
+            },
+            {
+                "outlet_overrides": "not-a-list",
+                "outlet_table": [{"index": 1, "relay_state": True}],
+            },
+        ),
+        (
+            {
+                "outlet_overrides": ["junk"],
+                "outlet_table": ["junk", {"outlet_idx": "1", "relay_state": False}],
+            },
+            {
+                "outlet_overrides": ["junk"],
+                "outlet_table": ["junk", {"outlet_idx": "1", "relay_state": True}],
+            },
+        ),
+        (
+            {"outlet_overrides": ["junk", {"index": 2, "relay_state": False}]},
+            {
+                "outlet_overrides": [
+                    "junk",
+                    {"index": 2, "relay_state": False},
+                    {"index": 1, "relay_state": True},
+                ]
+            },
+        ),
+        ({"outlet_overrides": [], "outlet_table": [{"index": 2}]}, None),
+        ({"outlet_table": [{"index": 1}]}, None),
+        (
+            {
+                "outlet_overrides": [{"outlet_idx": 1, "relay_state": True}],
+                "outlet_table": "not-a-list",
+            },
+            None,
+        ),
+        ("not-a-device", None),
+    ],
+)
+def test_reconcile_pending_outlet_writes_shapes(
+    record: Any, expected: dict[str, Any] | None
+) -> None:
+    """Patch copies of the arrays that exist; release what nothing reports."""
+    pending = {(SITE_ID, "pdu", 1): RELAY_ON, ("other", "pdu", 1): RELAY_ON}
+    devices = {"pdu": record}
+    before = copy.deepcopy(record)
+
+    result, held = reconcile_pending_outlet_writes(SITE_ID, devices, pending, 1.0)
+
+    assert record == before
+    if expected is None:
+        assert result is devices
+        assert held == {}
+    else:
+        assert result == {"pdu": expected}
+        assert held == {(SITE_ID, "pdu", 1): RELAY_ON}
+
+
+def test_reconcile_releases_confirmed_fields_only() -> None:
+    """A confirmed field is dropped while the other written field stays held."""
+    write = PendingOutletWrite(
+        {"relay_state": True, "cycle_enabled": False}, {"index": 1}, 0.0
+    )
+    record = {"outlet_overrides": [{"index": 1, "relay_state": True}]}
+
+    result, held = reconcile_pending_outlet_writes(
+        SITE_ID, {"pdu": record}, {(SITE_ID, "pdu", 1): write}, 1.0
+    )
+
+    assert result["pdu"]["outlet_overrides"] == [
+        {"index": 1, "relay_state": True, "cycle_enabled": False}
+    ]
+    assert held[SITE_ID, "pdu", 1].fields == {"cycle_enabled": False}
 
 
 class TestClientCommands:
