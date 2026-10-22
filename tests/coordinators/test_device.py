@@ -1274,21 +1274,32 @@ RELAY_ON: Final = PendingOutletWrite({"relay_state": True}, None, 0.0)
             },
         ),
         ({"outlet_overrides": [], "outlet_table": [{"index": 2}]}, None),
-        ({"outlet_table": [{"index": 1}]}, None),
+        # The outlet is in the table without the field: the write is patched in.
+        (
+            {"outlet_table": [{"index": 1}]},
+            {"outlet_table": [{"index": 1, "relay_state": True}]},
+        ),
+        # The controller reports the written value: confirmed and released.
         (
             {
                 "outlet_overrides": [{"outlet_idx": 1, "relay_state": True}],
                 "outlet_table": "not-a-list",
             },
-            None,
+            "released",
         ),
-        ("not-a-device", None),
+        ("not-a-device", "released"),
     ],
 )
 def test_reconcile_pending_outlet_writes_shapes(
-    record: Any, expected: dict[str, Any] | None
+    record: Any, expected: dict[str, Any] | str | None
 ) -> None:
-    """Patch copies of the arrays that exist; release what nothing reports."""
+    """
+    Patch copies of the arrays that exist; hold what nothing reports yet.
+
+    ``expected`` is the patched device (held), None when there is nothing to
+    patch but the field is not confirmed (held), or "released" when the
+    controller confirms the value or the device record is malformed.
+    """
     pending = {(SITE_ID, "pdu", 1): RELAY_ON, ("other", "pdu", 1): RELAY_ON}
     devices = {"pdu": record}
     before = copy.deepcopy(record)
@@ -1296,12 +1307,70 @@ def test_reconcile_pending_outlet_writes_shapes(
     result, held = reconcile_pending_outlet_writes(SITE_ID, devices, pending, 1.0)
 
     assert record == before
-    if expected is None:
+    if expected == "released":
         assert result is devices
         assert held == {}
+    elif expected is None:
+        # Nothing to patch, but no report confirms the field: it stays held
+        # until a report, the timeout or the device's disappearance.
+        assert result is devices
+        assert held == {(SITE_ID, "pdu", 1): RELAY_ON}
     else:
         assert result == {"pdu": expected}
         assert held == {(SITE_ID, "pdu", 1): RELAY_ON}
+
+
+def test_reconcile_holds_two_stale_outlets_of_one_device() -> None:
+    """Two stale outlets of the same device are both patched and both held."""
+    write_1 = PendingOutletWrite({"relay_state": True}, {"index": 1}, 0.0)
+    write_2 = PendingOutletWrite({"relay_state": False}, {"index": 2}, 0.0)
+    record = {
+        "outlet_overrides": [
+            {"index": 1, "relay_state": False},
+            {"index": 2, "relay_state": True},
+        ],
+        "outlet_table": [
+            {"index": 1, "relay_state": False},
+            {"index": 2, "relay_state": True},
+        ],
+    }
+    before = copy.deepcopy(record)
+    devices = {"pdu": record}
+    pending = {(SITE_ID, "pdu", 1): write_1, (SITE_ID, "pdu", 2): write_2}
+
+    result, held = reconcile_pending_outlet_writes(SITE_ID, devices, pending, 1.0)
+
+    assert record == before
+    assert result is not devices
+    assert result["pdu"]["outlet_overrides"] == [
+        {"index": 1, "relay_state": True},
+        {"index": 2, "relay_state": False},
+    ]
+    assert result["pdu"]["outlet_table"] == [
+        {"index": 1, "relay_state": True},
+        {"index": 2, "relay_state": False},
+    ]
+    assert held == pending
+
+
+def test_reconcile_holds_a_field_no_array_reports() -> None:
+    """A device without a usable outlet report keeps the write held, unpatched."""
+    write = PendingOutletWrite({"relay_state": True}, {"index": 1}, 0.0)
+    devices = {"pdu": {"state": "GETTING_READY"}}
+
+    result, held = reconcile_pending_outlet_writes(
+        SITE_ID, devices, {(SITE_ID, "pdu", 1): write}, 1.0
+    )
+
+    assert result is devices
+    assert held == {(SITE_ID, "pdu", 1): write}
+
+    # The timeout still releases it.
+    result, held = reconcile_pending_outlet_writes(
+        SITE_ID, devices, {(SITE_ID, "pdu", 1): write}, OUTLET_WRITE_GUARD_SECONDS
+    )
+    assert result is devices
+    assert held == {}
 
 
 def test_reconcile_releases_confirmed_fields_only() -> None:

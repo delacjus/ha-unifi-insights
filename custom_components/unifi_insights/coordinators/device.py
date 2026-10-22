@@ -387,9 +387,12 @@ def _hold_outlet_write(
     Return the device with the write's unconfirmed fields, and those fields.
 
     A field is confirmed when every polled array that has the outlet reports
-    the written value. A non-empty ``outlet_overrides`` without the outlet
-    does not confirm it: the next write is built from that array, so the
-    sent entry is appended. Patched arrays and entries are new copies.
+    the written value. A poll with no report for the field at all (no usable
+    array, or the outlet missing from both) confirms nothing: the field stays
+    held, with nothing to patch. A non-empty ``outlet_overrides`` without the
+    outlet does not confirm it either: the next write is built from that
+    array, so the sent entry is appended. Patched arrays and entries are new
+    copies; the device is returned as is when there is nothing to patch.
     """
     raw_overrides = device.get("outlet_overrides")
     overrides: list[Any] | None = (
@@ -426,9 +429,9 @@ def _hold_outlet_write(
             )
         if table_pos is not None and field in table[table_pos]:
             reported.append(table[table_pos][field])
-        if any(polled != value for polled in reported):
+        if not reported or any(polled != value for polled in reported):
             held[field] = value
-    if not held:
+    if not held or (overrides is None and table_pos is None):
         return device, held
 
     updated = dict(device)
@@ -492,9 +495,10 @@ def reconcile_pending_outlet_writes(
                 OUTLET_WRITE_GUARD_SECONDS,
             )
             continue
-        if result is devices:
-            result = dict(devices)
-        result[device_id] = updated
+        if updated is not device:
+            if result is devices:
+                result = dict(devices)
+            result[device_id] = updated
         kept[key] = write._replace(fields=held)
     return result, kept
 
