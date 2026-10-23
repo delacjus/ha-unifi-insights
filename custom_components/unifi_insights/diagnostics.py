@@ -852,6 +852,18 @@ async def async_get_config_entry_diagnostics(
     if access_coordinator is not None:
         diagnostics_data["access"] = _access_diagnostics(access_coordinator)
 
+    # Hardware-test observation (#376 validation, test branch only): absent
+    # unless the operator installed a profile, and built from allowlisted
+    # outlet indexes, booleans and digests only.
+    device_coordinator = getattr(coordinator, "device_coordinator", None)
+    observation_snapshot = getattr(
+        device_coordinator, "async_observation_snapshot", None
+    )
+    if callable(observation_snapshot):
+        observation = await observation_snapshot()
+        if observation is not None:
+            diagnostics_data["outlet_observation"] = observation
+
     # Last pass over the assembled payload: no MAC address leaves this
     # integration, whatever key the controller sent it under.
     anonymized: dict[str, Any] = _anonymize_macs(diagnostics_data, {})

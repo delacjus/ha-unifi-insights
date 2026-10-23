@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -47,6 +48,9 @@ from custom_components.unifi_insights.diagnostics import (
     _access_diagnostics,
     _redact_coordinator_data,
     async_get_config_entry_diagnostics,
+)
+from custom_components.unifi_insights.outlet_observation import (
+    OBSERVATION_FILENAME,
 )
 from tests.fixtures.facade_data import frozen, with_protect_collection, with_sections
 from tests.fixtures.library_responses import (
@@ -1760,3 +1764,70 @@ async def test_only_the_owner_reports_a_mobility_summary(
     assert owner_diagnostics["mobility"]["owner"] is True
     assert second_diagnostics["mobility"] == {"owner": False}
     assert "mobility" not in local_diagnostics
+
+
+def _write_profile(path: Path, payload: dict[str, Any]) -> None:
+    """Install a hardware-test profile without blocking the event loop check."""
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _remove_profile(path: Path) -> None:
+    """Remove the hardware-test profile."""
+    path.unlink(missing_ok=True)
+
+
+async def test_hardware_observation_is_absent_unless_profiled(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    enable_custom_integrations,
+) -> None:
+    """The observation section is opt-in and stays out of a normal report."""
+    path = Path(hass.config.path(OBSERVATION_FILENAME))
+    _remove_profile(path)
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, init_integration)
+
+    assert "outlet_observation" not in diagnostics
+
+    _write_profile(
+        path,
+        {
+            "schema": 2,
+            "enabled": True,
+            "site_id": "site-for-test",
+            "device_id": "device-for-test",
+            "targets": [17, 18],
+            "command": {"operation": "on17", "expected_epoch": 0},
+        },
+    )
+    try:
+        diagnostics = await async_get_config_entry_diagnostics(hass, init_integration)
+
+        observation = diagnostics["outlet_observation"]
+        assert observation["status"] == "valid"
+        assert observation["profile"] == {
+            "site_id": "site-for-test",
+            "device_id": "device-for-test",
+            "targets": [17, 18],
+            "command": {
+                "operation": "on17",
+                "expected_epoch": 0,
+                "deadline_epoch": None,
+                "require_prior_write": False,
+            },
+        }
+        assert observation["polls"] == []
+        assert observation["writes"] == []
+        assert observation["epoch"] == 0
+
+        _write_profile(path, {"schema": 2, "enabled": True})
+        diagnostics = await async_get_config_entry_diagnostics(hass, init_integration)
+        invalid = diagnostics["outlet_observation"]
+        assert invalid["status"] == "invalid"
+        assert invalid["reason"] == "site"
+        assert "profile" not in invalid
+
+        # The section must stay inside the diagnostics serializer's contract.
+        json.dumps(diagnostics, cls=ExtendedJSONEncoder)
+    finally:
+        _remove_profile(path)

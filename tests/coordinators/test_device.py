@@ -11,12 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
+import threading
 from contextlib import nullcontext, suppress
+from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     HomeAssistantError,
@@ -43,6 +48,7 @@ from custom_components.unifi_insights.const import (
     MAX_CONSECUTIVE_MISSING_POLLS,
     SCAN_INTERVAL_DEVICE,
 )
+from custom_components.unifi_insights.coordinators import device as device_module
 from custom_components.unifi_insights.coordinators.config import (
     UnifiInsightsConfigCoordinator,
 )
@@ -68,6 +74,7 @@ from custom_components.unifi_insights.data_transforms import (
     build_site_network_facts,
 )
 from custom_components.unifi_insights.entity import is_device_online
+from custom_components.unifi_insights.outlet_observation import OBSERVATION_FILENAME
 from tests.conftest import (
     device_config_entry_ids,
     get_device_by_identifier,
@@ -5834,3 +5841,416 @@ async def test_two_outlet_writes_across_getting_ready_refresh(
         second.kwargs["current_device"]["outlet_overrides"]
         == legacy["outlet_overrides"]
     )
+
+
+class TestOutletHardwareObservation:
+    """The test-branch observation: off by default, staged, and fail-closed."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_profile(self, hass: HomeAssistant) -> Any:
+        """Never inherit or leave a profile in the shared test config dir."""
+        self._clear_profile(hass)
+        yield
+        self._clear_profile(hass)
+
+    @staticmethod
+    def _profile(
+        hass: HomeAssistant,
+        *,
+        targets: list[int],
+        device_id: str = PDU_ID,
+        command: dict[str, Any] | None = None,
+    ) -> None:
+        """Install the hardware-test profile in the config directory."""
+        document: dict[str, Any] = {
+            "schema": 2,
+            "enabled": True,
+            "site_id": SITE_ID,
+            "device_id": device_id,
+            "targets": targets,
+        }
+        if command is not None:
+            document["command"] = command
+        Path(hass.config.path(OBSERVATION_FILENAME)).write_text(
+            json.dumps(document), encoding="utf-8"
+        )
+
+    @staticmethod
+    def _clear_profile(hass: HomeAssistant) -> None:
+        """Remove the hardware-test profile, as the operator would."""
+        Path(hass.config.path(OBSERVATION_FILENAME)).unlink(missing_ok=True)
+
+    @staticmethod
+    def _corrupt_profile(hass: HomeAssistant) -> None:
+        """Leave an unreadable profile file behind."""
+        Path(hass.config.path(OBSERVATION_FILENAME)).write_text("{", encoding="utf-8")
+
+    def test_observation_path_tolerates_a_missing_config_dir(
+        self, seeded_owners: SeededOwners
+    ) -> None:
+        """A coordinator without a usable config dir simply has no profile."""
+        device = seeded_owners.device
+
+        assert device._observation_path() is not None
+        with patch.object(
+            device, "hass", SimpleNamespace(config=SimpleNamespace(path=None))
+        ):
+            assert device._observation_path() is None
+        with patch.object(
+            device,
+            "hass",
+            SimpleNamespace(config=SimpleNamespace(path=lambda *_: 42)),
+        ):
+            assert device._observation_path() is None
+
+    async def test_no_profile_means_no_records_and_no_restriction(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """Without a profile the observation is completely inert."""
+        self._clear_profile(hass)
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        client.devices.set_outlet_state.return_value = True
+        await _seed_complete_outlet_poll(seeded_owners)
+        device.async_request_refresh = AsyncMock()
+
+        assert await device.async_observation_snapshot() is None
+
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=True)
+
+        assert await device.async_observation_snapshot() is None
+
+    async def test_poll_records_both_raw_arrays_after_publication(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A committed poll carries both raw arrays, verdict and published state."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+
+        await _seed_complete_outlet_poll(seeded_owners)
+
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        assert snapshot["status"] == "valid"
+        assert snapshot["epoch"] == 1
+        assert snapshot["profile"]["targets"] == [2]
+        poll = snapshot["polls"][-1]
+        assert poll["kind"] == "poll"
+        assert poll["epoch"] == 1
+        assert poll["raw"]["outlet_table"]["indexes"] == [1, 2, 3]
+        assert poll["raw"]["outlet_overrides"]["indexes"] == [1, 2, 3]
+        assert poll["raw"]["outlet_table"]["rows"][1]["relay_state"] is True
+        assert poll["provenance"]["trusted"] is True
+        assert poll["provenance"]["required_indexes"] == [1, 2, 3]
+        assert poll["published"]["rows"][2]["relay_state"] is False
+        assert "Main Server" not in json.dumps(poll)
+
+    async def test_failed_refresh_does_not_advance_the_epoch(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A refresh that never publishes must not count as a completed poll."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        await _seed_complete_outlet_poll(seeded_owners)
+        root = device.data
+        before = await device.async_observation_snapshot()
+        assert before is not None
+
+        with patch.object(
+            device, "_compute_port_rates", side_effect=RuntimeError("review probe")
+        ):
+            await device.async_refresh()
+
+        after = await device.async_observation_snapshot()
+        assert after is not None
+        assert device.data is root
+        assert device.last_update_success is False
+        assert after["epoch"] == before["epoch"]
+        assert after["poll_count"] == before["poll_count"]
+        assert len(after["polls"]) == len(before["polls"])
+
+    async def test_failed_cleanup_does_not_advance_the_epoch(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A refresh whose post-publish cleanup fails commits no poll record."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        await _seed_complete_outlet_poll(seeded_owners)
+        before = await device.async_observation_snapshot()
+        assert before is not None
+
+        with patch.object(
+            device,
+            "_cleanup_stale_devices",
+            side_effect=RuntimeError("offline cleanup callback"),
+        ):
+            await device.async_refresh()
+
+        after = await device.async_observation_snapshot()
+        assert after is not None
+        assert device.last_update_success is False
+        assert after["epoch"] == before["epoch"]
+        assert after["poll_count"] == before["poll_count"]
+        assert len(after["polls"]) == len(before["polls"])
+
+    @pytest.mark.parametrize(
+        ("operation", "index", "state", "cycle"),
+        [
+            ("on2", 1, True, None),
+            ("on2", 2, False, None),
+            ("on2", 2, False, False),
+        ],
+    )
+    async def test_command_operation_is_bound_to_the_actual_write(
+        self,
+        hass: HomeAssistant,
+        seeded_owners: SeededOwners,
+        *,
+        operation: str,
+        index: int,
+        state: bool,
+        cycle: bool | None,
+    ) -> None:
+        """A mismatched operation never reaches the transport or a record."""
+        self._profile(hass, targets=[1, 2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        await _seed_complete_outlet_poll(seeded_owners)
+        self._profile(
+            hass,
+            targets=[1, 2],
+            command={"operation": operation, "expected_epoch": 1},
+        )
+        device.async_request_refresh = AsyncMock()
+
+        with pytest.raises(HomeAssistantError) as err:
+            await device.async_set_outlet_state(
+                SITE_ID, PDU_ID, index, state=state, cycle_enabled=cycle
+            )
+
+        assert err.value.translation_key == "command_failed"
+        client.devices.set_outlet_state.assert_not_called()
+        device.async_request_refresh.assert_not_awaited()
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        assert snapshot["write_count"] == 0
+
+    async def test_write_record_carries_the_bound_deadline(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """The second command's record keeps the deadline it was judged by."""
+        self._profile(hass, targets=[1, 2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        client.devices.set_outlet_state.return_value = True
+        await _seed_complete_outlet_poll(seeded_owners)
+        # A confirmed first ON write for outlet 1 unlocks on2.
+        self._profile(
+            hass,
+            targets=[1, 2],
+            command={"operation": "on1", "expected_epoch": 1},
+        )
+        device.async_request_refresh = AsyncMock()
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=True)
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        first = snapshot["writes"][-1]
+        assert first["operation"] == "on1"
+        assert first["deadline_epoch"] is None
+        assert first["result"] is True
+
+        self._profile(
+            hass,
+            targets=[1, 2],
+            command={
+                "operation": "on2",
+                "expected_epoch": 1,
+                "deadline_epoch": 2000000000.0,
+                "require_prior_write": True,
+            },
+        )
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        second = snapshot["writes"][-1]
+        assert second["operation"] == "on2"
+        assert second["deadline_epoch"] == 2000000000.0
+        assert second["result"] is True
+
+    async def test_profile_is_read_in_the_executor(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """No filesystem read happens on the event loop thread."""
+        self._profile(hass, targets=[2])
+        threads: list[str] = []
+        real_read = Path.read_text
+
+        def spy(path: Path, *args: Any, **kwargs: Any) -> str:
+            threads.append(threading.current_thread().name)
+            return real_read(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", spy):
+            await _seed_complete_outlet_poll(seeded_owners)
+
+        assert threads
+        assert threading.main_thread().name not in threads
+
+    async def test_write_records_the_command_context(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """The pre-transport record names the expected epoch and operation."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        client.devices.set_outlet_state.return_value = True
+        await _seed_complete_outlet_poll(seeded_owners)
+        self._profile(
+            hass,
+            targets=[2],
+            command={"operation": "on2", "expected_epoch": 1},
+        )
+        device.async_request_refresh = AsyncMock()
+
+        await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        record = snapshot["writes"][-1]
+        assert record["outlet"] == 2
+        assert record["epoch"] == 1
+        assert record["expected_epoch"] == 1
+        assert record["operation"] == "on2"
+        assert record["result"] is True
+        assert record["covers_required"] is True
+        assert record["non_target"]["changed"] == []
+        assert record["non_target"]["missing"] == []
+        assert len(record["body_sha"]) == 16
+
+    async def test_stale_epoch_is_rejected_after_the_executor_read(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A poll committed during the command's awaits rejects the write."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        await _seed_complete_outlet_poll(seeded_owners)
+        self._profile(
+            hass,
+            targets=[2],
+            command={"operation": "on2", "expected_epoch": 1},
+        )
+        device.async_request_refresh = AsyncMock()
+        before = device.data
+        real_gate = outlet_payload_is_safe
+
+        def racing_gate(*args: Any, **kwargs: Any) -> bool:
+            device.outlet_observation.stage_poll(
+                site_id=SITE_ID,
+                device_id=PDU_ID,
+                source="legacy",
+                raw={},
+                published={},
+                trusted=True,
+                required_indexes=[1, 2, 3],
+                required_row_fields=[],
+                pending={},
+            )
+            device.outlet_observation.commit_refresh("2026-10-23T12:00:00Z")
+            return real_gate(*args, **kwargs)
+
+        with (
+            patch.object(device_module, "outlet_payload_is_safe", racing_gate),
+            pytest.raises(HomeAssistantError) as err,
+        ):
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+
+        assert err.value.translation_key == "command_failed"
+        client.devices.set_outlet_state.assert_not_called()
+        device.async_request_refresh.assert_not_awaited()
+        assert device.data is before
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        assert snapshot["write_count"] == 0
+
+    async def test_invalid_profile_fails_writes_closed_but_reads_continue(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A corrupt profile refuses every outlet and leaves polling alive."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        await _seed_complete_outlet_poll(seeded_owners)
+        device.async_request_refresh = AsyncMock()
+        self._corrupt_profile(hass)
+
+        with pytest.raises(HomeAssistantError) as err:
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+
+        assert err.value.translation_key == "command_failed"
+        client.devices.set_outlet_state.assert_not_called()
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        assert snapshot["status"] == "invalid"
+        assert snapshot["reason"] == "unreadable"
+        assert "profile" not in snapshot
+
+        await device.async_refresh()
+        assert device.last_update_success is True
+
+    async def test_other_outlet_is_refused_before_transport(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """An index outside the profile cannot reach the client at all."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        await _seed_complete_outlet_poll(seeded_owners)
+        device.async_request_refresh = AsyncMock()
+
+        with pytest.raises(HomeAssistantError) as err:
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 1, state=True)
+
+        assert err.value.translation_key == "command_failed"
+        client.devices.set_outlet_state.assert_not_called()
+        device.async_request_refresh.assert_not_awaited()
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        assert snapshot["write_count"] == 0
+
+    async def test_poll_records_a_profiled_device_without_a_verdict(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A profile device that this poll did not return records no verdict."""
+        self._profile(hass, targets=[2], device_id="not-polled-device")
+        device = seeded_owners.device
+
+        await _seed_complete_outlet_poll(seeded_owners)
+
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        poll = snapshot["polls"][-1]
+        assert poll["device"] == "not-polled-device"
+        assert poll["provenance"]["trusted"] is None
+        assert poll["published"]["indexes"] == []
+        assert poll["pending"] == {}
+
+    async def test_failed_transport_is_recorded_without_a_message(
+        self, hass: HomeAssistant, seeded_owners: SeededOwners
+    ) -> None:
+        """A failed PUT keeps its pre-transport trace and only a class name."""
+        self._profile(hass, targets=[2])
+        device = seeded_owners.device
+        client = seeded_owners.network_client
+        await _seed_complete_outlet_poll(seeded_owners)
+        device.async_request_refresh = AsyncMock()
+        client.devices.set_outlet_state.side_effect = RuntimeError("credential-canary")
+
+        with pytest.raises(HomeAssistantError):
+            await device.async_set_outlet_state(SITE_ID, PDU_ID, 2, state=True)
+
+        snapshot = await device.async_observation_snapshot()
+        assert snapshot is not None
+        record = snapshot["writes"][-1]
+        assert str(record["result"]).startswith("error:")
+        assert "canary" not in json.dumps(record)
+        assert record["covers_required"] is True

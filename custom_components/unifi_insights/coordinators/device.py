@@ -9,6 +9,7 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from http import HTTPStatus
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 from homeassistant.exceptions import (
@@ -50,6 +51,12 @@ from custom_components.unifi_insights.data_transforms import (
     device_facts,
     normalize_legacy_storage,
     normalize_legacy_wans,
+)
+from custom_components.unifi_insights.outlet_observation import (
+    OBSERVATION_FILENAME,
+    ObservationProfileState,
+    OutletObservation,
+    load_profile_state,
 )
 from custom_components.unifi_insights.topology import (
     first_present,
@@ -856,6 +863,49 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             NETWORK_FACTS_KEY: {},
             "last_update": None,
         }
+        # Hardware-test observation (#376 validation, test branch only). The
+        # profile file is read in the executor by
+        # ``async_refresh_observation_state``; this object never does I/O.
+        self.outlet_observation = OutletObservation()
+
+    def _observation_path(self) -> Path | None:
+        """Return the hardware-test profile path, or None without a config dir."""
+        config = getattr(self.hass, "config", None)
+        path = getattr(config, "path", None)
+        if not callable(path):
+            return None
+        try:
+            return Path(path(OBSERVATION_FILENAME))
+        except TypeError:
+            return None
+
+    async def async_refresh_observation_state(self) -> ObservationProfileState:
+        """
+        Read and validate the observation profile in the executor.
+
+        Called before a refresh, before a command and by diagnostics, so the
+        async paths never touch the filesystem directly and every operation
+        starts from one validated snapshot.
+        """
+        state = await self.hass.async_add_executor_job(
+            load_profile_state, self._observation_path()
+        )
+        self.outlet_observation.set_profile_state(state)
+        return state
+
+    async def async_observation_snapshot(self) -> dict[str, Any] | None:
+        """Return the observation buffers, or None while no profile exists."""
+        await self.async_refresh_observation_state()
+        return self.outlet_observation.snapshot()
+
+    def _refuse_unobserved_outlet(self, outlet_index: int, device_id: str) -> None:
+        """Raise the translated command error for a refused hardware-test write."""
+        msg = f"Unable to set outlet {outlet_index} state on device {device_id}"
+        raise HomeAssistantError(
+            msg,
+            translation_domain=DOMAIN,
+            translation_key="command_failed",
+        )
 
     @staticmethod
     def _normalize_mac(value: Any) -> str | None:
@@ -1759,9 +1809,57 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             legacy_macs=legacy_macs,
         )
 
+    def _stage_outlet_observation(
+        self,
+        *,
+        site_id: str,
+        source: Literal["v1", "legacy"],
+        devices: Mapping[str, Any],
+        raw_outlet_arrays: Mapping[str, Mapping[str, Any]],
+        provenance: Mapping[OutletProvenanceKey, OutletPayloadProvenance],
+        pending: Mapping[PendingOutletKey, PendingOutletWrite],
+    ) -> None:
+        """
+        Record this poll for the hardware-test profile, if one is active.
+
+        Called once per successfully polled site, after the raw arrays were
+        judged and the pending overlay was applied, so the record holds the
+        raw controller values, the payload verdict and what HA publishes from
+        it. A site other than the profile's is skipped, and the file is
+        re-read here so enabling or removing the profile needs no reload.
+        """
+        profile = self.outlet_observation.profile
+        if profile is None or profile.site_id != site_id:
+            return
+        device_id = profile.device_id
+        verdict = provenance.get((site_id, device_id))
+        self.outlet_observation.stage_poll(
+            site_id=site_id,
+            device_id=device_id,
+            source=source,
+            raw=dict(raw_outlet_arrays.get(device_id) or {}),
+            published=dict(devices.get(device_id) or {}),
+            trusted=None if verdict is None else verdict.trusted,
+            required_indexes=(
+                [] if verdict is None else sorted(verdict.required_indexes)
+            ),
+            required_row_fields=(
+                [] if verdict is None else sorted(verdict.required_row_fields)
+            ),
+            pending={
+                index: dict(write.fields)
+                for (write_site, write_device, index), write in pending.items()
+                if write_site == site_id and write_device == device_id
+            },
+        )
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch device data from API."""
+        # A stale staged record from a cancelled refresh never counts.
+        self.outlet_observation.begin_refresh()
         try:
+            # One validated profile snapshot per refresh, read in the executor.
+            await self.async_refresh_observation_state()
             # Get site IDs from config coordinator
             site_ids = self.config_coordinator.get_site_ids()
 
@@ -1926,6 +2024,14 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
                 )
                 pending_outlet_writes.update(held_writes)
                 sections["devices"][site_id] = devices_dict
+                self._stage_outlet_observation(
+                    site_id=site_id,
+                    source=source,
+                    devices=devices_dict,
+                    raw_outlet_arrays=raw_outlet_arrays,
+                    provenance=outlet_payload_provenance,
+                    pending=held_writes,
+                )
                 sections["stats"][site_id] = stats_dict
                 sections["clients"][site_id] = clients_dict
                 site_sources[site_id] = source
@@ -1989,6 +2095,12 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
             self._cleanup_stale_devices(
                 site_sources, site_device_macs, site_legacy_macs
             )
+
+            # Only a fully successful refresh - including the cleanup above -
+            # makes the staged poll records count: a failed, partial, cancelled
+            # or cleanup-failing refresh leaves the epoch unchanged, so a poll
+            # that was never safely completed can never be mistaken for one.
+            self.outlet_observation.commit_refresh(self.data.get("last_update"))
 
             _LOGGER.debug(
                 "Device coordinator: Update complete - %d sites processed",
@@ -2355,6 +2467,29 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
         )
         async with self._debounced_refresh.async_lock():
             device_data = self.get_device(site_id, device_id) or {}
+            observation = self.outlet_observation
+            # One validated profile snapshot for this command, read in the
+            # executor while the lock is held, so the check below judges the
+            # file as it is now rather than as the last poll saw it.
+            await self.async_refresh_observation_state()
+            refusal = observation.command_verdict(
+                site_id=site_id,
+                device_id=device_id,
+                outlet_index=outlet_index,
+                now_wall=time.time(),
+                state=state,
+                cycle_enabled=cycle_enabled,
+            )
+            if refusal is not None:
+                _LOGGER.debug(
+                    "Device coordinator: Refusing outlet %s on device %s: %s",
+                    outlet_index,
+                    device_id,
+                    refusal,
+                )
+                self._refuse_unobserved_outlet(outlet_index, device_id)
+            profile = observation.profile
+            command = None if profile is None else profile.command
             sent = _build_outlet_overrides(
                 device_data,
                 outlet_index,
@@ -2381,22 +2516,68 @@ class UnifiInsightsDeviceCoordinator(UnifiInsightsBaseCoordinator):
                     translation_domain=DOMAIN,
                     translation_key="command_failed",
                 )
-            result = await async_execute_command(
-                CommandFailure(
-                    translation_key="command_failed",
-                    message=(
-                        f"Unable to set outlet {outlet_index} state "
-                        f"on device {device_id}"
-                    ),
-                ),
-                self.network_client.devices.set_outlet_state,
-                site_name,
-                device_data.get("_id") or device_id,
-                outlet_index,
+            # Re-check synchronously, immediately before transport and after the
+            # last await: a poll that committed during the profile read must
+            # reject this command, not race it.
+            refusal = observation.command_verdict(
+                site_id=site_id,
+                device_id=device_id,
+                outlet_index=outlet_index,
+                now_wall=time.time(),
                 state=state,
                 cycle_enabled=cycle_enabled,
-                current_device=device_data,
             )
+            if refusal is not None:
+                _LOGGER.debug(
+                    "Device coordinator: Refusing outlet %s on device %s "
+                    "after the epoch recheck: %s",
+                    outlet_index,
+                    device_id,
+                    refusal,
+                )
+                self._refuse_unobserved_outlet(outlet_index, device_id)
+            verdict = self._outlet_payload_provenance.get((site_id, device_id))
+            trace = observation.record_write(
+                site_id=site_id,
+                device_id=device_id,
+                outlet_index=outlet_index,
+                state=state,
+                cycle_enabled=cycle_enabled,
+                # The safety gate above refuses a None payload, so this only
+                # satisfies the recorder's type; no record claims coverage of
+                # an array that cannot be sent.
+                sent=sent or [],
+                baseline=device_data.get("outlet_overrides"),
+                required_indexes=(
+                    [] if verdict is None else sorted(verdict.required_indexes)
+                ),
+                expected_epoch=None if command is None else command.expected_epoch,
+                operation=None if command is None else command.operation,
+                deadline_epoch=(None if command is None else command.deadline_epoch),
+            )
+            try:
+                result = await async_execute_command(
+                    CommandFailure(
+                        translation_key="command_failed",
+                        message=(
+                            f"Unable to set outlet {outlet_index} state "
+                            f"on device {device_id}"
+                        ),
+                    ),
+                    self.network_client.devices.set_outlet_state,
+                    site_name,
+                    device_data.get("_id") or device_id,
+                    outlet_index,
+                    state=state,
+                    cycle_enabled=cycle_enabled,
+                    current_device=device_data,
+                )
+            except Exception as err:
+                # The trace is evidence, not control flow: record the class
+                # name (never the message) and let the existing error path run.
+                observation.finish_write(trace, result=f"error:{type(err).__name__}")
+                raise
+            observation.finish_write(trace, result=result)
             changes: dict[str, bool] = {"relay_state": state}
             if cycle_enabled is not None:
                 changes["cycle_enabled"] = cycle_enabled
