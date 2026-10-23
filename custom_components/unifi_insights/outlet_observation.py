@@ -49,10 +49,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from collections import deque
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 if TYPE_CHECKING:
@@ -158,6 +160,78 @@ def row_index(row: Any) -> int | None:
             except ValueError:
                 return None
     return None
+
+
+def _finite_power(value: Any) -> float | None:
+    """
+    Return a raw ``outlet_power`` reading as a finite float, or None.
+
+    The controller may deliver the measurement as a numeric string; booleans,
+    ``None``, non-numeric text and non-finite values are never coerced to a
+    number, and every numeric value (including a non-zero one) is preserved
+    exactly - an absent or invalid reading must never look like 0 W. A
+    non-zero decimal string whose float conversion would underflow to zero
+    (for example ``"1e-999"``) is invalid too; only a string whose exact
+    decimal value is zero reads as 0 W.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        try:
+            parsed = float(value)
+        except OverflowError:
+            return None
+    elif isinstance(value, float):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            exact = Decimal(value)
+        except InvalidOperation:
+            return None
+        try:
+            parsed = float(exact)
+        except ValueError, OverflowError:
+            return None
+        if not exact.is_zero() and parsed == 0.0:
+            # A non-zero measurement underflowed to zero: keep the non-zero
+            # guarantee instead of inventing a 0 W reading.
+            return None
+    else:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _raw_target_power(
+    rows: Any, targets: frozenset[int]
+) -> dict[str, float | None] | None:
+    """
+    Project only the targets' raw ``outlet_power`` scalars for one poll.
+
+    Nothing else leaves the raw rows: no names, no addresses, no other keys.
+    A missing or duplicated target row, or a table that is not a list, drops
+    the whole projection; an invalid reading only drops that target's value,
+    so the run refuses instead of being handed a number the controller never
+    reported.
+    """
+    if not isinstance(rows, list):
+        return None
+    values: dict[int, float | None] = {}
+    seen: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        index = row_index(row)
+        if index is None or index not in targets:
+            continue
+        if index in seen:
+            return None
+        seen.add(index)
+        values[index] = _finite_power(row.get("outlet_power"))
+    if set(targets) - set(values):
+        return None
+    return {str(index): values[index] for index in sorted(targets)}
 
 
 def config_fields(row: dict[str, Any]) -> list[str]:
@@ -456,6 +530,9 @@ class OutletObservation:
             "source": source,
             "state_token": _status_token(
                 published.get("state") if isinstance(published, dict) else None
+            ),
+            "raw_target_power": _raw_target_power(
+                raw.get("outlet_table", _ABSENT), profile.targets
             ),
             "raw": {
                 key: project_rows(raw.get(key, _ABSENT))

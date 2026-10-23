@@ -25,6 +25,8 @@ from custom_components.unifi_insights.outlet_observation import (
     SENSED_TELEMETRY_KEYS,
     ObservationProfileState,
     OutletObservation,
+    _finite_power,
+    _raw_target_power,
     _relay_value,
     _status_token,
     compare_rows,
@@ -446,6 +448,163 @@ def test_begin_refresh_discards_a_cancelled_stage(tmp_path: Path) -> None:
     assert snapshot is not None
     assert snapshot["polls"] == []
     assert snapshot["epoch"] == 0
+
+
+# -- raw target power evidence -------------------------------------------
+def test_finite_power_parses_numbers_and_never_invents_a_zero(
+    tmp_path: Path,
+) -> None:
+    """Only finite numeric readings become evidence; invalid ones are None."""
+    assert _finite_power(0) == 0.0
+    assert _finite_power(0.0) == 0.0
+    assert _finite_power("0.0") == 0.0
+    assert _finite_power("150.0") == 150.0
+    assert _finite_power(5) == 5.0
+    assert _finite_power(None) is None
+    assert _finite_power(bool(1)) is None
+    assert _finite_power(bool(0)) is None
+    assert _finite_power("") is None
+    assert _finite_power("abc") is None
+    assert _finite_power("nan") is None
+    assert _finite_power("inf") is None
+    assert _finite_power("NaN") is None
+    assert _finite_power("Infinity") is None
+    assert _finite_power("sNaN") is None
+    assert _finite_power("-sNaN") is None
+    assert _finite_power(float("nan")) is None
+    assert _finite_power(float("inf")) is None
+    assert _finite_power([1]) is None
+    assert _finite_power({"value": 0.0}) is None
+
+
+def test_finite_power_never_turns_a_nonzero_string_into_zero() -> None:
+    """Positive and negative non-zero strings whose float conversion would
+    underflow to zero must stay invalid instead of reading 0 W."""
+    assert _finite_power("1e-999") is None
+    assert _finite_power("-1e-999") is None
+    assert _finite_power("1e999") is None
+    # A subnormal but still non-zero reading is preserved exactly.
+    assert _finite_power("5e-324") == 5e-324
+
+
+def test_finite_power_keeps_legitimate_zero_spellings() -> None:
+    """Real zeros - including sign and exponent forms - remain 0 W."""
+    assert _finite_power("0") == 0.0
+    assert _finite_power("-0") == 0.0
+    assert _finite_power("0e-999") == 0.0
+    assert _finite_power(0) == 0.0
+    assert _finite_power(-0.0) == 0.0
+
+
+def test_finite_power_rejects_huge_integers_without_overflowing() -> None:
+    """An integer too large for a float is invalid, not an exception."""
+    assert _finite_power(10**400) is None
+
+
+def test_raw_target_power_projects_only_the_targets_scalars() -> None:
+    """Only the allowlisted targets, only the outlet_power scalar, and no
+    non-target row or any other key leaves the raw table."""
+    rows = [
+        {"index": 5, "name": NAME_CANARY, "outlet_power": "9.9"},
+        {"index": 17, "name": NAME_CANARY, "outlet_power": "0.0"},
+        {"index": 18, "name": NAME_CANARY, "outlet_power": "0.0"},
+    ]
+
+    projection = _raw_target_power(rows, frozenset({17, 18}))
+
+    assert projection == {"17": 0.0, "18": 0.0}
+
+
+def test_raw_target_power_preserves_a_nonzero_reading() -> None:
+    """A non-zero measurement is kept as its value, never coerced to zero."""
+    rows = [
+        {"index": 17, "outlet_power": "12.4"},
+        {"index": 18, "outlet_power": "0.0"},
+    ]
+
+    projection = _raw_target_power(rows, frozenset({17, 18}))
+
+    assert projection == {"17": 12.4, "18": 0.0}
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [_ABSENT],
+        [{"index": 17, "outlet_power": "0.0"}],  # 18 missing
+        [  # duplicate 17
+            {"index": 17, "outlet_power": "0.0"},
+            {"index": 17, "outlet_power": "0.0"},
+            {"index": 18, "outlet_power": "0.0"},
+        ],
+    ],
+)
+def test_raw_target_power_refuses_a_structural_gap(rows: list[Any]) -> None:
+    """Absent table, missing target row or duplicate target row -> None."""
+    assert _raw_target_power(rows, frozenset({17, 18})) is None
+
+
+def test_raw_target_power_keeps_one_invalid_reading_as_none_only() -> None:
+    """An invalid reading drops that target's value; the other target's
+    evidence stays intact, and the run refuses the missing one."""
+    rows = [
+        {"index": 17, "outlet_power": "0.0"},
+        {"index": 18, "outlet_power": None},
+    ]
+
+    projection = _raw_target_power(rows, frozenset({17, 18}))
+
+    assert projection == {"17": 0.0, "18": None}
+
+
+def test_staged_poll_carries_raw_target_power_for_the_profile(tmp_path: Path) -> None:
+    """The evidence rides the same staged record as the poll, so it commits
+    atomically with the same successful publication and epoch."""
+    observation = _valid_observation(tmp_path)
+    record = _stage(observation)
+
+    assert record is not None
+    assert record["raw_target_power"] == {"17": 0.0, "18": 0.0}
+    assert observation.commit_refresh("2026-10-23T12:00:00Z") == 1
+
+    snapshot = observation.snapshot()
+    assert snapshot is not None
+    poll = snapshot["polls"][-1]
+    assert poll["epoch"] == 1
+    assert poll["raw_target_power"] == {"17": 0.0, "18": 0.0}
+    # The scalar never leaks into the row/config projections or digests.
+    for array in ("outlet_table", "outlet_overrides"):
+        for row in poll["raw"][array]["rows"].values():
+            assert "outlet_power" not in row
+            assert "outlet_power" not in row["config_fields"]
+    assert NAME_CANARY not in json.dumps(poll)
+
+
+def test_failed_refresh_cannot_supply_raw_power_evidence(tmp_path: Path) -> None:
+    """A staged poll with power evidence that never publishes leaves nothing:
+    the failed refresh cannot hand the run a fresh 0 W proof."""
+    observation = _valid_observation(tmp_path)
+    _stage(observation)
+
+    observation.begin_refresh()
+    observation.commit_refresh("2026-10-23T12:00:00Z")
+
+    snapshot = observation.snapshot()
+    assert snapshot is not None
+    assert snapshot["polls"] == []
+    assert snapshot["epoch"] == 0
+
+
+def test_stage_without_a_raw_table_keeps_power_evidence_none(tmp_path: Path) -> None:
+    """A raw dict without outlet_table stages with None evidence, never 0."""
+    observation = _valid_observation(tmp_path)
+    record = _stage(
+        observation,
+        raw={"outlet_overrides": [_row(17), _row(18)]},
+    )
+
+    assert record is not None
+    assert record["raw_target_power"] is None
 
 
 def test_stage_ignores_another_site_device_or_absent_profile(
