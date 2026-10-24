@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Optimized `_is_unspecified_address` by removing `ipaddress.ip_address` instantiation and replacing it with a direct string check. This improves performance when transforming telemetry data. (Performance improvement)
+
 ### Added
 
 - The topology card draws each gateway's internet connections (WANs) as nodes above the gateway, in the tree and tiered layouts and both orientations, so the map reads internet, gateway, infrastructure, clients. Each WAN shows its name and connected or disconnected state, from the same data as the gateway's "<WAN name> Connection" sensors, and updates live; a disconnected WAN is dimmed and labelled **Disconnected**. The list view lists WANs just before their gateway, and administrators can copy a WAN's IP address and open its Connection sensor. The new `show_wan` card option (default `true`, also in the card editor) hides them. The topology snapshot contract is now schema version 2 (new node kind `wan`; WAN IP addresses are never part of the snapshot), so the card and the integration must be updated together. [#347](https://github.com/tinkerologie/ha-unifi-insights/issues/347)
