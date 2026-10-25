@@ -29,7 +29,7 @@ from .const import (
     MOBILITY_DEVICE_PREFIX,
 )
 from .coordinators import UnifiInsightsFacadeCoordinator
-from .data_transforms import section_by_site
+from .data_transforms import client_is_connected, section_by_site
 from .entity import (
     UnifiMobilityRouterEntity,
     async_add_mobility_router_entities,
@@ -455,11 +455,16 @@ class UnifiClientTracker(
 
     @property
     def is_connected(self) -> bool:
-        """Return true if the client is connected."""
-        client_data = self._get_client_data()
-        if not client_data:
-            return False
-        return bool(get_field(client_data, "connected", default=False))
+        """
+        Return true if the client is connected.
+
+        Uses the snapshot membership rule: clients returned by the official
+        connected-clients API lack a connected field and are considered
+        connected by presence in the snapshot. An explicit connected=False
+        overrides membership and reports disconnected. A missing client
+        record returns False.
+        """
+        return client_is_connected(self._get_client_data())
 
     @property
     def source_type(self) -> SourceType:

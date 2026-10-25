@@ -531,6 +531,28 @@ def client_connection_type(client: Mapping[str, Any]) -> ClientConnectionType | 
     return None
 
 
+_CLIENT_CONNECTED_SENTINEL = object()
+
+
+def client_is_connected(client: Mapping[str, Any] | None) -> bool:
+    """
+    Return True if a client record represents a connected client.
+
+    Official UniFi Network API endpoints return connected clients only and omit
+    the connected field entirely. A present client record is therefore
+    considered connected by default (membership in the snapshot). An explicit
+    non-None connected field overrides this membership rule with its own
+    truthiness (for legacy or offline records with connected=False).
+    An empty or missing client record returns False.
+    """
+    if not client:
+        return False
+    raw = get_field(client, "connected", default=_CLIENT_CONNECTED_SENTINEL)
+    if raw is _CLIENT_CONNECTED_SENTINEL:
+        return True
+    return bool(raw)
+
+
 def _device_facts(
     device_id: str,
     device: Mapping[str, Any],
@@ -1026,6 +1048,7 @@ __all__ = [
     "build_site_network_facts",
     "bytes_to_bits_per_second",
     "client_connection_type",
+    "client_is_connected",
     "correlate_innerspace_devices",
     "current_chime_ringtone_id",
     "device_facts",

@@ -10,8 +10,14 @@ import pytest
 from homeassistant.components.device_tracker import SourceType
 from homeassistant.const import STATE_HOME, STATE_NOT_HOME
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from unifi_official_api.exceptions import UniFiConnectionError
 
-from custom_components.unifi_insights.const import CONF_TRACK_WIFI_CLIENTS, DOMAIN
+from custom_components.unifi_insights.const import (
+    CONF_CLIENT_CONTROL,
+    CONF_TRACK_WIFI_CLIENTS,
+    CONF_TRACK_WIRED_CLIENTS,
+    DOMAIN,
+)
 from custom_components.unifi_insights.device_tracker import (
     PARALLEL_UPDATES,
     UnifiClientTracker,
@@ -27,6 +33,7 @@ from tests.fixtures.facade_data import (
     with_client,
     with_sections,
 )
+from tests.fixtures.library_responses import SAMPLE_WIRED_CLIENT
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -571,6 +578,40 @@ class TestUnifiClientTracker:
         # Ensure connected field is True
         mock_coordinator.data = _with_client_fields(
             mock_coordinator.data, "site1", "client1", connected=True
+        )
+
+        tracker = UnifiClientTracker(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            mac="AA:BB:CC:DD:EE:FF",
+        )
+
+        assert tracker.is_connected is True
+
+    def test_is_connected_missing_connected_key(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test is_connected for a present client record without a connected key."""
+        record = dict(mock_coordinator.data["clients"]["site1"]["client1"])
+        record.pop("connected", None)
+        mock_coordinator.data = with_client(
+            mock_coordinator.data, "site1", "client1", record
+        )
+
+        tracker = UnifiClientTracker(
+            coordinator=mock_coordinator,
+            site_id="site1",
+            mac="AA:BB:CC:DD:EE:FF",
+        )
+
+        assert tracker.is_connected is True
+
+    def test_is_connected_none_connected_value(
+        self, mock_coordinator: MagicMock
+    ) -> None:
+        """Test is_connected for a present client record with connected=None."""
+        mock_coordinator.data = _with_client_fields(
+            mock_coordinator.data, "site1", "client1", connected=None
         )
 
         tracker = UnifiClientTracker(
@@ -1521,6 +1562,107 @@ class TestEntityPlatformRestoration:
         state = hass.states.get(entity_id)
         assert state is not None
         assert state.state == STATE_NOT_HOME
+
+    @pytest.mark.asyncio
+    async def test_entity_platform_wired_client_lifecycle(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        mock_config_entry: MockConfigEntry,
+        mock_network_client: MagicMock,
+        mock_protect_client: MagicMock,
+        *,
+        mock_local_auth: MagicMock,
+        enable_custom_integrations: None,
+    ) -> None:
+        """Wired client reports home from connected listing, not_home when absent."""
+        mac = SAMPLE_WIRED_CLIENT["macAddress"].lower()
+        mock_config_entry.add_to_hass(hass)
+        hass.config_entries.async_update_entry(
+            mock_config_entry,
+            options={
+                CONF_TRACK_WIRED_CLIENTS: True,
+                CONF_CLIENT_CONTROL: True,
+            },
+        )
+
+        reg_entry = entity_registry.async_get_or_create(
+            "device_tracker",
+            DOMAIN,
+            f"{DOMAIN}_{mac}",
+            config_entry=mock_config_entry,
+            suggested_object_id="test_wired",
+        )
+        entity_id = reg_entry.entity_id
+
+        mock_network_client.sites.get_all.return_value = [
+            {"id": "default", "name": "Default"}
+        ]
+        mock_network_client.clients.get_all.return_value = [SAMPLE_WIRED_CLIENT]
+
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        # STATE_HOME after setup
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == STATE_HOME
+
+        # STATE_NOT_HOME after refresh with [] (same unique ID stays registered)
+        mock_network_client.clients.get_all.return_value = []
+        data = mock_config_entry.runtime_data
+        await data.device_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == STATE_NOT_HOME
+        reg_after_empty = entity_registry.async_get(entity_id)
+        assert reg_after_empty is not None
+        assert reg_after_empty.unique_id == f"{DOMAIN}_{mac}"
+
+        # STATE_HOME after the client returns
+        mock_network_client.clients.get_all.return_value = [SAMPLE_WIRED_CLIENT]
+        await data.device_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == STATE_HOME
+
+        # Connection error: runtime_data retains previous client record
+        mock_network_client.clients.get_all.side_effect = UniFiConnectionError(
+            "Connection lost"
+        )
+        await data.device_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        # Check client record retention and architectural availability behavior:
+        # device_coordinator records failure, retains previous client record.
+        # Per #116 and UnifiClientTracker.available docstring, the tracker retains
+        # its last home/not_home state (STATE_HOME) and does not drop to unavailable.
+        assert data.device_coordinator.last_update_success is False
+        client_data = (
+            data.device_coordinator.data.get("clients", {})
+            .get("default", {})
+            .get(SAMPLE_WIRED_CLIENT["id"])
+        )
+        assert client_data is not None
+
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == STATE_HOME
+
+        # Recovery: refresh succeeds and client reports home
+        mock_network_client.clients.get_all.side_effect = None
+        mock_network_client.clients.get_all.return_value = [SAMPLE_WIRED_CLIENT]
+        await data.device_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert data.device_coordinator.last_update_success is True
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == STATE_HOME
 
     @pytest.mark.asyncio
     async def test_entity_platform_legacy_collision_retained_lifecycle(

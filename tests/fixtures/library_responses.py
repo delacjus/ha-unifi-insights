@@ -21,6 +21,15 @@ SAMPLE_CLIENT = {
     "site": "default",
 }
 
+SAMPLE_WIRED_CLIENT = {
+    "id": "client_wired_1",
+    "macAddress": "aa:bb:cc:dd:ee:33",
+    "name": "Test Wired Client",
+    "type": "WIRED",
+    "connectedAt": "2026-10-25T12:00:00Z",
+    "ipAddress": "192.168.1.133",
+}
+
 SAMPLE_PDU_DEVICE = {
     "id": "pdu_device_1",
     "mac": "00:11:22:33:44:55",

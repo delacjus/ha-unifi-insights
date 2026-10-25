@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Wired and wireless client trackers now report `home` when the client is present in the official connected-clients listing. The official UniFi Network API has no `connected` field on connected client records, so presence in the snapshot determines connection state. An explicit `connected=False` still reports `not_home`. Tracker entity IDs and unique IDs do not change. [#417](https://github.com/tinkerologie/ha-unifi-insights/issues/417)
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added

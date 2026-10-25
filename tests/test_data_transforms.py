@@ -42,6 +42,7 @@ from custom_components.unifi_insights.data_transforms import (
     bytes_to_bits_per_second,
     cast_input,
     client_connection_type,
+    client_is_connected,
     count_active_vouchers,
     current_chime_ringtone_id,
     device_facts,
@@ -1671,6 +1672,34 @@ def test_metrics(
 def test_client_connection_type(client: dict[str, Any], expected: Any) -> None:
     """Recognition is exact after enum unwrap and prefix removal."""
     assert client_connection_type(client) == expected
+
+
+@pytest.mark.parametrize(
+    ("client", "expected"),
+    [
+        ({"id": "client_1", "mac": "aa:bb:cc:dd:ee:ff"}, True),
+        ({"connected": None}, True),
+        ({"connected": True}, True),
+        ({"connected": False}, False),
+        ({"connected": 1}, True),
+        ({"connected": 0}, False),
+        ({"connected": "true"}, True),
+        ({"connected": ""}, False),
+        ({}, False),
+        (None, False),
+    ],
+)
+def test_client_is_connected(client: dict[str, Any] | None, expected: Any) -> None:
+    """Helper recognizes snapshot membership and explicit connected states."""
+    assert client_is_connected(client) is expected
+
+
+def test_client_is_connected_does_not_mutate() -> None:
+    """Helper does not mutate input record."""
+    original = {"id": "c1", "mac": "aa:bb:cc:dd:ee:ff", "name": "device"}
+    snapshot = copy.deepcopy(original)
+    assert client_is_connected(original) is True
+    assert original == snapshot
 
 
 # --- Builder and table rows -----------------------------------------------
