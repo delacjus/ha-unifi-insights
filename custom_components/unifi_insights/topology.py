@@ -325,7 +325,7 @@ _KEY_BYTES: Final = 32
 _KEY_RE: Final = re.compile(rf"[0-9a-f]{{{_KEY_BYTES * 2}}}")
 
 
-@dataclass
+@dataclass(repr=False)
 class _NodeKeys:
     """Loaded keys (entry_id -> hex) and the store that persists them."""
 
@@ -335,6 +335,11 @@ class _NodeKeys:
     def data(self) -> dict[str, Any]:
         """Return the payload to persist."""
         return {"keys": dict(self.keys)}
+
+    def __repr__(self) -> str:
+        """Return a string representation redacting the secret keys."""
+        safe_keys = dict.fromkeys(self.keys, "***")
+        return f"_NodeKeys(store={self.store!r}, keys={safe_keys})"
 
 
 _NODE_KEYS: HassKey[_NodeKeys] = HassKey(f"{DOMAIN}_topology_node_keys")
