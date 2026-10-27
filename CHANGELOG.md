@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+
 - Optimized `_is_unspecified_address` telemetry check to use faster string parsing.
 
 ## [2026.10.3] - 2026-10-25
