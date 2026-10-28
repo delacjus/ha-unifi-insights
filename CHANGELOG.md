@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The CI test job installs the TurboJPEG library on both Ubuntu 24.04 and 26.04 runners. Ubuntu 26.04 renamed the package from `libturbojpeg` to `libturbojpeg0`, so the job now picks whichever name the runner provides and logs it. [#431](https://github.com/tinkerologie/ha-unifi-insights/issues/431)
 - Dependency auto-merge now runs only for Dependabot-initiated updates; maintainer repairs use manual review and merging without bypassing bot signature verification. [#427](https://github.com/tinkerologie/ha-unifi-insights/issues/427)
 - Updated Vite to 8.3.5 and synchronized the committed dashboard bundles with its reproducible build output. [#427](https://github.com/tinkerologie/ha-unifi-insights/issues/427)
 - Validation scripts now consistently select the configured Python environment, fail on Pyright warnings and validate custom requirements against Home Assistant Core's own dependency files. Local and CI Hassfest share a reviewed development commit and pinned Python in an isolated environment, and the integration declares networking and security categories for current catalog validation. Static entity descriptions are frozen and keyword-only, matching current Home Assistant metadata conventions. [#420](https://github.com/tinkerologie/ha-unifi-insights/issues/420)
