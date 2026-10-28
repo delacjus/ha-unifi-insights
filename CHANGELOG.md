@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Optimize `_is_unspecified_address` to use string matching for better performance
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
