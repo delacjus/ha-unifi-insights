@@ -12,6 +12,7 @@ from homeassistant.components.event import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -33,6 +34,7 @@ from .entity import (
     UnifiSiteEntity,
     access_coordinator_for,
     access_unique_id,
+    async_delegate_entity_id_changed,
     async_discover_access_entities,
     door_device_info,
     doorbell_device_info,
@@ -105,6 +107,11 @@ class UnifiAccessDoorbellEvent(UnifiAccessEntity, EventEntity):
             self._namespace, device_id, device_name
         )
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity on an entity ID change; nothing here is keyed on it."""
+        async_delegate_entity_id_changed(super(), old_entity_id)
+
     async def async_added_to_hass(self) -> None:
         """Fire the ring that created this entity, if any, once it is added."""
         await super().async_added_to_hass()
@@ -147,6 +154,11 @@ class UnifiAccessResultEvent(UnifiAccessDoorEntity, EventEntity):
         self._attr_device_info = door_device_info(
             self._namespace, door_id, name if isinstance(name, str) else None
         )
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity on an entity ID change; nothing here is keyed on it."""
+        async_delegate_entity_id_changed(super(), old_entity_id)
 
     async def async_added_to_hass(self) -> None:
         """Mark the entity as added so results can be written."""
@@ -389,12 +401,12 @@ class UnifiProtectDoorbellEventEntity(
         self._attr_unique_id = f"{DOMAIN}_camera_{device_id}_doorbell_event"
 
         # Set device info
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"protect_camera_{device_id}")},
-            "name": camera_name,
-            "manufacturer": MANUFACTURER,
-            "model": camera_data.get("type", "UniFi Camera"),
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"protect_camera_{device_id}")},
+            name=camera_name,
+            manufacturer=MANUFACTURER,
+            model=camera_data.get("type", "UniFi Camera"),
+        )
 
     @property
     def available(self) -> bool:
@@ -470,12 +482,12 @@ class UnifiProtectSmartDetectEventEntity(
         self._attr_unique_id = f"{DOMAIN}_camera_{device_id}_smart_detect_event"
 
         # Set device info
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"protect_camera_{device_id}")},
-            "name": camera_name,
-            "manufacturer": MANUFACTURER,
-            "model": camera_data.get("type", "UniFi Camera"),
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"protect_camera_{device_id}")},
+            name=camera_name,
+            manufacturer=MANUFACTURER,
+            model=camera_data.get("type", "UniFi Camera"),
+        )
 
     @property
     def available(self) -> bool:
@@ -560,12 +572,12 @@ class UnifiProtectSensorEventEntity(
         self._attr_unique_id = f"{DOMAIN}_sensor_{device_id}_event"
 
         # Set device info
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"protect_sensor_{device_id}")},
-            "name": sensor_name,
-            "manufacturer": MANUFACTURER,
-            "model": sensor_data.get("type", "UniFi Sensor"),
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"protect_sensor_{device_id}")},
+            name=sensor_name,
+            manufacturer=MANUFACTURER,
+            model=sensor_data.get("type", "UniFi Sensor"),
+        )
 
     @property
     def available(self) -> bool:
