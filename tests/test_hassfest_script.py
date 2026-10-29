@@ -290,3 +290,35 @@ def test_ci_uses_canonical_full_validator_command() -> None:
         step.get("with", {}).get("repository") != "home-assistant/core"
         for step in steps
     )
+
+
+@pytest.mark.parametrize("core", ["2026.11+", "before-2026.11"])
+def test_validator_package_is_installed_only_when_core_ships_it(
+    tmp_path: Path, core: str
+) -> None:
+    """Core 2026.11 moved the validator into packages/hassfest; older Cores lack it."""
+    has_package = core == "2026.11+"
+    contents = (
+        {"packages/hassfest/pyproject.toml": "[project]\nname='hassfest'\n"}
+        if has_package
+        else None
+    )
+    project = project_with_uv(tmp_path, contents=contents)
+    project.env["HA_VERSION"] = "2026.10.2"
+
+    result = project.run("hassfest", "--skip-plugins", "")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    uv_runs = [
+        uv_args
+        for call in project.trace()
+        if isinstance(uv_args := call.get("uv_args"), list) and uv_args[:1] == ["run"]
+    ]
+    assert len(uv_runs) == 1
+    uv_args = uv_runs[0]
+    editable = str(project.root / ".local/ha-core/packages/hassfest")
+    if has_package:
+        assert uv_args[uv_args.index("--with-editable") + 1] == editable
+        assert uv_args.index("--with-editable") < uv_args.index("python")
+    else:
+        assert "--with-editable" not in uv_args
