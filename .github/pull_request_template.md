@@ -14,18 +14,18 @@
 - [ ] New feature or enhancement
 - [ ] Breaking change (change that causes existing automations or setups to fail)
 - [ ] Documentation update
-- [x] Code refactoring (no functional changes)
+- [X] Code refactoring (no functional changes)
 - [ ] Test additions or improvements
 - [ ] Frontend topology card or UI update
 
 ## Pre-Submission Governance
 
-- [x] I built and ran the project locally and verified this change actually works (not just that it compiles)
-- [x] I ran `pytest` locally and all tests pass
-- [x] I ran `./script/lint` locally and it passes
-- [x] I pasted real local verification output under **Testing Performed** below (no placeholder text)
-- [x] This PR is self-contained and is not a duplicate; I have not opened other overlapping or back-to-back PRs for the same change
-- [x] If an AI agent created or assisted with this PR, a human reviewed and verified the changes before submission
+- [X] I built and ran the project locally and verified this change actually works (not just that it compiles)
+- [X] I ran `pytest` locally and all tests pass
+- [X] I ran `./script/lint` locally and it passes
+- [X] I pasted real local verification output under **Testing Performed** below (no placeholder text)
+- [X] This PR is self-contained and is not a duplicate; I have not opened other overlapping or back-to-back PRs for the same change
+- [X] If an AI agent created or assisted with this PR, a human reviewed and verified the changes before submission
 
 ## Related Issues
 
@@ -39,7 +39,7 @@ None
 
 ## Home Assistant Quality Scale & Standards
 
-- [x] Verified against the [Home Assistant Developer Docs](https://developers.home-assistant.io/) and Quality Scale rules
+- [X] Verified against the [Home Assistant Developer Docs](https://developers.home-assistant.io/) and Quality Scale rules
 - [ ] Checked [developer.ui.com](https://developer.ui.com/) for endpoint/schema alignment where API behavior changed
 - [ ] Uses `entry.runtime_data` patterns where applicable (no new `hass.data[DOMAIN]` usage)
 - [ ] All entities read from coordinator state (`coordinator.data`) and avoid direct API/network calls
@@ -51,10 +51,10 @@ None
 
 ## Testing Performed
 
-- [x] Ran unit tests (`pytest`)
-- [x] Ran linter (`./script/lint`)
-- [x] Ran type checking (`mypy custom_components/unifi_insights`)
-- [x] Ran pre-commit checks (`pre-commit run --all-files`)
+- [X] Ran unit tests (`pytest`)
+- [X] Ran linter (`./script/lint`)
+- [X] Ran type checking (`mypy custom_components/unifi_insights`)
+- [X] Ran pre-commit checks (`pre-commit run --all-files`)
 - [ ] Tested live in local Home Assistant (`./script/develop`)
 - [ ] Frontend checks passed (`npm run lint`, `npm run typecheck`, `npm test` in `frontend/`) (if applicable)
 - [ ] Not applicable (documentation-only or metadata-only change)
@@ -78,25 +78,27 @@ tests/test_data_transforms.py::test_is_unspecified_address PASSED        [100%]
 
 ## Documentation
 
-- [x] Code comments added/updated where needed
+- [X] Code comments added/updated where needed
 - [ ] README.md updated (if needed)
-- [x] CHANGELOG.md updated under [Unreleased]
-- [x] AGENTS.md / developer documentation updated (if architecture or process changed)
+- [X] CHANGELOG.md updated under [Unreleased]
+- [X] AGENTS.md / developer documentation updated (if architecture or process changed)
 - [ ] No documentation needed
 
 ## Breaking Changes
 
+None
+
 ## Checklist
 
-- [x] I have updated CHANGELOG.md under [Unreleased] with details of this change
-- [x] I verified my code against Home Assistant integration quality rules and used no deprecated APIs
-- [x] I linked the related issue in **Related Issues** (only maintainers may note "None", for housekeeping)
-- [x] I completed all required sections in this template and removed placeholder-only content
-- [x] My code follows the project's coding standards and Home Assistant patterns
-- [x] I have performed a self-review of my own code
-- [x] I have commented my code, particularly in hard-to-understand areas (if applicable)
-- [x] My changes generate no new warnings
+- [X] I have updated CHANGELOG.md under [Unreleased] with details of this change
+- [X] I verified my code against Home Assistant integration quality rules and used no deprecated APIs
+- [X] I linked the related issue in **Related Issues** (only maintainers may note "None", for housekeeping)
+- [X] I completed all required sections in this template and removed placeholder-only content
+- [X] My code follows the project's coding standards and Home Assistant patterns
+- [X] I have performed a self-review of my own code
+- [X] I have commented my code, particularly in hard-to-understand areas (if applicable)
+- [X] My changes generate no new warnings
 - [ ] I have added tests that prove my fix is effective or that my feature works (if applicable)
-- [x] New and existing unit tests pass locally with my changes
+- [X] New and existing unit tests pass locally with my changes
 - [ ] Any dependent changes have been merged and published (if applicable)
-- [x] No sensitive information (tokens, passwords, personal data) is included
+- [X] No sensitive information (tokens, passwords, personal data) is included
