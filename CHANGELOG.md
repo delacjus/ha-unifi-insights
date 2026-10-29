@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced expensive `ipaddress.ip_address` instantiation with direct string matching for `0.0.0.0` and `::` in hot paths for performance improvement.
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
