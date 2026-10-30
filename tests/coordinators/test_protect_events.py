@@ -56,7 +56,6 @@ from custom_components.unifi_insights.coordinators.protect_events import (
     StreamReconnected,
     TransientError,
     begin_request,
-    digital_input_key,
     initial_state,
     reconcile,
 )
@@ -2188,7 +2187,14 @@ def test_digital_input_key_falls_back_channel_then_token_then_zero(
     channel: str | None, token: str | None, expected: str
 ) -> None:
     """Whitespace and an empty string count as missing; "0" is the last resort."""
-    assert digital_input_key(channel, token) == expected
+    metadata: dict[str, Any] = {"inputState": {"text": "circuitOpen"}}
+    if channel is not None:
+        metadata["inputChannel"] = {"text": channel}
+    if token is not None:
+        metadata["inputToken"] = {"text": token}
+    result = run(cache(cameras=_CAMERAS), [(0.0, digital_input(metadata=metadata))])
+    (effect,) = dispatches(result)
+    assert effect.input_key == expected
 
 
 def test_digital_input_frame_falls_back_to_the_token() -> None:

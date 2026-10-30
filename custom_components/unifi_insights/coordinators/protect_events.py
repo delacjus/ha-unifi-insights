@@ -387,7 +387,7 @@ def _event_metadata_text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def digital_input_key(channel: str | None, token: str | None) -> str:
+def _digital_input_key(channel: str | None, token: str | None) -> str:
     """
     Return the stable per-input key for one camera digital input.
 
@@ -1196,7 +1196,7 @@ def _apply_digital_input_event(
     run.effects.append(
         DispatchDigitalInput(
             camera_id=device_id,
-            input_key=digital_input_key(channel, token),
+            input_key=_digital_input_key(channel, token),
             event_type=ha_event_type,
             input_channel=channel,
             input_token=token,

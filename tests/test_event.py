@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -1886,23 +1887,34 @@ async def test_signal_for_another_entry_is_ignored(hass: Any) -> None:
     assert added == []
 
 
-async def test_payload_without_usable_keys_creates_nothing(hass: Any) -> None:
+async def test_payload_without_usable_keys_creates_nothing(
+    hass: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     """A malformed payload is dropped rather than creating an entity."""
+    caplog.set_level(logging.DEBUG, logger=event_platform.__name__)
     entry, _, added = _digital_setup(hass)
 
     async_dispatcher_send(hass, protect_digital_input_signal(entry.entry_id), {})
-    async_dispatcher_send(
-        hass,
-        protect_digital_input_signal(entry.entry_id),
+    for payload in (
         {"camera_id": 7, "input_key": "0"},
-    )
+        {"camera_id": "", "input_key": "0"},
+        {"camera_id": "camera1", "input_key": ""},
+        {"camera_id": "camera1", "input_key": None},
+    ):
+        async_dispatcher_send(
+            hass, protect_digital_input_signal(entry.entry_id), payload
+        )
     await hass.async_block_till_done()
 
     assert added == []
+    assert caplog.text.count("Ignoring digital input change without") == 5
 
 
-async def test_unknown_event_type_fires_nothing(hass: Any) -> None:
+async def test_unknown_event_type_fires_nothing(
+    hass: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     """An event type outside the entity's list never reaches `_trigger_event`."""
+    caplog.set_level(logging.DEBUG, logger=event_platform.__name__)
     entry, _, added = _digital_setup(hass)
     async_dispatcher_send(
         hass,
@@ -1919,6 +1931,7 @@ async def test_unknown_event_type_fires_nothing(hass: Any) -> None:
         await entity.async_added_to_hass()
 
     trigger.assert_not_called()
+    assert "unsupported event type 'short_circuit'" in caplog.text
 
 
 async def test_registry_rows_are_restored_including_absent_and_disabled(

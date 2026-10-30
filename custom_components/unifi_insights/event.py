@@ -747,6 +747,12 @@ class UnifiProtectCameraDigitalInputEventEntity(
         """Fire the change a dispatcher payload describes, if it is valid."""
         event_type = payload.get("event_type")
         if event_type not in CAMERA_DIGITAL_INPUT_EVENT_TYPES:
+            # HA's _trigger_event raises ValueError for an undeclared type.
+            _LOGGER.debug(
+                "Ignoring digital input %s: unsupported event type %r",
+                self._attr_unique_id,
+                event_type,
+            )
             return
         attrs: dict[str, Any] = {
             "input_channel": payload.get("input_channel"),
@@ -798,7 +804,16 @@ def async_setup_protect_digital_input_events(
         """Fire a known input, or create the entity for an input seen now."""
         camera_id = payload.get("camera_id")
         input_key = payload.get("input_key")
-        if not isinstance(camera_id, str) or not isinstance(input_key, str):
+        if not (
+            isinstance(camera_id, str)
+            and camera_id
+            and isinstance(input_key, str)
+            and input_key
+        ):
+            _LOGGER.debug(
+                "Ignoring digital input change without a camera or input: %s",
+                payload,
+            )
             return
         existing = inputs.get((camera_id, input_key))
         if existing is not None:
