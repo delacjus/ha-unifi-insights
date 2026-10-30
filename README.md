@@ -371,6 +371,7 @@ refer to are not included, and there is no import action.
 
 - **Cameras:** live view, snapshots and RTSPS streams, with switches and selects for the status light, HDR and video mode.
 - **Detection:** motion, person, vehicle, animal and package binary sensors, and smart detection and doorbell event entities.
+- **Camera digital inputs:** an event entity for each digital (alarm) input of a camera, created on the first `cameraDigitalInputChanged` event for that input and restored after a restart. It fires `circuit_open` and `circuit_closed`; with normally-closed wiring an open circuit can mean the input is idle, so the names describe the circuit, not what it is wired to. Needs Protect 7.2.105 or newer.
 - **Lights:** floodlight on/off and brightness, and a light mode action.
 - **Chimes:** volume, repeat count and ringtone, and which doorbells ring the chime.
 - **Sirens:** sound a siren for 5, 10, 20 or 30 seconds, and set its volume.
@@ -388,7 +389,7 @@ refer to are not included, and there is no import action.
 | Camera                                                                                                 | Camera                | Live view, snapshots, RTSPS stream                                              |
 | Motion Detection, Person Detection, Vehicle Detection, Animal Detection, Package Detection, Microphone | Binary sensor         | Cameras (Microphone is read-only; skipped if the camera reports no mic)         |
 | Ring                                                                                                   | Binary sensor         | Doorbells                                                                       |
-| Doorbell, Smart Detection, Door/Window                                                                 | Event                 | Doorbell rings, smart detections, and sensor open/close events                  |
+| Doorbell, Smart Detection, Door/Window, Digital input                                                  | Event                 | Doorbell rings, smart detections, sensor open/close and digital input events    |
 | Status Light, High FPS Mode                                                                            | Switch                | Camera settings                                                                 |
 | HDR Mode, Video Mode, PTZ Preset                                                                       | Select                | Camera settings                                                                 |
 | Microphone Volume                                                                                      | Number                | Camera microphone volume                                                        |

@@ -971,6 +971,17 @@
             }
           }
         }
+      },
+      "camera_digital_input": {
+        "name": "Digital input {channel}",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "circuit_open": "Circuit open",
+              "circuit_closed": "Circuit closed"
+            }
+          }
+        }
       }
     },
     "update": {

@@ -228,6 +228,25 @@ MODEL_KEY_FOB: Final = "fob"
 
 # Protect event types
 EVENT_TYPE_ALARM_HUB_DEVICE_TAMPER: Final = "alarmHubDeviceTamper"
+# Protect 7.2.105: "An ONVIF camera digital input has changed state (circuit
+# opened or closed)". The camera schema has no field that says which cameras
+# have inputs or how many, so the event entities are created from these frames.
+EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED: Final = "cameraDigitalInputChanged"
+
+# `cameraDigitalInputChanged` metadata.inputState -> the Home Assistant event
+# type it fires. The names stay neutral (circuit open/closed) rather than
+# opened/closed: with normally-closed wiring an open circuit can mean "idle",
+# so the integration must not guess what the input is wired to.
+DIGITAL_INPUT_EVENT_TYPES_BY_STATE: Final[dict[str, str]] = {
+    "circuitOpen": "circuit_open",
+    "circuitClosed": "circuit_closed",
+}
+
+# The event types a digital-input entity declares, in the order it lists them.
+CAMERA_DIGITAL_INPUT_EVENT_TYPES: Final[tuple[str, ...]] = (
+    "circuit_open",
+    "circuit_closed",
+)
 
 # Camera attributes
 ATTR_CAMERA_ID: Final = "camera_id"

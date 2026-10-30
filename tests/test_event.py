@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from homeassistant.components.event import EventDeviceClass
 from homeassistant.const import CONF_API_KEY, EVENT_STATE_CHANGED, EntityCategory
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
@@ -20,14 +21,19 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.unifi_insights import UnifiInsightsData
 from custom_components.unifi_insights import event as event_platform
 from custom_components.unifi_insights.const import (
+    CAMERA_DIGITAL_INPUT_EVENT_TYPES,
     CONF_ACCESS_TOKEN,
     CONF_CONSOLE_ID,
     DOMAIN,
+    EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
 )
 from custom_components.unifi_insights.coordinators.access import (
     access_doorbell_signal,
     access_result_signal,
     async_dispatch_access_result,
+)
+from custom_components.unifi_insights.coordinators.protect import (
+    protect_digital_input_signal,
 )
 from custom_components.unifi_insights.event import (
     EVENT_ATTRIBUTE_KEYS,
@@ -52,7 +58,9 @@ from tests.fixtures.access import DEVICES, DOORS, ENTRY_DATA, _client, _ready
 from tests.fixtures.assertions import patch_attribute, require_mock, require_not_none
 from tests.fixtures.entities import EntityCollector
 from tests.fixtures.facade_data import (
+    facade_data,
     set_availability,
+    with_camera,
     with_protect_collection,
     with_protect_device,
     with_protect_fields,
@@ -1672,6 +1680,427 @@ async def test_doorbell_signal_is_entry_scoped(hass: Any) -> None:
     await hass.async_block_till_done()
 
     assert added == []
+
+
+# --- Protect camera digital inputs -------------------------------------------
+
+# Verify the lazily created, registry-restored digital-input event entities.
+
+_DIGITAL_START = 1_792_497_600_000
+
+
+def _input_payload(
+    camera_id: str = "camera1",
+    input_key: str = "0",
+    event_type: str = "circuit_open",
+    *,
+    start: int | None = _DIGITAL_START,
+) -> dict[str, Any]:
+    """Return the payload the Protect coordinator sends for one change."""
+    return {
+        "camera_id": camera_id,
+        "input_key": input_key,
+        "event_type": event_type,
+        "input_channel": input_key,
+        "input_token": f"AlarmIn_{input_key}",
+        "start": start,
+    }
+
+
+def _digital_entry(hass: Any, data: Any | None = None) -> tuple[Any, Any]:
+    """Return an entry whose facade has Protect, with or without cameras."""
+    facade = MagicMock(name="facade")
+    facade.protect_client = MagicMock(name="protect")
+    facade.data = data if data is not None else facade_data()
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=dict(ENTRY_DATA), entry_id="entry_digital"
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = UnifiInsightsData(
+        config_coordinator=MagicMock(name="config"),
+        device_coordinator=MagicMock(name="device"),
+        protect_coordinator=None,
+        network_client=MagicMock(name="network"),
+        protect_client=None,
+        _facade_coordinator=facade,
+    )
+    return entry, facade
+
+
+def _connected_camera(camera_id: str = "camera1") -> Any:
+    """Return a facade snapshot with one connected camera."""
+    return with_camera(
+        facade_data(),
+        camera_id,
+        {
+            "id": camera_id,
+            "name": "Gate",
+            "type": "G4-Pro",
+            "state": "CONNECTED",
+        },
+    )
+
+
+def _digital_setup(hass: Any, data: Any | None = None) -> tuple[Any, Any, list[Any]]:
+    """Wire the digital-input platform and collect the entities it adds."""
+    entry, facade = _digital_entry(hass, data)
+    added: list[Any] = []
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+    return entry, facade, added
+
+
+def _digital_entities(added: list[Any]) -> dict[tuple[str, str], Any]:
+    """Return the added digital-input entities keyed by camera and input."""
+    return {
+        (entity._camera_id, entity._input_key): entity
+        for entity in added
+        if isinstance(entity, event_platform.UnifiProtectCameraDigitalInputEventEntity)
+    }
+
+
+def _seed_digital_row(hass: Any, entry: Any, camera_id: str, input_key: str) -> Any:
+    """Register the row a previous run of this platform would have created."""
+    return er.async_get(hass).async_get_or_create(
+        domain="event",
+        platform=DOMAIN,
+        unique_id=f"{DOMAIN}_camera_{camera_id}_digital_input_{input_key}_event",
+        config_entry=entry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("unique_id", "expected"),
+    [
+        pytest.param(
+            f"{DOMAIN}_camera_camera1_digital_input_0_event", ("camera1", "0"), id="ok"
+        ),
+        pytest.param(
+            f"{DOMAIN}_camera_camera1_digital_input_AlarmIn_0_event",
+            ("camera1", "AlarmIn_0"),
+            id="token-key-keeps-its-underscore",
+        ),
+        pytest.param(None, None, id="no-unique-id"),
+        pytest.param(f"{DOMAIN}_camera_camera1_doorbell_event", None, id="doorbell"),
+        pytest.param(
+            f"{DOMAIN}_camera_camera1_digital_input__event", None, id="empty-key"
+        ),
+        pytest.param(
+            f"{DOMAIN}_camera__digital_input_0_event", None, id="empty-camera"
+        ),
+        pytest.param("camera1_digital_input_0_event", None, id="no-prefix"),
+        pytest.param(f"{DOMAIN}_camera_camera1_digital_input_0", None, id="no-suffix"),
+    ],
+)
+def test_parse_digital_input_unique_id(
+    unique_id: str | None, expected: tuple[str, str] | None
+) -> None:
+    """Only this platform's digital-input ids parse; everything else is skipped."""
+    assert event_platform._parse_digital_input_unique_id(unique_id) == expected
+
+
+async def test_first_digital_input_frame_creates_and_fires_after_add(hass: Any) -> None:
+    """No entity exists until a change arrives; the triggering one is not lost."""
+    entry, _, added = _digital_setup(hass)
+    assert added == []
+
+    async_dispatcher_send(
+        hass, protect_digital_input_signal(entry.entry_id), _input_payload()
+    )
+    await hass.async_block_till_done()
+
+    (entity,) = _digital_entities(added).values()
+    assert entity._pending_change is not None
+    with (
+        patch.object(entity, "_trigger_event") as trigger,
+        patch.object(entity, "async_write_ha_state"),
+    ):
+        await entity.async_added_to_hass()
+    trigger.assert_called_once_with(
+        "circuit_open",
+        {
+            "input_channel": "0",
+            "input_token": "AlarmIn_0",
+            "start": _DIGITAL_START,
+        },
+    )
+    assert entity._pending_change is None
+
+
+async def test_later_digital_input_frame_fires_on_the_existing_entity(
+    hass: Any,
+) -> None:
+    """A second change for the same input reuses the entity, without `start`."""
+    entry, _, added = _digital_setup(hass)
+    async_dispatcher_send(
+        hass, protect_digital_input_signal(entry.entry_id), _input_payload()
+    )
+    await hass.async_block_till_done()
+    entity = _digital_entities(added)[("camera1", "0")]
+    await _added(entity)
+
+    with (
+        patch.object(entity, "_trigger_event") as trigger,
+        patch.object(entity, "async_write_ha_state"),
+    ):
+        async_dispatcher_send(
+            hass,
+            protect_digital_input_signal(entry.entry_id),
+            _input_payload("camera1", "0", "circuit_closed", start=None),
+        )
+        await hass.async_block_till_done()
+
+    trigger.assert_called_once_with(
+        "circuit_closed", {"input_channel": "0", "input_token": "AlarmIn_0"}
+    )
+    assert len(added) == 1
+
+
+async def test_second_channel_creates_a_second_entity(hass: Any) -> None:
+    """Two inputs of one camera are two entities."""
+    entry, _, added = _digital_setup(hass)
+    async_dispatcher_send(
+        hass, protect_digital_input_signal(entry.entry_id), _input_payload()
+    )
+    async_dispatcher_send(
+        hass,
+        protect_digital_input_signal(entry.entry_id),
+        _input_payload("camera1", "1", "circuit_closed"),
+    )
+    await hass.async_block_till_done()
+
+    assert set(_digital_entities(added)) == {("camera1", "0"), ("camera1", "1")}
+    assert len(added) == 2
+
+
+async def test_signal_for_another_entry_is_ignored(hass: Any) -> None:
+    """A change sent on another entry's signal creates nothing here."""
+    _, _, added = _digital_setup(hass)
+
+    async_dispatcher_send(
+        hass, protect_digital_input_signal("another-entry"), _input_payload()
+    )
+    await hass.async_block_till_done()
+
+    assert added == []
+
+
+async def test_payload_without_usable_keys_creates_nothing(hass: Any) -> None:
+    """A malformed payload is dropped rather than creating an entity."""
+    entry, _, added = _digital_setup(hass)
+
+    async_dispatcher_send(hass, protect_digital_input_signal(entry.entry_id), {})
+    async_dispatcher_send(
+        hass,
+        protect_digital_input_signal(entry.entry_id),
+        {"camera_id": 7, "input_key": "0"},
+    )
+    await hass.async_block_till_done()
+
+    assert added == []
+
+
+async def test_unknown_event_type_fires_nothing(hass: Any) -> None:
+    """An event type outside the entity's list never reaches `_trigger_event`."""
+    entry, _, added = _digital_setup(hass)
+    async_dispatcher_send(
+        hass,
+        protect_digital_input_signal(entry.entry_id),
+        _input_payload(event_type="short_circuit"),
+    )
+    await hass.async_block_till_done()
+
+    (entity,) = _digital_entities(added).values()
+    with (
+        patch.object(entity, "_trigger_event") as trigger,
+        patch.object(entity, "async_write_ha_state"),
+    ):
+        await entity.async_added_to_hass()
+
+    trigger.assert_not_called()
+
+
+async def test_registry_rows_are_restored_including_absent_and_disabled(
+    hass: Any,
+) -> None:
+    """Known inputs come back at setup, even without their camera or when disabled."""
+    entry, facade = _digital_entry(hass, _connected_camera())
+    present = _seed_digital_row(hass, entry, "camera1", "0")
+    absent = _seed_digital_row(hass, entry, "camera2", "AlarmIn_1")
+    disabled = _seed_digital_row(hass, entry, "camera3", "2")
+    er.async_get(hass).async_update_entity(
+        disabled.entity_id, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    added: list[Any] = []
+
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+
+    entities = _digital_entities(added)
+    assert set(entities) == {
+        ("camera1", "0"),
+        ("camera2", "AlarmIn_1"),
+        ("camera3", "2"),
+    }
+    assert len(added) == 3
+    assert entities[("camera1", "0")].unique_id == present.unique_id
+    assert entities[("camera2", "AlarmIn_1")].unique_id == absent.unique_id
+    # The absent camera is not evidence that the entity was deleted.
+    assert entities[("camera2", "AlarmIn_1")].available is False
+    assert entities[("camera2", "AlarmIn_1")].device_info["name"] == "Camera camera2"
+    # A disabled row is rebuilt; Home Assistant keeps its disabled_by value.
+    assert entities[("camera3", "2")].unique_id == disabled.unique_id
+    assert er.async_get(hass).async_get(disabled.entity_id).disabled_by is not None
+    assert facade.data["protect"]["cameras"]["camera1"]["name"] == "Gate"
+
+
+async def test_other_registry_rows_are_not_restored(hass: Any) -> None:
+    """Rows of another domain, platform or id shape are not digital inputs."""
+    entry, _ = _digital_entry(hass, _connected_camera())
+    registry = er.async_get(hass)
+    for domain, platform, unique_id in (
+        ("sensor", DOMAIN, f"{DOMAIN}_camera_camera1_digital_input_0_event"),
+        ("event", "other", f"{DOMAIN}_camera_camera1_digital_input_0_event"),
+        ("event", DOMAIN, f"{DOMAIN}_camera_camera1_doorbell_event"),
+        ("event", DOMAIN, f"{DOMAIN}_camera_camera1_digital_input_0"),
+    ):
+        registry.async_get_or_create(
+            domain=domain,
+            platform=platform,
+            unique_id=unique_id,
+            config_entry=entry,
+        )
+    added: list[Any] = []
+
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+
+    assert added == []
+
+
+async def test_restored_entity_receives_later_frames_without_duplicate_add(
+    hass: Any,
+) -> None:
+    """A restored input takes its next change on the same entity."""
+    entry, _ = _digital_entry(hass, _connected_camera())
+    _seed_digital_row(hass, entry, "camera1", "0")
+    added: list[Any] = []
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+    entity = _digital_entities(added)[("camera1", "0")]
+    await _added(entity)
+
+    with (
+        patch.object(entity, "_trigger_event") as trigger,
+        patch.object(entity, "async_write_ha_state"),
+    ):
+        async_dispatcher_send(
+            hass,
+            protect_digital_input_signal(entry.entry_id),
+            _input_payload("camera1", "0", "circuit_closed", start=None),
+        )
+        await hass.async_block_till_done()
+
+    assert len(added) == 1
+    trigger.assert_called_once_with(
+        "circuit_closed", {"input_channel": "0", "input_token": "AlarmIn_0"}
+    )
+
+
+async def test_setup_replays_no_stored_event(hass: Any) -> None:
+    """Events already in the snapshot are history, so setup fires nothing."""
+    stored = {
+        "cameras": {"camera1": {"id": "camera1", "state": "CONNECTED"}},
+        "events": {
+            EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED: {
+                "di1": {
+                    "type": EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+                    "id": "di1",
+                    "device": "camera1",
+                    "metadata": {"inputState": {"text": "circuitOpen"}},
+                }
+            }
+        },
+    }
+    entry, _ = _digital_entry(hass, facade_data(protect=stored))
+    _seed_digital_row(hass, entry, "camera1", "0")
+    added: list[Any] = []
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+    entity = _digital_entities(added)[("camera1", "0")]
+
+    with (
+        patch.object(entity, "_trigger_event") as trigger,
+        patch.object(entity, "async_write_ha_state"),
+    ):
+        await entity.async_added_to_hass()
+
+    trigger.assert_not_called()
+
+
+async def test_unload_disconnects_the_digital_input_signal(hass: Any) -> None:
+    """Once the entry unloads, a late change creates nothing."""
+    entry, _, added = _digital_setup(hass)
+    await entry._async_process_on_unload(hass)
+
+    async_dispatcher_send(
+        hass, protect_digital_input_signal(entry.entry_id), _input_payload()
+    )
+    await hass.async_block_till_done()
+
+    assert added == []
+
+
+async def test_setup_without_protect_returns_early(hass: Any) -> None:
+    """A console without Protect gets no digital-input entity or listener."""
+    entry, facade = _digital_entry(hass, _connected_camera())
+    facade.protect_client = None
+    _seed_digital_row(hass, entry, "camera1", "0")
+    added: list[Any] = []
+
+    event_platform.async_setup_protect_digital_input_events(
+        hass, entry, _collector(added)
+    )
+    async_dispatcher_send(
+        hass, protect_digital_input_signal(entry.entry_id), _input_payload()
+    )
+    await hass.async_block_till_done()
+
+    assert added == []
+
+
+def test_digital_input_identity_and_availability(hass: Any) -> None:
+    """The entity keeps the camera's device, its input in the name, and health."""
+    entry, facade = _digital_entry(hass, _connected_camera())
+    entity = event_platform.UnifiProtectCameraDigitalInputEventEntity(
+        facade, "camera1", "AlarmIn_0"
+    )
+    assert entity.unique_id == f"{DOMAIN}_camera_camera1_digital_input_AlarmIn_0_event"
+    assert entity.translation_key == "camera_digital_input"
+    assert entity.translation_placeholders == {"channel": "AlarmIn_0"}
+    assert entity.event_types == list(CAMERA_DIGITAL_INPUT_EVENT_TYPES)
+    assert entity.device_info["identifiers"] == {(DOMAIN, "protect_camera_camera1")}
+    assert entity.device_info["name"] == "Gate"
+    assert entity.device_info["model"] == "G4-Pro"
+    assert entity.available is True
+
+    set_availability(facade, protect=False)
+    assert entity.available is False
+
+    set_availability(facade, protect=True)
+    facade.data = with_protect_fields(
+        facade.data, "cameras", "camera1", state="DISCONNECTED"
+    )
+    assert entity.available is False
+
+    facade.data = with_protect_collection(facade.data, "cameras", {})
+    assert entity.available is False
+    assert entry.entry_id == "entry_digital"
 
 
 # --- Network rule change events ----------------------------------------------

@@ -17,10 +17,13 @@ import logging
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pytest
 
+from custom_components.unifi_insights.const import (
+    EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+)
 from custom_components.unifi_insights.coordinators.protect_events import (
     EVENT_RETENTION,
     EVENT_SWEEP_INTERVAL,
@@ -33,6 +36,7 @@ from custom_components.unifi_insights.coordinators.protect_events import (
     STALE_EVENT_TIMEOUT,
     CommandOverlay,
     DeviceFrame,
+    DispatchDigitalInput,
     Escalate,
     EventFrame,
     Fetched,
@@ -52,6 +56,7 @@ from custom_components.unifi_insights.coordinators.protect_events import (
     StreamReconnected,
     TransientError,
     begin_request,
+    digital_input_key,
     initial_state,
     reconcile,
 )
@@ -2068,6 +2073,224 @@ def test_light_motion_event_uses_its_own_latch() -> None:
     )
     assert result.cache["lights"]["l1"]["lastMotionStart"] == 3
     assert set(result.state.latches["light_motion"]) == {"l1"}
+
+
+# --- camera digital inputs ----------------------------------------------------
+
+# The spec's example payload for `cameraDigitalInputChanged`: one ONVIF alarm
+# input named AlarmIn_0 on channel "0", reporting an open circuit.
+
+_SAMPLE_METADATA: Final = {
+    "inputState": {"text": "circuitOpen"},
+    "inputChannel": {"text": "0"},
+    "inputToken": {"text": "AlarmIn_0"},
+}
+_CAMERAS: Final = {"c1": {"id": "c1"}}
+
+
+def digital_input(
+    *,
+    event_id: str = "di1",
+    device: Any = "c1",
+    metadata: Any = _SAMPLE_METADATA,
+    start: Any = START,
+    **fields: Any,
+) -> EventFrame:
+    """Return a `cameraDigitalInputChanged` frame as the parser builds it."""
+    return event(
+        EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+        event_id,
+        device=device,
+        start=start,
+        metadata=metadata,
+        **fields,
+    )
+
+
+def test_digital_input_frame_dispatches_once_before_the_publish() -> None:
+    """The spec example fires one dispatch, and the publish comes after it."""
+    result = run(cache(cameras={"c1": {"id": "c1"}}), [(0.0, digital_input())])
+    dispatched = result.effects(DispatchDigitalInput)
+    assert dispatched == [
+        DispatchDigitalInput(
+            camera_id="c1",
+            input_key="0",
+            event_type="circuit_open",
+            input_channel="0",
+            input_token="AlarmIn_0",  # noqa: S106 - an ONVIF input name
+            start=START,
+        )
+    ]
+    assert result.last.effects[-2:] == (
+        dispatched[0],
+        PublishUpdate(mark_success=False),
+    )
+    stored = result.cache["events"][EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED]["di1"]
+    assert stored["metadata"] == _SAMPLE_METADATA
+
+
+@pytest.mark.parametrize(
+    ("state_text", "event_type"),
+    [
+        pytest.param("circuitOpen", "circuit_open", id="circuit-open"),
+        pytest.param("circuitClosed", "circuit_closed", id="circuit-closed"),
+    ],
+)
+def test_digital_input_state_maps_to_a_neutral_event_type(
+    state_text: str, event_type: str
+) -> None:
+    """Both input states fire the matching circuit name."""
+    frame = digital_input(metadata={"inputState": {"text": state_text}})
+    result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
+    (effect,) = result.effects(DispatchDigitalInput)
+    assert effect.event_type == event_type
+    # Without a channel or token the input falls back to the shared "0" key.
+    assert effect.input_key == "0"
+    assert effect.input_channel is None
+    assert effect.input_token is None
+
+
+def test_digital_input_accepts_plain_string_metadata() -> None:
+    """Metadata sent as plain strings reads the same as the `{"text": ...}` form."""
+    frame = digital_input(
+        metadata={
+            "inputState": "circuitClosed",
+            "inputChannel": "1",
+            "inputToken": "AlarmIn_1",
+        }
+    )
+    result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
+    (effect,) = result.effects(DispatchDigitalInput)
+    assert effect.event_type == "circuit_closed"
+    assert effect.input_channel == "1"
+    assert effect.input_token == "AlarmIn_1"  # noqa: S105 - an ONVIF input name
+    assert effect.input_key == "1"
+
+
+@pytest.mark.parametrize(
+    ("channel", "token", "expected"),
+    [
+        pytest.param("0", "AlarmIn_0", "0", id="channel-wins"),
+        pytest.param(" 2 ", "AlarmIn_2", "2", id="channel-is-stripped"),
+        pytest.param("", "AlarmIn_0", "AlarmIn_0", id="empty-channel"),
+        pytest.param("   ", "AlarmIn_0", "AlarmIn_0", id="blank-channel"),
+        pytest.param("", " AlarmIn_1 ", "AlarmIn_1", id="token-is-stripped"),
+        pytest.param("", "  ", "0", id="blank-both"),
+        pytest.param(None, None, "0", id="neither"),
+    ],
+)
+def test_digital_input_key_falls_back_channel_then_token_then_zero(
+    channel: str | None, token: str | None, expected: str
+) -> None:
+    """Whitespace and an empty string count as missing; "0" is the last resort."""
+    assert digital_input_key(channel, token) == expected
+
+
+def test_digital_input_frame_falls_back_to_the_token() -> None:
+    """A frame without a usable channel is keyed by its ONVIF token."""
+    frame = digital_input(
+        metadata={
+            "inputState": {"text": "circuitOpen"},
+            "inputChannel": {"text": "  "},
+            "inputToken": {"text": "AlarmIn_3"},
+        }
+    )
+    result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
+    (effect,) = result.effects(DispatchDigitalInput)
+    assert effect.input_key == "AlarmIn_3"
+    assert effect.input_token == "AlarmIn_3"  # noqa: S105 - an ONVIF input name
+
+
+def test_second_channel_is_its_own_input_key() -> None:
+    """Two inputs of one camera are two keys, and both changes are news."""
+    second = digital_input(
+        event_id="di2",
+        metadata={
+            "inputState": {"text": "circuitClosed"},
+            "inputChannel": {"text": "1"},
+            "inputToken": {"text": "AlarmIn_1"},
+        },
+    )
+    result = run(cache(cameras=_CAMERAS), [(0.0, digital_input()), (1.0, second)])
+    assert [effect.input_key for effect in result.effects(DispatchDigitalInput)] == [
+        "0",
+        "1",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("frame", "message"),
+    [
+        pytest.param(
+            digital_input(device=None),
+            "without a device id",
+            id="missing-device",
+        ),
+        pytest.param(
+            digital_input(device=7),
+            "without a device id",
+            id="non-string-device",
+        ),
+        pytest.param(
+            digital_input(device="ghost"),
+            "unknown camera ghost",
+            id="unknown-camera",
+        ),
+        pytest.param(
+            digital_input(metadata="broken"),
+            "without metadata",
+            id="metadata-not-a-dict",
+        ),
+        pytest.param(
+            digital_input(metadata={}),
+            "with input state None",
+            id="missing-input-state",
+        ),
+        pytest.param(
+            digital_input(metadata={"inputState": {"text": "shortCircuit"}}),
+            "with input state 'shortCircuit'",
+            id="unknown-input-state",
+        ),
+    ],
+)
+def test_bad_digital_input_frame_is_stored_but_not_dispatched(
+    frame: EventFrame, message: str
+) -> None:
+    """A frame that cannot be read logs DEBUG, keeps the store, fires nothing."""
+    result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
+    assert result.effects(DispatchDigitalInput) == []
+    assert message in result.logs(logging.DEBUG)[-1]
+    assert result.cache["events"][EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED]["di1"]
+    assert result.effects(PublishUpdate) == [PublishUpdate(mark_success=False)]
+
+
+def test_repeated_digital_input_frame_fires_only_once() -> None:
+    """The reconciler republishes identical frames; the change is not news."""
+    first = run(cache(cameras=_CAMERAS), [(0.0, digital_input())])
+    result = run(first.cache, [(1.0, digital_input())], state=first.state)
+    assert len(first.effects(DispatchDigitalInput)) == 1
+    assert result.cache is first.cache
+    assert result.effects(DispatchDigitalInput) == []
+
+
+def test_update_frame_of_a_digital_input_fires_only_once() -> None:
+    """A later frame of the same event (such as one that sets `end`) is history."""
+    first = run(cache(cameras=_CAMERAS), [(0.0, digital_input())])
+    result = run(first.cache, [(1.0, digital_input(end=2))], state=first.state)
+    assert (
+        result.cache["events"][EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED]["di1"]["end"]
+        == 2
+    )
+    assert result.effects(DispatchDigitalInput) == []
+
+
+def test_late_digital_input_frame_fires_nothing() -> None:
+    """A frame older than the retention is not stored, so it is not news."""
+    stale = digital_input(start=START - int(RETENTION * 1000) - 3_600_000)
+    result = run(cache(cameras=_CAMERAS), [(0.0, stale)])
+    assert result.cache["events"] == {}
+    assert result.effects(DispatchDigitalInput) == []
+    assert result.effects(PublishUpdate) == [PublishUpdate(mark_success=False)]
 
 
 # --- command overlays ---------------------------------------------------------

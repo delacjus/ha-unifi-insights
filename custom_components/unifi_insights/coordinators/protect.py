@@ -15,6 +15,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from unifi_official_api import (
     UniFiAuthenticationError,
@@ -44,6 +45,7 @@ from .protect_events import (
     SIREN_STOP_GUARD_TTL,
     STALE_EVENT_TIMEOUT,
     CommandOverlay,
+    DispatchDigitalInput,
     Escalate,
     Fetched,
     Instant,
@@ -145,6 +147,11 @@ GLOBAL_ALARM_MANAGER_PROBE_WARN_AFTER: Final = 3
 def _escalated(step: Step) -> bool:
     """Return whether the reconciler asked the caller to re-raise."""
     return any(isinstance(effect, Escalate) for effect in step.effects)
+
+
+def protect_digital_input_signal(entry_id: str) -> str:
+    """Return the entry-scoped dispatcher signal for camera digital inputs."""
+    return f"{DOMAIN}_{entry_id}_protect_digital_input"
 
 
 class UnifiInsightsProtectCoordinator(UnifiInsightsBaseCoordinator):
@@ -838,6 +845,26 @@ class UnifiInsightsProtectCoordinator(UnifiInsightsBaseCoordinator):
                     _LOGGER.log(level, msg, *args)
                 case RemoveDevice(identifiers=identifiers):
                     self._remove_stale_device(*identifiers)
+                case DispatchDigitalInput(
+                    camera_id=camera_id,
+                    input_key=input_key,
+                    event_type=event_type,
+                    input_channel=input_channel,
+                    input_token=input_token,
+                    start=start,
+                ):
+                    async_dispatcher_send(
+                        self.hass,
+                        protect_digital_input_signal(self.config_entry.entry_id),
+                        {
+                            "camera_id": camera_id,
+                            "input_key": input_key,
+                            "event_type": event_type,
+                            "input_channel": input_channel,
+                            "input_token": input_token,
+                            "start": start,
+                        },
+                    )
                 case PublishUpdate(mark_success=True):
                     # Also marks the update successful and re-arms the poll
                     # timer, so entities stay available while frames flow.
