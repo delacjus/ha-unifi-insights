@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `perf`: Optimize IP address validation with direct string matching to avoid computationally expensive `ipaddress.ip_address` instantiation (internal housekeeping).
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
