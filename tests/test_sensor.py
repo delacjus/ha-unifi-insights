@@ -62,6 +62,7 @@ from custom_components.unifi_insights.sensor import (
     _bytes_to_gb,
     _calculate_storage_available,
     _calculate_storage_percent,
+    _collect_device_port_indices,
     _discover_outlet_sensors,
     _discover_protect_sensors,
     _discover_site_internet_activity_sensors,
@@ -766,6 +767,7 @@ class TestUplinkRateStateLevel:
         mock_protect_client: MagicMock,
         mock_local_auth: MagicMock,
         enable_custom_integrations: None,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A restored DOWN port starts unavailable and becomes available when UP."""
         real_config_entry.add_to_hass(hass)
@@ -901,6 +903,10 @@ class TestUplinkRateStateLevel:
         assert len(entry_rows_after) == len(entry_rows_before)
         sensor_entities_after = len(hass.states.async_entity_ids("sensor"))
         assert sensor_entities_after == sensor_entities_before
+        # Home Assistant rejects a second entity with the same unique ID, so the
+        # counts above stay equal even if discovery re-creates the restored port
+        # when it comes UP. Only the rejection log shows that.
+        assert "does not generate unique IDs" not in caplog.text
 
 
 class TestUnifiPortSensor:
@@ -5748,6 +5754,42 @@ class TestStalePortCleanupNativeRegistry:
         )
         await async_setup_entry(hass, mock_config_entry, MagicMock())
         assert entity_registry.async_get(row.entity_id) is not None
+
+    def test_port_evidence_is_the_union_across_sites(
+        self, cleanup_coordinator: MagicMock
+    ) -> None:
+        """Merge every site's port indices for a device, not one site's list."""
+        cleanup_coordinator.data = with_sections(
+            cleanup_coordinator.data,
+            sites={"site1": {"id": "site1"}, "site2": {"id": "site2"}},
+            devices={
+                "site1": {
+                    "device1": {
+                        "name": "Synthetic switch site1",
+                        "state": "ONLINE",
+                        "ports": [
+                            {"idx": 1, "state": "DOWN"},
+                            {"idx": 3, "state": "UP"},
+                        ],
+                    },
+                    "device2": {
+                        "name": "Synthetic switch without ports",
+                        "state": "ONLINE",
+                        "ports": [],
+                    },
+                },
+                "site2": {
+                    "device1": {
+                        "name": "Synthetic switch site2",
+                        "state": "ONLINE",
+                        "ports": [{"idx": 2, "state": "DOWN"}],
+                    }
+                },
+            },
+        )
+        assert _collect_device_port_indices(cleanup_coordinator) == {
+            "device1": {1, 2, 3}
+        }
 
     async def test_present_port_uncreated_description_survives_cleanup(
         self,
