@@ -12,12 +12,14 @@ from homeassistant.components.event import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .console_identity import async_migrate_site_entity, resolve_console_namespace
 from .const import (
+    CAMERA_DIGITAL_INPUT_EVENT_TYPES,
     DOMAIN,
     MANUFACTURER,
     SMART_DETECT_ANIMAL,
@@ -26,6 +28,7 @@ from .const import (
     SMART_DETECT_VEHICLE,
 )
 from .coordinators.access import access_doorbell_signal, access_result_signal
+from .coordinators.protect import protect_digital_input_signal
 from .coordinators.rule_audit import RULE_CHANGE_TYPES
 from .data_transforms import owner_available, protect_collection, protect_device
 from .entity import (
@@ -279,6 +282,7 @@ async def async_setup_entry(
     """Set up event entities for UniFi Insights integration."""
     # Access events are set up before the Protect-dependent events below.
     async_setup_access_events(hass, entry, async_add_entities)
+    async_setup_protect_digital_input_events(hass, entry, async_add_entities)
     coordinator = entry.runtime_data.coordinator
 
     known_event_keys: set[tuple[str, str]] = set()
@@ -627,6 +631,206 @@ class UnifiProtectSensorEventEntity(
             )
 
         self.async_write_ha_state()
+
+
+# --- Protect camera digital inputs -------------------------------------------
+
+# The shapes a digital-input unique id is made of. The parser below is strict
+# on purpose: it also walks registry rows written by other code, and a
+# doorbell or sensor key must never be read as a digital input.
+_DIGITAL_INPUT_UNIQUE_ID_PREFIX = f"{DOMAIN}_camera_"
+_DIGITAL_INPUT_UNIQUE_ID_MARKER = "_digital_input_"
+_DIGITAL_INPUT_UNIQUE_ID_SUFFIX = "_event"
+
+
+def _parse_digital_input_unique_id(unique_id: str | None) -> tuple[str, str] | None:
+    """
+    Return the ``(camera_id, input_key)`` a digital-input unique id names.
+
+    ``None`` means the id belongs to another entity shape. Only the first
+    marker splits, so a token such as ``AlarmIn_0`` keeps its underscore.
+    """
+    if unique_id is None:
+        return None
+    if not (
+        unique_id.startswith(_DIGITAL_INPUT_UNIQUE_ID_PREFIX)
+        and unique_id.endswith(_DIGITAL_INPUT_UNIQUE_ID_SUFFIX)
+    ):
+        return None
+    camera_id, marker, input_key = unique_id[
+        len(_DIGITAL_INPUT_UNIQUE_ID_PREFIX) : -len(_DIGITAL_INPUT_UNIQUE_ID_SUFFIX)
+    ].partition(_DIGITAL_INPUT_UNIQUE_ID_MARKER)
+    if not marker or not camera_id or not input_key:
+        return None
+    return camera_id, input_key
+
+
+class UnifiProtectCameraDigitalInputEventEntity(
+    CoordinatorEntity["UnifiInsightsFacadeCoordinator"],
+    EventEntity,
+):
+    """
+    One digital (alarm) input of a Protect camera.
+
+    A camera record does not say whether it has an input or how many, so the
+    entity is created by the first change of its input and rebuilt from the
+    entity registry on every later setup. A change that arrives before Home
+    Assistant adds the entity is held once and fired on add. The entity stores
+    no events itself, so a reload never repeats one.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "camera_digital_input"
+    _attr_event_types: ClassVar[list[str]] = [  # type: ignore[misc]
+        *CAMERA_DIGITAL_INPUT_EVENT_TYPES
+    ]
+
+    def __init__(
+        self,
+        coordinator: UnifiInsightsFacadeCoordinator,
+        camera_id: str,
+        input_key: str,
+    ) -> None:
+        """Create the entity for one input of one camera, known or not."""
+        super().__init__(coordinator)
+        self._camera_id = camera_id
+        self._input_key = input_key
+        self._pending_change: Mapping[str, Any] | None = None
+        self._added = False
+
+        # A restored entity mainly runs this path for a camera that is absent
+        # from the current snapshot, so the snapshot is optional here.
+        camera_data = protect_device(coordinator.data, "cameras", camera_id) or {}
+        self._attr_unique_id = (
+            f"{DOMAIN}_camera_{camera_id}_digital_input_{input_key}_event"
+        )
+        self._attr_translation_placeholders = {"channel": input_key}
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"protect_camera_{camera_id}")},
+            name=camera_data.get("name") or f"Camera {camera_id}",
+            manufacturer=MANUFACTURER,
+            model=camera_data.get("type") or "UniFi Camera",
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return True while Protect is up and this camera is connected."""
+        if not owner_available(self.coordinator.data, "protect"):
+            return False
+        camera_data = protect_device(self.coordinator.data, "cameras", self._camera_id)
+        if not camera_data:
+            return False
+        return bool(camera_data.get("state") == "CONNECTED")
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity on an entity ID change; nothing here is keyed on it."""
+        async_delegate_entity_id_changed(super(), old_entity_id)
+
+    async def async_added_to_hass(self) -> None:
+        """Fire the change that created this entity, once it is added."""
+        await super().async_added_to_hass()
+        self._added = True
+        if self._pending_change is not None:
+            pending, self._pending_change = self._pending_change, None
+            self._fire(pending)
+
+    @callback
+    def async_input_changed(self, payload: Mapping[str, Any]) -> None:
+        """Fire one change. Before the entity is added, hold the latest one."""
+        if not self._added:
+            self._pending_change = payload
+            return
+        self._fire(payload)
+
+    def _fire(self, payload: Mapping[str, Any]) -> None:
+        """Fire the change a dispatcher payload describes, if it is valid."""
+        event_type = payload.get("event_type")
+        if event_type not in CAMERA_DIGITAL_INPUT_EVENT_TYPES:
+            # HA's _trigger_event raises ValueError for an undeclared type.
+            _LOGGER.debug(
+                "Ignoring digital input %s: unsupported event type %r",
+                self._attr_unique_id,
+                event_type,
+            )
+            return
+        attrs: dict[str, Any] = {
+            "input_channel": payload.get("input_channel"),
+            "input_token": payload.get("input_token"),
+        }
+        if (start := payload.get("start")) is not None:
+            attrs["start"] = start
+        self._trigger_event(event_type, attrs)
+        self.async_write_ha_state()
+
+
+@callback
+def async_setup_protect_digital_input_events(
+    hass: HomeAssistant,
+    entry: UnifiInsightsConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """
+    Create digital-input entities on their first change, and restore known ones.
+
+    Each entity is created lazily, when its input first changes, because a
+    camera record does not say whether it has an input. Rows this platform
+    already registered are rebuilt at setup, including a row whose camera is
+    currently absent and a disabled row, so the entity keeps its identity and
+    history. No stored event is replayed.
+    """
+    coordinator = entry.runtime_data.coordinator
+    if not coordinator.protect_client:
+        return
+
+    inputs: dict[tuple[str, str], UnifiProtectCameraDigitalInputEventEntity] = {}
+
+    registry = er.async_get(hass)
+    restored: list[UnifiProtectCameraDigitalInputEventEntity] = []
+    for registry_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registry_entry.domain != "event" or registry_entry.platform != DOMAIN:
+            continue
+        parsed = _parse_digital_input_unique_id(registry_entry.unique_id)
+        if parsed is None or parsed in inputs:
+            continue
+        entity = UnifiProtectCameraDigitalInputEventEntity(coordinator, *parsed)
+        inputs[parsed] = entity
+        restored.append(entity)
+    if restored:
+        async_add_entities(restored)
+
+    @callback
+    def _on_input(payload: dict[str, Any]) -> None:
+        """Fire a known input, or create the entity for an input seen now."""
+        camera_id = payload.get("camera_id")
+        input_key = payload.get("input_key")
+        if not (
+            isinstance(camera_id, str)
+            and camera_id
+            and isinstance(input_key, str)
+            and input_key
+        ):
+            _LOGGER.debug(
+                "Ignoring digital input change without a camera or input: %s",
+                payload,
+            )
+            return
+        existing = inputs.get((camera_id, input_key))
+        if existing is not None:
+            existing.async_input_changed(payload)
+            return
+        entity = UnifiProtectCameraDigitalInputEventEntity(
+            coordinator, camera_id, input_key
+        )
+        entity.async_input_changed(payload)
+        inputs[(camera_id, input_key)] = entity
+        async_add_entities([entity])
+
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, protect_digital_input_signal(entry.entry_id), _on_input
+        )
+    )
 
 
 # --- Network rule changes ----------------------------------------------------

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cameras with a wired digital (alarm) input now get an event entity per input. A `cameraDigitalInputChanged` frame from Protect creates the entity for that `(camera, input)` pair, fires `circuit_open` or `circuit_closed`, and the entity is restored from the registry after a reload or restart, including when the camera is temporarily absent. The names describe the circuit, not what it is wired to: with normally-closed wiring an open circuit can mean the input is idle. Unknown cameras, frames without metadata and unknown input states are ignored with a debug log. The entity appears on the first event because the camera schema does not say which cameras have inputs. Needs Protect 7.2.105 or newer. [#451](https://github.com/tinkerologie/ha-unifi-insights/issues/451)
+
 ### Changed
 
 - Device info no longer relies on `DeviceInfo` behaving as a dict, which Home Assistant 2026.11 turned into a dataclass and is deprecating as a mapping. The Protect event entities build a `DeviceInfo` instead of a dict, and the Carrier Fabric organisation, Mobility workspace and InnerSpace devices are registered from plain field dicts. Type checking passes on Home Assistant 2026.10 and on Core dev. [#444](https://github.com/tinkerologie/ha-unifi-insights/issues/444)

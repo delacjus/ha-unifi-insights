@@ -603,8 +603,11 @@ class TestDynamicDiscoveryResilience:
 
         await setup_fn(hass, mock_config_entry, add_entities)
 
+        # The event platform also unloads its Protect digital-input dispatcher
+        # listener, on top of the coordinator listener every platform keeps.
+        expected_unloads = 2 if name == "event" else 1
         assert mock_coordinator.async_add_listener.call_count == 1
-        assert mock_config_entry.async_on_unload.call_count == 1
+        assert mock_config_entry.async_on_unload.call_count == expected_unloads
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

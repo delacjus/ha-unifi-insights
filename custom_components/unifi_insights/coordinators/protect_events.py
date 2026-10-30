@@ -49,7 +49,9 @@ from custom_components.unifi_insights.const import (
     DEVICE_TYPE_SIREN,
     DEVICE_TYPE_VIEWER,
     DEVICE_TYPE_VIEWPORT,
+    DIGITAL_INPUT_EVENT_TYPES_BY_STATE,
     EVENT_TYPE_ALARM_HUB_DEVICE_TAMPER,
+    EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
     MAX_CONSECUTIVE_MISSING_POLLS,
     MODEL_KEY_FOB,
     MODEL_KEY_LINKSTATION,
@@ -385,6 +387,22 @@ def _event_metadata_text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _digital_input_key(channel: str | None, token: str | None) -> str:
+    """
+    Return the stable per-input key for one camera digital input.
+
+    The channel is the reliable identifier, the ONVIF token is the fallback
+    and ``"0"`` the last resort, because Protect says both are optional and
+    may omit them on a frame. Whitespace is stripped and an empty string
+    counts as missing, so two spellings of "no channel" never create two
+    entities for one input.
+    """
+    for value in (channel, token):
+        if value is not None and (stripped := value.strip()):
+            return stripped
+    return "0"
+
+
 def _normalize_epoch_seconds(value: Any) -> float | None:
     """
     Normalize a timestamp to epoch seconds, or None when it is not comparable.
@@ -656,6 +674,18 @@ class RemoveDevice:
 
 
 @dataclass(frozen=True, slots=True)
+class DispatchDigitalInput:
+    """Send one camera digital-input change to the event platform."""
+
+    camera_id: str
+    input_key: str
+    event_type: str
+    input_channel: str | None
+    input_token: str | None
+    start: Any
+
+
+@dataclass(frozen=True, slots=True)
 class Escalate:
     """A transient error outlasted its window: the caller re-raises it."""
 
@@ -669,7 +699,7 @@ class Log:
     args: tuple[Any, ...] = ()
 
 
-type Effect = PublishUpdate | RemoveDevice | Escalate | Log
+type Effect = PublishUpdate | RemoveDevice | DispatchDigitalInput | Escalate | Log
 
 
 @dataclass(frozen=True, slots=True)
@@ -975,14 +1005,22 @@ def _apply_event_frame(run: _Run, frame: EventFrame) -> None:
     # timeline can no longer show, most likely of an event the sweep already
     # dropped: storing it would keep it another full retention. It still
     # updates its device below.
-    if (
+    already_stored = event_id in by_id
+    stored = (
         by_id[event_id] != fields
-        if event_id in by_id
+        if already_stored
         else not _started_before_retention(fields, run.now.wall)
-    ):
+    )
+    if stored:
         run.put_changed("events", event_type, _with(by_id, event_id, fields))
     device_id = pick_field([fields], *_EVENT_DEVICE_KEYS)
-    if device_id:
+    if event_type == EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED:
+        # Handled even without a device id, so the helper logs the bad frame
+        # instead of this branch silently dropping it.
+        _apply_digital_input_event(
+            run, fields, device_id, first_seen=not already_stored
+        )
+    elif device_id:
         _apply_event_to_device(run, event_type, fields, device_id)
     run.effects.append(PublishUpdate(mark_success=False))
 
@@ -1097,6 +1135,74 @@ def _apply_event_to_device(
         "alarm_hubs"
     ):
         _apply_tamper_event(run, device_id, fields)
+
+
+def _apply_digital_input_event(
+    run: _Run, fields: Mapping[str, Any], device_id: Any, *, first_seen: bool
+) -> None:
+    """
+    Emit one camera digital-input change for a stored, first-seen event.
+
+    Bad frames (no device, an unknown camera, no metadata, a missing or
+    unknown input state) are logged at DEBUG and dropped, never raised: the
+    events stream is not validated by the API library, and a malformed frame
+    must not take down the WebSocket loop. A frame of an event already stored
+    (an identical repeat, or an update such as one that sets ``end``) is not
+    news, and a late frame the store did not keep is history, so neither
+    dispatches.
+    """
+    if not isinstance(device_id, str):
+        run.log(
+            logging.DEBUG,
+            "Protect coordinator: ignoring %s event without a device id: %s",
+            EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+            fields.get("id"),
+        )
+        return
+    if device_id not in run.records("cameras"):
+        run.log(
+            logging.DEBUG,
+            "Protect coordinator: ignoring %s event for unknown camera %s",
+            EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+            device_id,
+        )
+        return
+    metadata = fields.get("metadata")
+    if not isinstance(metadata, dict):
+        run.log(
+            logging.DEBUG,
+            "Protect coordinator: ignoring %s event for camera %s without metadata",
+            EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+            device_id,
+        )
+        return
+    input_state = _event_metadata_text(metadata.get("inputState"))
+    ha_event_type = DIGITAL_INPUT_EVENT_TYPES_BY_STATE.get(input_state or "")
+    if ha_event_type is None:
+        run.log(
+            logging.DEBUG,
+            "Protect coordinator: ignoring %s event for camera %s with input state %r",
+            EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+            device_id,
+            input_state,
+        )
+        return
+    if not first_seen or fields.get("id") not in run.records("events").get(
+        EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED, {}
+    ):
+        return
+    channel = _event_metadata_text(metadata.get("inputChannel"))
+    token = _event_metadata_text(metadata.get("inputToken"))
+    run.effects.append(
+        DispatchDigitalInput(
+            camera_id=device_id,
+            input_key=_digital_input_key(channel, token),
+            event_type=ha_event_type,
+            input_channel=channel,
+            input_token=token,
+            start=fields.get("start"),
+        )
+    )
 
 
 def _apply_start_end(

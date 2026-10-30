@@ -25,6 +25,10 @@ from custom_components.unifi_insights.binary_sensor import (
     SECURITY_BINARY_SENSOR_TYPES,
     STORAGE_NEARLY_FULL_DESCRIPTION,
 )
+from custom_components.unifi_insights.const import (
+    CAMERA_DIGITAL_INPUT_EVENT_TYPES,
+    DIGITAL_INPUT_EVENT_TYPES_BY_STATE,
+)
 from custom_components.unifi_insights.coordinators.rule_audit import (
     RULE_CHANGE_TYPES,
 )
@@ -635,6 +639,29 @@ def test_storage_translations_and_icons_resolve_in_every_file() -> None:
         icon = icons.get(platform, {}).get(key, {}).get("default")
         assert icon is not None, f"{key} has no icon"
         assert icon.startswith("mdi:"), f"{key} icon invalid: {icon}"
+
+
+def test_camera_digital_input_event_translations_and_icon() -> None:
+    """Digital-input events have matching translations for both states and an icon."""
+    strings_event = json.loads(_STRINGS_JSON.read_text())["entity"]["event"][
+        "camera_digital_input"
+    ]
+    en_event = json.loads(_EN_JSON.read_text())["entity"]["event"][
+        "camera_digital_input"
+    ]
+    icons_event = json.loads(_ICONS_JSON.read_text())["entity"]["event"][
+        "camera_digital_input"
+    ]
+
+    assert strings_event == en_event
+    assert strings_event["name"] == "Digital input {channel}"
+    assert set(strings_event["state_attributes"]["event_type"]["state"]) == set(
+        CAMERA_DIGITAL_INPUT_EVENT_TYPES
+    )
+    assert tuple(DIGITAL_INPUT_EVENT_TYPES_BY_STATE.values()) == (
+        CAMERA_DIGITAL_INPUT_EVENT_TYPES
+    )
+    assert icons_event["default"].startswith("mdi:")
 
 
 def test_network_rule_change_event_translations_and_icon() -> None:

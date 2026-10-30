@@ -492,6 +492,9 @@
     "event": {
       "network_rule_changes": {
         "default": "mdi:shield-search"
+      },
+      "camera_digital_input": {
+        "default": "mdi:electric-switch"
       }
     },
     "select": {

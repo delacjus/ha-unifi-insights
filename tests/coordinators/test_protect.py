@@ -21,6 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from unifi_official_api import (
     ApiKeyAuth,
@@ -52,6 +56,7 @@ from unifi_official_api.validation import parse_record
 
 from custom_components.unifi_insights.const import (
     DOMAIN,
+    EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
     SCAN_INTERVAL_PROTECT,
 )
 from custom_components.unifi_insights.coordinators.protect import (
@@ -59,6 +64,7 @@ from custom_components.unifi_insights.coordinators.protect import (
     MAX_CONSECUTIVE_MISSING_POLLS,
     STALE_EVENT_TIMEOUT,
     UnifiInsightsProtectCoordinator,
+    protect_digital_input_signal,
 )
 from custom_components.unifi_insights.coordinators.protect_events import (
     Family,
@@ -2370,6 +2376,100 @@ class TestUnifiProtectCoordinator:
             )
 
         assert "unexpected error processing" in caplog.text.lower()
+
+    # -- camera digital inputs: reconciliation result on the dispatcher -----
+
+    def test_digital_input_signal_is_scoped_to_its_entry(self) -> None:
+        """The signal name carries the entry id, like the Access signals."""
+        assert (
+            protect_digital_input_signal("entry1")
+            == f"{DOMAIN}_entry1_protect_digital_input"
+        )
+
+    async def test_digital_input_frame_dispatches_on_the_entry_signal(
+        self, hass: HomeAssistant, coordinator: UnifiInsightsProtectCoordinator
+    ) -> None:
+        """A stored digital-input change reaches the platform with its fields."""
+        coordinator.data["cameras"]["camera1"] = {"id": "camera1", "name": "Gate"}
+        payloads: list[dict[str, Any]] = []
+        unsub = async_dispatcher_connect(
+            hass,
+            protect_digital_input_signal(coordinator.config_entry.entry_id),
+            payloads.append,
+        )
+        try:
+            send_event(
+                coordinator,
+                EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+                {
+                    "id": "event60",
+                    "device": "camera1",
+                    "start": RECENT_START,
+                    "metadata": {
+                        "inputState": {"text": "circuitOpen"},
+                        "inputChannel": {"text": "0"},
+                        "inputToken": {"text": "AlarmIn_0"},
+                    },
+                },
+            )
+            await hass.async_block_till_done()
+        finally:
+            unsub()
+
+        assert payloads == [
+            {
+                "camera_id": "camera1",
+                "input_key": "0",
+                "event_type": "circuit_open",
+                "input_channel": "0",
+                "input_token": "AlarmIn_0",
+                "start": RECENT_START,
+            }
+        ]
+
+    async def test_digital_input_signal_is_entry_scoped_and_bad_frames_are_quiet(
+        self,
+        hass: HomeAssistant,
+        coordinator: UnifiInsightsProtectCoordinator,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Another entry's signal never lands here, and a bad frame only logs."""
+        payloads: list[dict[str, Any]] = []
+        unsub = async_dispatcher_connect(
+            hass,
+            protect_digital_input_signal(coordinator.config_entry.entry_id),
+            payloads.append,
+        )
+        try:
+            async_dispatcher_send(
+                hass,
+                protect_digital_input_signal("another-entry"),
+                {
+                    "camera_id": "camera1",
+                    "input_key": "0",
+                    "event_type": "circuit_open",
+                    "input_channel": "0",
+                    "input_token": "AlarmIn_0",
+                    "start": RECENT_START,
+                },
+            )
+            with caplog.at_level(logging.DEBUG):
+                send_event(
+                    coordinator,
+                    EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED,
+                    {
+                        "id": "event61",
+                        "device": "ghost",
+                        "start": RECENT_START,
+                        "metadata": {"inputState": {"text": "circuitOpen"}},
+                    },
+                )
+            await hass.async_block_till_done()
+        finally:
+            unsub()
+
+        assert payloads == []
+        assert "unknown camera ghost" in caplog.text
 
     # -- Task 2: bounded auto-off for the motion/smart-detect/ring latch ----
 

@@ -16,6 +16,7 @@ from custom_components.unifi_insights.entity import async_delegate_entity_id_cha
 from custom_components.unifi_insights.event import (
     UnifiAccessDoorbellEvent,
     UnifiAccessResultEvent,
+    UnifiProtectCameraDigitalInputEventEntity,
 )
 from custom_components.unifi_insights.image import (
     UnifiFloorPlanImage,
@@ -36,6 +37,7 @@ ADD_REMOVE_METHODS = (
 OPTED_IN = (
     UnifiAccessDoorbellEvent,
     UnifiAccessResultEvent,
+    UnifiProtectCameraDigitalInputEventEntity,
     UnifiFloorPlanImage,
     UnifiVoucherQrCodeImage,
     UnifiProtectCameraSpeaker,
