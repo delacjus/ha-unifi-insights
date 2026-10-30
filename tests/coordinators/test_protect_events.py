@@ -2107,10 +2107,15 @@ def digital_input(
     )
 
 
+def dispatches(result: Result) -> list[DispatchDigitalInput]:
+    """Return the digital-input effects of a run, typed for attribute access."""
+    return [e for e in result.effects() if isinstance(e, DispatchDigitalInput)]
+
+
 def test_digital_input_frame_dispatches_once_before_the_publish() -> None:
     """The spec example fires one dispatch, and the publish comes after it."""
     result = run(cache(cameras={"c1": {"id": "c1"}}), [(0.0, digital_input())])
-    dispatched = result.effects(DispatchDigitalInput)
+    dispatched = dispatches(result)
     assert dispatched == [
         DispatchDigitalInput(
             camera_id="c1",
@@ -2142,7 +2147,7 @@ def test_digital_input_state_maps_to_a_neutral_event_type(
     """Both input states fire the matching circuit name."""
     frame = digital_input(metadata={"inputState": {"text": state_text}})
     result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
-    (effect,) = result.effects(DispatchDigitalInput)
+    (effect,) = dispatches(result)
     assert effect.event_type == event_type
     # Without a channel or token the input falls back to the shared "0" key.
     assert effect.input_key == "0"
@@ -2160,7 +2165,7 @@ def test_digital_input_accepts_plain_string_metadata() -> None:
         }
     )
     result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
-    (effect,) = result.effects(DispatchDigitalInput)
+    (effect,) = dispatches(result)
     assert effect.event_type == "circuit_closed"
     assert effect.input_channel == "1"
     assert effect.input_token == "AlarmIn_1"  # noqa: S105 - an ONVIF input name
@@ -2196,7 +2201,7 @@ def test_digital_input_frame_falls_back_to_the_token() -> None:
         }
     )
     result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
-    (effect,) = result.effects(DispatchDigitalInput)
+    (effect,) = dispatches(result)
     assert effect.input_key == "AlarmIn_3"
     assert effect.input_token == "AlarmIn_3"  # noqa: S105 - an ONVIF input name
 
@@ -2212,7 +2217,7 @@ def test_second_channel_is_its_own_input_key() -> None:
         },
     )
     result = run(cache(cameras=_CAMERAS), [(0.0, digital_input()), (1.0, second)])
-    assert [effect.input_key for effect in result.effects(DispatchDigitalInput)] == [
+    assert [effect.input_key for effect in dispatches(result)] == [
         "0",
         "1",
     ]
@@ -2258,7 +2263,7 @@ def test_bad_digital_input_frame_is_stored_but_not_dispatched(
 ) -> None:
     """A frame that cannot be read logs DEBUG, keeps the store, fires nothing."""
     result = run(cache(cameras=_CAMERAS), [(0.0, frame)])
-    assert result.effects(DispatchDigitalInput) == []
+    assert dispatches(result) == []
     assert message in result.logs(logging.DEBUG)[-1]
     assert result.cache["events"][EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED]["di1"]
     assert result.effects(PublishUpdate) == [PublishUpdate(mark_success=False)]
@@ -2268,9 +2273,9 @@ def test_repeated_digital_input_frame_fires_only_once() -> None:
     """The reconciler republishes identical frames; the change is not news."""
     first = run(cache(cameras=_CAMERAS), [(0.0, digital_input())])
     result = run(first.cache, [(1.0, digital_input())], state=first.state)
-    assert len(first.effects(DispatchDigitalInput)) == 1
+    assert len(dispatches(first)) == 1
     assert result.cache is first.cache
-    assert result.effects(DispatchDigitalInput) == []
+    assert dispatches(result) == []
 
 
 def test_update_frame_of_a_digital_input_fires_only_once() -> None:
@@ -2281,7 +2286,7 @@ def test_update_frame_of_a_digital_input_fires_only_once() -> None:
         result.cache["events"][EVENT_TYPE_CAMERA_DIGITAL_INPUT_CHANGED]["di1"]["end"]
         == 2
     )
-    assert result.effects(DispatchDigitalInput) == []
+    assert dispatches(result) == []
 
 
 def test_late_digital_input_frame_fires_nothing() -> None:
@@ -2289,7 +2294,7 @@ def test_late_digital_input_frame_fires_nothing() -> None:
     stale = digital_input(start=START - int(RETENTION * 1000) - 3_600_000)
     result = run(cache(cameras=_CAMERAS), [(0.0, stale)])
     assert result.cache["events"] == {}
-    assert result.effects(DispatchDigitalInput) == []
+    assert dispatches(result) == []
     assert result.effects(PublishUpdate) == [PublishUpdate(mark_success=False)]
 
 

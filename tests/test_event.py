@@ -1952,7 +1952,9 @@ async def test_registry_rows_are_restored_including_absent_and_disabled(
     assert entities[("camera2", "AlarmIn_1")].device_info["name"] == "Camera camera2"
     # A disabled row is rebuilt; Home Assistant keeps its disabled_by value.
     assert entities[("camera3", "2")].unique_id == disabled.unique_id
-    assert er.async_get(hass).async_get(disabled.entity_id).disabled_by is not None
+    disabled_row = er.async_get(hass).async_get(disabled.entity_id)
+    assert disabled_row is not None
+    assert disabled_row.disabled_by is not None
     assert facade.data["protect"]["cameras"]["camera1"]["name"] == "Gate"
 
 
@@ -2084,9 +2086,12 @@ def test_digital_input_identity_and_availability(hass: Any) -> None:
     assert entity.translation_key == "camera_digital_input"
     assert entity.translation_placeholders == {"channel": "AlarmIn_0"}
     assert entity.event_types == list(CAMERA_DIGITAL_INPUT_EVENT_TYPES)
-    assert entity.device_info["identifiers"] == {(DOMAIN, "protect_camera_camera1")}
-    assert entity.device_info["name"] == "Gate"
-    assert entity.device_info["model"] == "G4-Pro"
+    device_info = entity.device_info
+    assert device_info is not None
+    assert "model" in device_info
+    assert device_info["identifiers"] == {(DOMAIN, "protect_camera_camera1")}
+    assert device_info["name"] == "Gate"
+    assert device_info["model"] == "G4-Pro"
     assert entity.available is True
 
     set_availability(facade, protect=False)
