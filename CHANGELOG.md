@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Cameras with a wired digital (alarm) input now get an event entity per input. A `cameraDigitalInputChanged` frame from Protect creates the entity for that `(camera, input)` pair, fires `circuit_open` or `circuit_closed`, and the entity is restored from the registry after a reload or restart, including when the camera is temporarily absent. The names describe the circuit, not what it is wired to: with normally-closed wiring an open circuit can mean the input is idle. Unknown cameras, frames without metadata and unknown input states are ignored with a debug log. The entity appears on the first event because the camera schema does not say which cameras have inputs. Needs Protect 7.2.105 or newer. [#451](https://github.com/tinkerologie/ha-unifi-insights/issues/451)
+- Each Protect camera now has a **Medium resolution** and a **Low resolution** camera entity beside the existing one, disabled by default, so a low-power client can play a lighter RTSPS channel instead of the high one. They take the same snapshots, stream only their own channel, and return no stream when Protect cannot create it instead of falling back to the high channel or a static URL. The existing camera entity keeps its unique ID, entity ID, name and stream, so nothing changes until you enable one. [#458](https://github.com/tinkerologie/ha-unifi-insights/issues/458)
 
 ### Changed
 
