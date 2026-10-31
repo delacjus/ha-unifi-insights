@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced `ipaddress` parsing with fast string matching for unspecified IP addresses, improving telemetry ingestion performance.
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
