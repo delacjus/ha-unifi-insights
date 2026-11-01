@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Optimized `_is_unspecified_address` by removing `ipaddress.ip_address` instantiation overhead in favor of direct string matching.
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
