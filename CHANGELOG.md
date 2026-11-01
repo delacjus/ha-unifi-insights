@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Optimized `_is_unspecified_address` to use tuple membership checks instead of `ipaddress` parsing for known UniFi down-link placeholders, resulting in significantly lower latency during gateway WAN status parsing.
+
 ### Added
 
 - Added developer documentation under `docs/development/`: `ARCHITECTURE.md` (coordinators, runtime data, entity hierarchy, config flow modes, dashboard cards, diagnostics, data flow), `DECISIONS.md` (decision index and future considerations), and Architecture Decision Records `adr/001` to `adr/007` covering the ADR process, the multi-coordinator architecture behind a facade, the vendored API client, console identity for config entry unique IDs, bundled dashboard cards with versioned WebSocket contracts, three-layer diagnostics redaction, and the proposed flat Home Assistant module layout (ADR-007, 57 to 33 root modules with `coordinators/` and `api/` as the only subpackages). The planned move of the vendored client back to `unifi-official-api` 2.0.0 is recorded as a future consideration ([tinkerologie/unifi-official-api#41](https://github.com/tinkerologie/unifi-official-api/issues/41)). [#330](https://github.com/tinkerologie/ha-unifi-insights/issues/330)
