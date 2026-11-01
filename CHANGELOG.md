@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Optimized `_is_unspecified_address` to use direct string matching instead of `ipaddress` parsing for improved performance. ([#123](https://github.com/delacjus/ha-unifi-insights/issues/123))
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added

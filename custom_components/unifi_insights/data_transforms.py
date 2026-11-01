@@ -25,7 +25,6 @@ Home Assistant, so the dashboard snapshot builders can use it.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import math
 import re
@@ -858,10 +857,7 @@ def current_chime_ringtone_id(chime_data: Any) -> str | None:
 
 def _is_unspecified_address(value: str) -> bool:
     """Return True for 0.0.0.0 / ::, the placeholder a down link reports."""
-    try:
-        return ipaddress.ip_address(value).is_unspecified
-    except ValueError:
-        return False
+    return value in {"0.0.0.0", "::", "0:0:0:0:0:0:0:0", "::0"}  # noqa: S104
 
 
 def normalize_legacy_wans(legacy_device: dict[str, Any]) -> list[dict[str, Any]]:
