@@ -34,6 +34,7 @@ None
 - Replaced `ipaddress.ip_address(value).is_unspecified` with `value in ("0.0.0.0", "::")`
 - Added `# noqa: S104` to the hardcoded IPs
 - Added `.jules/bolt.md` journal entry
+- Updated CHANGELOG.md
 
 ## Home Assistant Quality Scale & Standards
 
@@ -86,6 +87,8 @@ mypy.....................................................................Passed
 - [ ] No documentation needed
 
 ## Breaking Changes
+
+
 
 ## Checklist
 
