@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed 18 coordinator accessors that only tests called: the seven config section availability checks and four config getters, the device statistics and client getters, the facade `get_device_facts` and the four Protect cache getters. Entities and service actions read the same owner data and the pure lookups in `data_transforms.py` as before. The tests now assert the owner state (`failed_sections`, `last_update_success`, coordinator data) or the production helpers (`site_section_available`, `device_facts`), so live behaviour stays covered. [#496](https://github.com/tinkerologie/ha-unifi-insights/issues/496)
 - Removed six test-only helpers and constants: `bytes_to_megabits`, `bytes_to_bits` and `_has_storage_info` from `sensor.py`, `_first_site_id` from `__init__.py`, and `CARD_URL` and `CARD_PATH` from `frontend.py`. Storage and rate conversion behaviour stays covered through `normalize_nvr_storage` and the sensor discovery paths. [#496](https://github.com/tinkerologie/ha-unifi-insights/issues/496)
 
+### Fixed
+
+- Order external arm-profile state against concurrent profile reads, arm/disarm commands, error responses and `useExternalAlarmManager` being turned off: a stale answer or error no longer clears a command overlay, an older incomplete read no longer merges a removed profile back, and turning the flag off invalidates any in-flight read. [#501](https://github.com/tinkerologie/ha-unifi-insights/issues/501)
+
 ### Documentation
 
 - Add ADR-015 recording the evaluation and deferral of the `/v1/subscribe/updates` unified WebSocket endpoint. [#501](https://github.com/tinkerologie/ha-unifi-insights/issues/501)
